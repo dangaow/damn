@@ -79,7 +79,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:background="@drawable/bg_input"
-                android:hint="留空使用默认"
+                android:hint="必填，与控制端一致"
                 android:inputType="textCapCharacters"
                 android:padding="12dp"
                 android:textColor="@color/ink"

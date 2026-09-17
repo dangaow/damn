@@ -117,7 +117,7 @@ void connectWebSocket() {
   String hostPort = slash >= 0 ? url.substring(0, slash) : url;
 
   String host = hostPort;
-  uint16_t port = secure ? 443 : 80;
+  uint16_t port = secure ? 443 : 9000;   // 默认 9000（与服务器端口一致），避免漏填端口连不上
   int colon = hostPort.indexOf(':');
   if (colon >= 0) {
     host = hostPort.substring(0, colon);

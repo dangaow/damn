@@ -38,6 +38,10 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "请输入服务器地址", Toast.LENGTH_SHORT).show()
             return
         }
+        if (room.isEmpty()) {
+            Toast.makeText(this, "请输入房间码（两端必须一致）", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         // 记住输入，下次打开自动填
         getSharedPreferences("rc", MODE_PRIVATE).edit()

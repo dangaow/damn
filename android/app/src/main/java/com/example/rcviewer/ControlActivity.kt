@@ -108,6 +108,7 @@ class ControlActivity : AppCompatActivity() {
             finish()
         }
         btButton.setOnClickListener { connectBluetoothMouse() }
+        findViewById<Button>(R.id.settingsButton).setOnClickListener { showBoxSettings() }
         findViewById<Button>(R.id.sendTextButton).setOnClickListener { sendRemoteText() }
         textInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
@@ -355,17 +356,23 @@ class ControlActivity : AppCompatActivity() {
                     if (rdx != 0 || rdy != 0) {
                         val now = System.currentTimeMillis()
                         val hidOk = useBridge && now - lastHidSentAt >= 33
-                        if (dragArmed) {
-                            mouse?.drag(rdx, rdy)
-                            if (hidOk) { lastHidSentAt = now; sendHid("drag", rdx, rdy) }
+                        var sent = false
+                        if (useBridge) {
+                            // 桥接盒模式：只在真实发出一条指令时才更新指针定位（避免节流丢弃导致的偏移）
+                            if (hidOk) {
+                                lastHidSentAt = now
+                                sendHid(if (dragArmed) "drag" else "move", rdx, rdy)
+                                sent = true
+                            }
                         } else {
-                            mouse?.move(rdx, rdy)
-                            if (hidOk) { lastHidSentAt = now; sendHid("move", rdx, rdy) }
+                            if (dragArmed) mouse?.drag(rdx, rdy) else mouse?.move(rdx, rdy)
+                            sent = true   // 本机蓝牙直控，每条都发，必然更新
                         }
-                        // 更新指针定位（clamp 在对方屏幕范围内）
-                        px = (px + rdx).coerceIn(0f, PHONE_W)
-                        py = (py + rdy).coerceIn(0f, PHONE_H)
-                        updatePointerDot()
+                        if (sent) {
+                            px = (px + rdx).coerceIn(0f, PHONE_W)
+                            py = (py + rdy).coerceIn(0f, PHONE_H)
+                            updatePointerDot()
+                        }
                     }
                 }
             }
@@ -423,6 +430,69 @@ class ControlActivity : AppCompatActivity() {
         }
         webSocket?.send(msg.toString())
         Toast.makeText(this, "已通过盒子键盘键入", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 盒子设置对话框：风扇转速 / 提示音 / 震动 / 换房间码（经服务器 config 指令下发，桥接盒实时生效） */
+    private fun showBoxSettings() {
+        if (!useBridge) {
+            Toast.makeText(this, "需开启桥接盒模式才能控制盒子", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!bridgeOnline) {
+            Toast.makeText(this, "盒子不在线，配置无法送达", Toast.LENGTH_LONG).show()
+            return
+        }
+        showBoxSettingsDialog()
+    }
+
+    /** 实际弹窗（含测试按钮，点击即发一次蜂鸣） */
+    private fun showBoxSettingsDialog() {
+        val view = layoutInflater.inflate(R.layout.dialog_box_settings, null)
+        val fanSeek = view.findViewById<android.widget.SeekBar>(R.id.fanSeek)
+        val fanVal = view.findViewById<TextView>(R.id.fanValue)
+        val vibSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.vibSwitch)
+        val buzzSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.buzzSwitch)
+        val beepBtn = view.findViewById<Button>(R.id.beepBtn)
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("盒子设置")
+            .setView(view)
+            .setPositiveButton("应用", null)
+            .setNegativeButton("关闭", null)
+            .create()
+        alertDlg = dlg
+        dlg.setOnShowListener {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                sendConfig(fan = fanSeek.progress, vib = vibSwitch.isChecked, buzz = buzzSwitch.isChecked)
+                Toast.makeText(this, "已下发：风扇 ${fanSeek.progress}%", Toast.LENGTH_SHORT).show()
+            }
+        }
+        fanSeek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: android.widget.SeekBar?, v: Int, f: Boolean) {
+                fanVal.text = "风扇转速：$v%"
+            }
+            override fun onStartTrackingTouch(s: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(s: android.widget.SeekBar?) {}
+        })
+        beepBtn.setOnClickListener { sendConfig(beep = true) }
+        dlg.show()
+    }
+
+    // 持有对话框引用，避免多次弹开
+    private var alertDlg: AlertDialog? = null
+
+    /** 下发 config 指令到盒子（仅带参数项被发送，其余保持盒子当前值） */
+    private fun sendConfig(fan: Int? = null, vib: Boolean? = null, buzz: Boolean? = null,
+                           beep: Boolean? = null, room: String? = null) {
+        val msg = JSONObject().apply {
+            put("type", "config")
+            if (fan != null) put("fan", fan)
+            if (vib != null) put("vib", vib)
+            if (buzz != null) put("buzz", buzz)
+            if (beep != null) put("beep", true)
+            if (room != null) put("room", room)
+        }
+        webSocket?.send(msg.toString())
     }
 
     override fun onDestroy() {

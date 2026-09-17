@@ -22,6 +22,23 @@
  *   屏幕 GND → 板子 GND
  *   屏幕 SCL → 板子 D22 (GPIO22)
  *   屏幕 SDA → 板子 D21 (GPIO21)
+ *   蜂鸣器(+/-) → GPIO33 / GND（如无源蜂鸣器两极可反接；有源只用2脚）
+ *   震动电机 → GPIO25（小电流电机可直接接；稍大用三极管/MOS 驱动）
+ *   散热风扇 → GPIO26 + 5V + GND（PWM 调速需经 MOS/三极管开关 5V 正极；见下方"风扇"说明）
+ *
+ * 外设（风扇 / 蜂鸣 / 震动）接口：
+ *   - 开机有低音量开机音效；连服务器/双方在线会"嘀"一声并震动
+ *   - 配网页面新增"散热风扇转速 0-100"字段，保存即生效（存 NVS）
+ *   - 运行中可被手机 App 实时下发 config 指令调风扇转速/开关蜂鸣震动/换房间码，免重烧录
+ *
+ * 物理按键（板载 BOOT 键，GPIO0，免接线）：
+ *   - 短按（< 0.9s 松开）：循环切页  主页面 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面
+ *   - 长按（≥ 0.9s）在【震动/蜂鸣/风扇】页：切换该外设 开/关
+ *   - 长按在【重置】页：进入 5s 倒计时进度条（显示"此操作不可逆"）；中途松开 = 取消并回主页面；
+ *     持续按满 5s 后进入"连按 3 下确认"，3 下到位即清空配置并重启重开热点
+ *   - 屏幕右上角常驻小爱心 ♡；切页有渐隐渐现过渡
+ *
+ * 开机逻辑：若已填过配置并连上服务器 → 首次连接弹出"配置成功！"烟花特效后进入主屏
  *
  * 烧录（Arduino IDE）：
  *   开发板：ESP32 Dev Module
@@ -47,6 +64,7 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <nvs_flash.h>
 #include <BleCompositeHid.h>
 #include <KeyboardDevice.h>
 #include <MouseDevice.h>
@@ -140,6 +158,55 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #define LED_BUILTIN 2
 #endif
 
+// ---- 外设引脚（接线见文件头注释；部分 ROM 引脚可能不同，按需改这里） ----
+#define PIN_BUZZER  33   // 蜂鸣器：GPIO33 → 蜂鸣器正极（负极接 GND）
+#define PIN_VIB     25   // 震动电机：GPIO25 → 电机驱动管控制脚（小电流电机也可直连）
+#define PIN_FAN     26   // 散热风扇：GPIO26（PWM 调速，需经 MOS/三极管驱动 5V 风扇）
+
+// ---- 运行时配置（存 NVS，可在手机端/本地面板实时调整，免重烧录） ----
+#define FAN_PWM_CH   0   // LEDC 通道 0 → 风扇
+#define VIB_PWM_CH   1   // LEDC 通道 1 → 震动
+#define BUZZ_PWM_CH  2   // LEDC 通道 2 → 蜂鸣
+#define PWM_BITS     8   // 8 位分辨率，占空比 0..255
+constexpr uint16_t pwmFullScale = (1 << PWM_BITS) - 1;   // 255
+
+int fanSpeed = 0;      // 0..100 (%)
+bool vibrateOn = true;
+bool buzzerOn = true;
+bool fanOn = false;                    // 风扇"开/关"（长按切页切换），保留 app 设置的转速
+#define FAN_TURNON_SPEED 50            // 长按打开风扇时的默认转速(%)
+
+// ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
+#define PIN_BUTTON  0                  // 免额外接线，直接用板子自带 BOOT 键
+#define SC_CLICK_MS  70                // 松开时长 ≥ 此值且未达长按 → 短按（切页）
+#define LC_PRESS_MS  900               // 按住 ≥ 此值 → 长按（切开关 / 开始重置倒计时）
+#define RST_HOLD_MS  5000              // 重置倒计时（需持续按住满 5s）
+#define RST_CONFIRM  3                 // 倒计时完成后需连按确认次数
+
+// 页面
+enum Page { P_MAIN, P_VIB, P_BUZZ, P_FAN, P_RESET };
+Page page = P_MAIN;
+
+// 按键状态机
+bool btnDown = false;
+unsigned long btnDownAt = 0;
+bool longHandled = false;              // 本次按下的长按动作是否已触发
+
+// 重置流程
+bool resetArmed = false;               // 正在 5s 倒计时（须持续按住）
+unsigned long resetArmedAt = 0;
+bool resetWaitingConfirm = false;      // 5s 完成，等待"连按三下"
+int  resetConfirmCount = 0;
+unsigned long confirmDeadline = 0;     // 连按窗口超时（超时放弃）
+
+// 配置成功烟花
+struct Part { float x, y, vx, vy; uint8_t life; };
+Part parts[42];
+bool configSplashShown = false;        // 是否已展示过烟花（仅首次连服务器展示）
+
+// 被控端（iPhone 蓝牙）连接沿触发震动
+bool lastBleConnected = false;
+
 // ============================================================
 // 初始化
 // ============================================================
@@ -147,6 +214,7 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 void setup() {
   Serial.begin(115200);
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PIN_BUTTON, INPUT_PULLUP);          // 板载 BOOT 键（按下 = LOW）
 
   // ---- 状态屏启动 ----
   u8g2.begin();
@@ -164,6 +232,14 @@ void setup() {
   prefs.begin("rcbridge", false);
   serverUrl = prefs.getString("server", "");   // 无内置默认服务器，由用户填写
   room = prefs.getString("room", "");          // 无内置默认房间码，由用户填写
+
+  // 外设配置：风扇 0..100%，蜂鸣器/震动开关
+  fanSpeed = constrain(prefs.getInt("fan", 0), 0, 100);
+  fanOn = fanSpeed > 0;
+  vibrateOn = prefs.getBool("vib", true);
+  buzzerOn = prefs.getBool("buzz", true);
+  setupPeripherals();                          // 初始化 PWM 并应用风扇转速
+  bootTune();                                  // 低音量开机音效
 
   // ---- WiFi 配网 ----
   drawStatus("配网/连WiFi…");
@@ -183,8 +259,11 @@ void setup() {
 
   WiFiManagerParameter pServer("server", "服务器地址 ws://…", serverUrl.c_str(), 80);
   WiFiManagerParameter pRoom("room", "房间号", room.c_str(), 20);
+  char fanBuf[8]; snprintf(fanBuf, sizeof(fanBuf), "%d", fanSpeed);
+  WiFiManagerParameter pFan("fan", "散热风扇转速 0-100（0关闭）", fanBuf, 5);
   wm.addParameter(&pServer);
   wm.addParameter(&pRoom);
+  wm.addParameter(&pFan);
 
   if (!wm.autoConnect("mochadangao")) {
     Serial.println("[WiFi] 配网超时，重启…");
@@ -198,6 +277,10 @@ void setup() {
   newServer.trim(); newRoom.trim(); newRoom.toUpperCase();
   if (newServer.length()) { serverUrl = newServer; prefs.putString("server", serverUrl); }   // 留空则沿用上次
   if (newRoom.length()) { room = newRoom; prefs.putString("room", room); }                    // 留空则沿用上次
+  int newFan = atoi(pFan.getValue());
+    if (newFan >= 0 && newFan <= 100 && newFan != fanSpeed) {
+      fanSpeed = newFan; fanOn = newFan > 0; prefs.putInt("fan", fanSpeed); applyFan();
+    }
 
   wifiOk = true;
   Serial.printf("[WiFi] 已连接 %s\n", WiFi.SSID().c_str());
@@ -241,6 +324,316 @@ void connectWebSocket() {
 }
 
 // ============================================================
+// 外设：蜂鸣器 / 震动 / 散热风扇
+// ============================================================
+
+/** 蜂鸣器短鸣一次（事件提示音，蜂鸣开关关闭时静音；duty=音量 0..255） */
+void buzzerBeep(int ms = 120, int duty = 110) {
+  if (!buzzerOn) return;
+  ledcWrite(BUZZ_PWM_CH, duty);
+  delay(ms);
+  ledcWrite(BUZZ_PWM_CH, 0);
+}
+
+/** 开机低音量音效（两短音） */
+void bootTune() {
+  if (!buzzerOn) return;
+  ledcWrite(BUZZ_PWM_CH, 45);  delay(90);  ledcWrite(BUZZ_PWM_CH, 0);
+  delay(40);
+  ledcWrite(BUZZ_PWM_CH, 70);  delay(120); ledcWrite(BUZZ_PWM_CH, 0);
+}
+
+/** 震动一次（事件提示，强度 0..255） */
+void vibrateOnce(int ms = 200, int strength = 200) {
+  if (!vibrateOn) return;
+  ledcWrite(VIB_PWM_CH, strength);
+  delay(ms);
+  ledcWrite(VIB_PWM_CH, 0);
+}
+
+/** 应用风扇转速（0..100% × 对应 PWM 占空比 0..255；开关关闭时停转） */
+void applyFan() {
+  int eff = fanOn ? fanSpeed : 0;
+  uint32_t duty = (uint32_t)eff * pwmFullScale / 100u;
+  ledcWrite(FAN_PWM_CH, duty);
+}
+
+/** 初始化所有外设 PWM 通道并应用到保存的配置 */
+void setupPeripherals() {
+  // 风扇：PWM 25kHz；震动 & 蜂鸣：PWM 5kHz（无源蜂鸣器靠方波出声，频率即音调）
+  ledcSetup(FAN_PWM_CH, 25000, PWM_BITS);
+  ledcAttachPin(PIN_FAN, FAN_PWM_CH);
+  ledcSetup(VIB_PWM_CH, 5000, PWM_BITS);
+  ledcAttachPin(PIN_VIB, VIB_PWM_CH);
+  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
+  ledcAttachPin(PIN_BUZZER, BUZZ_PWM_CH);
+  applyFan();
+  ledcWrite(VIB_PWM_CH, 0);
+  ledcWrite(BUZZ_PWM_CH, 0);
+}
+
+// ============================================================
+// 外设开关 + 触摸切换（长按 切开关 / 短按 切页）
+// ============================================================
+
+void toggleVib() {
+  vibrateOn = !vibrateOn;
+  prefs.putBool("vib", vibrateOn);
+  if (!vibrateOn) ledcWrite(VIB_PWM_CH, 0);
+  Serial.printf("[BTN] 震动 %s\n", vibrateOn ? "开" : "关");
+}
+
+void toggleBuzz() {
+  buzzerOn = !buzzerOn;
+  prefs.putBool("buzz", buzzerOn);
+  if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
+  else buzzerBeep(120, 90);   // 打开时回一个提示音确认
+  Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
+}
+
+void toggleFan() {
+  if (fanOn) { fanSpeed = 0; fanOn = false; }
+  else       { fanSpeed = FAN_TURNON_SPEED; fanOn = true; }
+  prefs.putInt("fan", fanSpeed);
+  applyFan();
+  Serial.printf("[BTN] 风扇 %s @%d%%\n", fanOn ? "开" : "关", fanSpeed);
+}
+
+/** 切换到下一页（主页面 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面），带渐隐渐现 + 切页音效 */
+void nextPage() {
+  for (int c = 255; c > 0; c -= 20) { u8g2.setContrast(c); delay(4); }   // 渐隐
+  switch (page) {
+    case P_MAIN:  page = P_VIB;  break;
+    case P_VIB:   page = P_BUZZ; break;
+    case P_BUZZ:  page = P_FAN;  break;
+    case P_FAN:   page = P_RESET;break;
+    default:      page = P_MAIN; break;
+  }
+  buzzerBeep(60, 70);                  // 切页音效（小音量）
+  refreshScreen();                     // 立刻画新页
+  for (int c = 0; c <= 255; c += 20) { u8g2.setContrast(c); delay(4); } // 渐现
+  u8g2.setContrast(255);
+}
+
+/** 重置盒子：清空全部 NVS（含 WiFi 凭据）→ 重启自动重开配网热点 */
+void resetBox() {
+  // 重置必须震动 + 提示音（不受开关限制）
+  ledcWrite(VIB_PWM_CH, 255); delay(220); ledcWrite(VIB_PWM_CH, 0);
+  ledcWrite(BUZZ_PWM_CH, 130); delay(150); ledcWrite(BUZZ_PWM_CH, 0);
+  drawStatus("正在重置…");
+  delay(300);
+  prefs.end();
+  nvs_flash_erase();     // 擦除 NVS（含服务器/房间/风扇/已存 WiFi）
+  nvs_flash_init();
+  ESP.restart();
+}
+
+/** 按键扫描：短按切页 / 长按切开关 / 重置页长按倒计时 + 连按三下 */
+void handleButton() {
+  unsigned long now = millis();
+  bool pressed = (digitalRead(PIN_BUTTON) == LOW);   // GPIO0 按下接地
+
+  if (pressed) {
+    if (!btnDown) {                       // 按下沿
+      btnDown = true; btnDownAt = now; longHandled = false;
+      if (resetWaitingConfirm) {          // 连按三下确认阶段：每按一次记一次
+        resetConfirmCount++;
+        buzzerBeep(60, 80);
+        confirmDeadline = now + 6000;
+        if (resetConfirmCount >= RST_CONFIRM) resetBox();
+      }
+    } else {                              // 保持按住
+      if (!longHandled && now - btnDownAt >= LC_PRESS_MS) {
+        longHandled = true;
+        if (page == P_VIB)   toggleVib();
+        else if (page == P_BUZZ) toggleBuzz();
+        else if (page == P_FAN) toggleFan();
+        else if (page == P_RESET && !resetWaitingConfirm) {
+          resetArmed = true; resetArmedAt = now;
+        }
+      }
+      // 重置倒计时满 5s → 进入"连按三下"确认
+      if (resetArmed && now - resetArmedAt >= RST_HOLD_MS) {
+        resetArmed = false;
+        resetWaitingConfirm = true;
+        resetConfirmCount = 0;
+        confirmDeadline = now + 10000;
+        buzzerBeep(200, 120);             // 提示进入确认阶段
+        refreshScreen();
+      }
+    }
+  } else {
+    if (btnDown) {                        // 松开沿
+      btnDown = false;
+      if (resetArmed) {                   // 倒计时中途松开 → 取消回主页面
+        resetArmed = false;
+        page = P_MAIN;
+        buzzerBeep(60, 60);
+        refreshScreen();
+      } else if (!longHandled && (now - btnDownAt) >= SC_CLICK_MS && !resetWaitingConfirm) {
+        nextPage();                       // 短按切页（确认阶段不切页，避免打断连按）
+      }
+    }
+  }
+
+  // 连按三下窗口超时 → 放弃并回主页面
+  if (resetWaitingConfirm && now > confirmDeadline) {
+    resetWaitingConfirm = false;
+    resetConfirmCount = 0;
+    page = P_MAIN;
+    refreshScreen();
+  }
+}
+
+/** 右上角常驻小爱心 ♡（图形绘制，避免字体缺字；color 决定深浅以适配背景） */
+void drawHeart(int color = 1) {
+  u8g2.setDrawColor(color);
+  u8g2.drawCircle(115, 6, 3, 1);          // 左圆
+  u8g2.drawCircle(121, 6, 3, 1);          // 右圆
+  u8g2.drawTriangle(112, 5, 124, 5, 118, 13);  // 下尖
+  u8g2.setDrawColor(1);
+}
+
+// ============================================================
+// 切页屏（震动 / 蜂鸣 / 风扇 / 重置）
+// ============================================================
+
+/** 开关页：居中的"开 / 关"选择器，当前态高亮（白底黑字），另一态只描边 + 白字 */
+void drawSwitchPage(const char* title, bool isOn) {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  drawHeart();
+  u8g2.setDrawColor(1);
+  u8g2.drawUTF8(2, 12, title);
+  u8g2.drawHLine(0, 15, 128);
+  u8g2.drawUTF8(2, 29, "长按切换开关");
+
+  int segW = 34, segH = 22, gap = 10;
+  int x0 = (128 - (segW * 2 + gap)) / 2, x1 = x0 + segW + gap, y0 = 35;
+
+  // 开段
+  u8g2.setDrawColor(isOn ? 1 : 0);          // 激活填充白底
+  u8g2.drawBox(x0, y0, segW, segH);
+  u8g2.setDrawColor(1);
+  u8g2.drawFrame(x0, y0, segW, segH);
+  u8g2.setDrawColor(isOn ? 0 : 1);          // 激活 = 黑字
+  u8g2.drawUTF8(x0 + (segW - u8g2.getUTF8Width("开")) / 2, y0 + 15, "开");
+
+  // 关段
+  u8g2.setDrawColor(isOn ? 0 : 1);
+  u8g2.drawBox(x1, y0, segW, segH);
+  u8g2.setDrawColor(1);
+  u8g2.drawFrame(x1, y0, segW, segH);
+  u8g2.setDrawColor(isOn ? 1 : 0);
+  u8g2.drawUTF8(x1 + (segW - u8g2.getUTF8Width("关")) / 2, y0 + 15, "关");
+
+  u8g2.setDrawColor(1);
+  u8g2.sendBuffer();
+}
+
+/** 重置页：三态（待触发 / 倒计时读条 / 等待连按三下） */
+void drawResetPage() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  drawHeart();
+  u8g2.setDrawColor(1);
+  u8g2.drawUTF8(2, 12, "重置配置");
+  u8g2.drawHLine(0, 15, 128);
+
+  if (resetWaitingConfirm) {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "请连按 %d 下确认", RST_CONFIRM);
+    u8g2.drawUTF8(2, 34, buf);
+    snprintf(buf, sizeof(buf), "已按 %d/%d", resetConfirmCount, RST_CONFIRM);
+    u8g2.drawUTF8(2, 48, buf);
+    u8g2.drawUTF8(2, 60, "将清空配置重开热点");
+  } else if (resetArmed) {
+    int pct = (int)((long)(millis() - resetArmedAt) * 100 / RST_HOLD_MS);
+    if (pct > 100) pct = 100;
+    u8g2.drawUTF8(2, 30, "警告：此操作不可逆！");
+    u8g2.drawFrame(14, 38, 100, 9);                       // 进度条外框
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(17, 41, 94 * pct / 100, 3);              // 填充
+    u8g2.setDrawColor(1);
+    u8g2.drawUTF8(2, 58, "满格后连按3下确认");
+  } else {
+    u8g2.drawUTF8(2, 34, "长按进入重置");
+    u8g2.drawUTF8(2, 48, "松开即取消");
+    u8g2.drawUTF8(2, 60, "将在满5秒后询问确认");
+  }
+  u8g2.sendBuffer();
+}
+
+/** 按当前页重绘屏幕（主循环周期调用；每页自带 latest 帧） */
+void refreshScreen() {
+  switch (page) {
+    case P_MAIN:  drawMainStatus(); break;
+    case P_VIB:   drawSwitchPage("震动开关", vibrateOn); break;
+    case P_BUZZ:  drawSwitchPage("蜂鸣开关", buzzerOn); break;
+    case P_FAN:   drawSwitchPage("风扇开关", fanOn); break;
+    case P_RESET: drawResetPage(); break;
+  }
+}
+
+// ---- 配置成功烟花：粒子从屏幕上部爆开 + 背景文字 ----
+void initFireworks() {
+  randomSeed(esp_random());
+  for (int i = 0; i < 26; i++) {
+    float a = (random(360) * 3.14159f) / 180.0f;
+    float sp = random(28, 90) / 10.0f;
+    parts[i].x = 64; parts[i].y = 18;
+    parts[i].vx = cos(a) * sp; parts[i].vy = -sin(a) * sp;
+    parts[i].life = 255;
+  }
+}
+
+void updateFireworks() {
+  static unsigned long last = 0;
+  unsigned long now = millis();
+  if (now - last < 35) return;
+  int dt = (int)(now - last); last = now;
+  (void)dt;
+  for (int i = 0; i < 26; i++) {
+    parts[i].vy += 0.35f;                 // 重力
+    parts[i].x += parts[i].vx;
+    parts[i].y += parts[i].vy;
+    parts[i].vx *= 0.90f; parts[i].vy *= 0.90f;   // 阻尼
+    if (parts[i].life > 8) parts[i].life -= 8;
+  }
+}
+
+void drawFireworksFrame() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setDrawColor(1);
+  for (int i = 0; i < 26; i++) {
+    int x = (int)parts[i].x, y = (int)parts[i].y;
+    if (x >= 0 && x < 128 && y >= 0 && y < 64 && parts[i].life > 120) {
+      u8g2.drawPixel(x, y);
+    }
+  }
+  drawUTF8Center("配置成功！", 40);      // 文字叠在烟花之上
+  u8g2.sendBuffer();
+}
+
+/** 首次连上服务器：烟花庆祝 3s + 提示音/震动，然后进主屏 */
+void runConfigSuccess() {
+  if (configSplashShown) return;
+  configSplashShown = true;
+  initFireworks();
+  unsigned long end = millis() + 3000;
+  while (millis() < end) {
+    updateFireworks();
+    drawFireworksFrame();
+    delay(35);
+  }
+  buzzerBeep(180, 100);
+  vibrateOnce(200);
+  u8g2.setContrast(255);
+  refreshScreen();
+}
+
+// ============================================================
 // WebSocket 事件
 // ============================================================
 
@@ -255,6 +648,9 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t len) {
       ws.sendTXT(out);
       wsConnected = true;
       Serial.println("[WS] 已连入房间 " + room);
+      // 首次连上服务器 → 烟花"配置成功！"；之后的重连只做普通提示
+      if (!configSplashShown) runConfigSuccess();
+      else { buzzerBeep(120); vibrateOnce(150); }
       break;
     }
     case WStype_DISCONNECTED:
@@ -277,8 +673,50 @@ void handleCommand(const char* json, size_t len) {
   // 服务器广播：本房间控制端在线数（控制端加入/离开时推送）
   if (strcmp(type, "room_state") == 0) {
     int viewers = doc["viewers"] | 0;
+    bool wasOnline = controllerOnline;
     controllerOnline = viewers > 0;
+    // 控制端新上线（本房间有人接入）→ 震动 + 提示音（"双方在线"庆祝一次）
+    if (controllerOnline && !wasOnline) {
+      vibrateOnce(160);
+      buzzerBeep(120, 90);
+    }
     Serial.printf("[WS] 控制端在线数=%d\n", viewers);
+    return;
+  }
+  // 运行时配置指令：{type:"config", fan:0..100, vib:bool, buzz:bool, beep:bool, room:"..."}
+  if (strcmp(type, "config") == 0) {
+    if (doc["fan"].is<int>()) {
+      fanSpeed = constrain((int)doc["fan"], 0, 100);
+      fanOn = fanSpeed > 0;              // App 下发的转速同步到开关态
+      prefs.putInt("fan", fanSpeed);
+      applyFan();
+      Serial.printf("[CFG] 风扇 <- %d%%\n", fanSpeed);
+    }
+    if (doc["vib"].is<bool>()) {
+      vibrateOn = doc["vib"];
+      prefs.putBool("vib", vibrateOn);
+      if (!vibrateOn) ledcWrite(VIB_PWM_CH, 0);
+    }
+    if (doc["buzz"].is<bool>()) {
+      buzzerOn = doc["buzz"];
+      prefs.putBool("buzz", buzzerOn);
+      if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
+    }
+    // 主动请求一次提示音（App 里"测试蜂鸣"）
+    if (doc["beep"].is<bool>() && doc["beep"]) {
+      buzzerBeep(150);
+    }
+    // 换房间码：写 NVS 后重连服务器
+    if (doc["room"].is<const char*>()) {
+      String newRoom = (const char*)doc["room"];
+      newRoom.trim(); newRoom.toUpperCase();
+      if (newRoom.length()) {
+        room = newRoom;
+        prefs.putString("room", room);
+        Serial.println("[CFG] 房间码 <- " + room);
+        ws.disconnect();          // 触发重连 + 重新 register 进新房间
+      }
+    }
     return;
   }
   if (strcmp(type, "hid") == 0) {
@@ -430,6 +868,7 @@ void drawMainStatus() {
   u8g2.setDrawColor(0);
   u8g2.drawUTF8(2, 12, "RC 远程助手");
   u8g2.setDrawColor(1);
+  drawHeart(0);           // 白标题栏上用黑色小爱心（常驻右上角）
 
   // WiFi 行（实时查询，掉线立刻变"未连接"，不缓存启动时的结果）
   bool wifiLive = (WiFi.status() == WL_CONNECTED);
@@ -447,10 +886,14 @@ void drawMainStatus() {
                        : (wifiLive && !wsConnected) ? "无服务器" : "未连接";
   drawStateLine(3, "控制端", ctrlOk, ctrlDetail);
 
-  // 底部：房间号
-  u8g2.drawHLine(0, 52, 128);
+  // 底部：房间号 + 外设状态
+  u8g2.drawHLine(0, 50, 128);
   String roomLine = "房间 " + room;
-  u8g2.drawUTF8(2, 63, roomLine.c_str());
+  u8g2.drawUTF8(2, 59, roomLine.c_str());
+  String periLine = "风扇" + String(fanSpeed) + "%" +
+                    String(buzzerOn ? " 音" : " 静音") +
+                    String(vibrateOn ? " 振" : "");
+  u8g2.drawUTF8(66, 59, periLine.c_str());
 
   u8g2.sendBuffer();
 }
@@ -472,16 +915,25 @@ void loop() {
 
   unsigned long now = millis();
 
+  // 物理按键：短按切页 / 长按切开关 / 重置流程
+  handleButton();
+
   // 心跳保活
   if (wsConnected && now - lastPing > 20000) {
     lastPing = now;
     ws.sendTXT("{\"type\":\"ping\"}");
   }
 
-  // 屏幕每 500ms 刷新一次（OLED 不宜高频重绘）
-  if (now - lastDraw > 500) {
+  // 被控端（iPhone 蓝牙）连上沿 → 震动 + 提示音（代表"双方接通"）
+  bool bleNow = compositeHID.isConnected();
+  if (bleNow && !lastBleConnected) { vibrateOnce(180); buzzerBeep(120, 90); }
+  lastBleConnected = bleNow;
+
+  // 屏幕刷新：正常 500ms；重置倒计时需更跟手，100ms
+  unsigned long refreshMs = (page == P_RESET && resetArmed) ? 100 : 500;
+  if (now - lastDraw > refreshMs) {
     lastDraw = now;
-    drawMainStatus();
+    refreshScreen();
   }
 
   // LED 辅助指示：常亮 = 一切就绪；快闪 = iPhone 未连
