@@ -24,16 +24,14 @@
  *   屏幕 SDA → 板子 D21 (GPIO21)
  *   蜂鸣器(+/-) → GPIO33 / GND（如无源蜂鸣器两极可反接；有源只用2脚）
  *   震动电机 → GPIO25（小电流电机可直接接；稍大用三极管/MOS 驱动）
- *   散热风扇 → GPIO26 + 5V + GND（PWM 调速需经 MOS/三极管开关 5V 正极；见下方"风扇"说明）
  *
- * 外设（风扇 / 蜂鸣 / 震动）接口：
+ * 外设（蜂鸣 / 震动）接口：
  *   - 开机有低音量开机音效；连服务器/双方在线会"嘀"一声并震动
- *   - 配网页面新增"散热风扇转速 0-100"字段，保存即生效（存 NVS）
- *   - 运行中可被手机 App 实时下发 config 指令调风扇转速/开关蜂鸣震动/换房间码，免重烧录
+ *   - 运行中可被手机 App 实时下发 config 指令开关蜂鸣震动/换房间码，免重烧录
  *
  * 物理按键（板载 BOOT 键，GPIO0，免接线）：
- *   - 短按（< 0.9s 松开）：循环切页  主页面 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面
- *   - 长按（≥ 0.9s）在【震动/蜂鸣/风扇】页：切换该外设 开/关
+ *   - 短按（< 0.9s 松开）：循环切页  主页面 → 震动 → 蜂鸣 → 重置 → 主页面
+ *   - 长按（≥ 0.9s）在【震动/蜂鸣】页：切换该外设 开/关
  *   - 长按在【重置】页：进入 5s 倒计时进度条（显示"此操作不可逆"）；中途松开 = 取消并回主页面；
  *     持续按满 5s 后进入"连按 3 下确认"，3 下到位即清空配置并重启重开热点
  *   - 屏幕右上角常驻小爱心 ♡；切页有渐隐渐现过渡
@@ -161,20 +159,14 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 // ---- 外设引脚（接线见文件头注释；部分 ROM 引脚可能不同，按需改这里） ----
 #define PIN_BUZZER  33   // 蜂鸣器：GPIO33 → 蜂鸣器正极（负极接 GND）
 #define PIN_VIB     25   // 震动电机：GPIO25 → 电机驱动管控制脚（小电流电机也可直连）
-#define PIN_FAN     26   // 散热风扇：GPIO26（PWM 调速，需经 MOS/三极管驱动 5V 风扇）
 
 // ---- 运行时配置（存 NVS，可在手机端/本地面板实时调整，免重烧录） ----
-#define FAN_PWM_CH   0   // LEDC 通道 0 → 风扇
-#define VIB_PWM_CH   1   // LEDC 通道 1 → 震动
-#define BUZZ_PWM_CH  2   // LEDC 通道 2 → 蜂鸣
+#define VIB_PWM_CH   0   // LEDC 通道 0 → 震动
+#define BUZZ_PWM_CH  1   // LEDC 通道 1 → 蜂鸣
 #define PWM_BITS     8   // 8 位分辨率，占空比 0..255
-constexpr uint16_t pwmFullScale = (1 << PWM_BITS) - 1;   // 255
 
-int fanSpeed = 0;      // 0..100 (%)
 bool vibrateOn = true;
 bool buzzerOn = true;
-bool fanOn = false;                    // 风扇"开/关"（长按切页切换），保留 app 设置的转速
-#define FAN_TURNON_SPEED 50            // 长按打开风扇时的默认转速(%)
 
 // ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
 #define PIN_BUTTON  0                  // 免额外接线，直接用板子自带 BOOT 键
@@ -184,7 +176,7 @@ bool fanOn = false;                    // 风扇"开/关"（长按切页切换�
 #define RST_CONFIRM  3                 // 倒计时完成后需连按确认次数
 
 // 页面
-enum Page { P_MAIN, P_VIB, P_BUZZ, P_FAN, P_RESET };
+enum Page { P_MAIN, P_VIB, P_BUZZ, P_RESET };
 Page page = P_MAIN;
 
 // 按键状态机
@@ -233,12 +225,10 @@ void setup() {
   serverUrl = prefs.getString("server", "");   // 无内置默认服务器，由用户填写
   room = prefs.getString("room", "");          // 无内置默认房间码，由用户填写
 
-  // 外设配置：风扇 0..100%，蜂鸣器/震动开关
-  fanSpeed = constrain(prefs.getInt("fan", 0), 0, 100);
-  fanOn = fanSpeed > 0;
+  // 外设配置：蜂鸣器/震动开关
   vibrateOn = prefs.getBool("vib", true);
   buzzerOn = prefs.getBool("buzz", true);
-  setupPeripherals();                          // 初始化 PWM 并应用风扇转速
+  setupPeripherals();                          // 初始化 PWM 并应用到保存的配置
   bootTune();                                  // 低音量开机音效
 
   // ---- WiFi 配网 ----
@@ -259,11 +249,8 @@ void setup() {
 
   WiFiManagerParameter pServer("server", "服务器地址 ws://…", serverUrl.c_str(), 80);
   WiFiManagerParameter pRoom("room", "房间号", room.c_str(), 20);
-  char fanBuf[8]; snprintf(fanBuf, sizeof(fanBuf), "%d", fanSpeed);
-  WiFiManagerParameter pFan("fan", "散热风扇转速 0-100（0关闭）", fanBuf, 5);
   wm.addParameter(&pServer);
   wm.addParameter(&pRoom);
-  wm.addParameter(&pFan);
 
   if (!wm.autoConnect("mochadangao")) {
     Serial.println("[WiFi] 配网超时，重启…");
@@ -277,10 +264,6 @@ void setup() {
   newServer.trim(); newRoom.trim(); newRoom.toUpperCase();
   if (newServer.length()) { serverUrl = newServer; prefs.putString("server", serverUrl); }   // 留空则沿用上次
   if (newRoom.length()) { room = newRoom; prefs.putString("room", room); }                    // 留空则沿用上次
-  int newFan = atoi(pFan.getValue());
-    if (newFan >= 0 && newFan <= 100 && newFan != fanSpeed) {
-      fanSpeed = newFan; fanOn = newFan > 0; prefs.putInt("fan", fanSpeed); applyFan();
-    }
 
   wifiOk = true;
   Serial.printf("[WiFi] 已连接 %s\n", WiFi.SSID().c_str());
@@ -324,7 +307,7 @@ void connectWebSocket() {
 }
 
 // ============================================================
-// 外设：蜂鸣器 / 震动 / 散热风扇
+// 外设：蜂鸣器 / 震动
 // ============================================================
 
 /** 蜂鸣器短鸣一次（事件提示音，蜂鸣开关关闭时静音；duty=音量 0..255） */
@@ -351,23 +334,13 @@ void vibrateOnce(int ms = 200, int strength = 200) {
   ledcWrite(VIB_PWM_CH, 0);
 }
 
-/** 应用风扇转速（0..100% × 对应 PWM 占空比 0..255；开关关闭时停转） */
-void applyFan() {
-  int eff = fanOn ? fanSpeed : 0;
-  uint32_t duty = (uint32_t)eff * pwmFullScale / 100u;
-  ledcWrite(FAN_PWM_CH, duty);
-}
-
 /** 初始化所有外设 PWM 通道并应用到保存的配置 */
 void setupPeripherals() {
-  // 风扇：PWM 25kHz；震动 & 蜂鸣：PWM 5kHz（无源蜂鸣器靠方波出声，频率即音调）
-  ledcSetup(FAN_PWM_CH, 25000, PWM_BITS);
-  ledcAttachPin(PIN_FAN, FAN_PWM_CH);
+  // 震动 & 蜂鸣：PWM 5kHz（无源蜂鸣器靠方波出声，频率即音调）
   ledcSetup(VIB_PWM_CH, 5000, PWM_BITS);
   ledcAttachPin(PIN_VIB, VIB_PWM_CH);
   ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
   ledcAttachPin(PIN_BUZZER, BUZZ_PWM_CH);
-  applyFan();
   ledcWrite(VIB_PWM_CH, 0);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
@@ -391,22 +364,13 @@ void toggleBuzz() {
   Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
 }
 
-void toggleFan() {
-  if (fanOn) { fanSpeed = 0; fanOn = false; }
-  else       { fanSpeed = FAN_TURNON_SPEED; fanOn = true; }
-  prefs.putInt("fan", fanSpeed);
-  applyFan();
-  Serial.printf("[BTN] 风扇 %s @%d%%\n", fanOn ? "开" : "关", fanSpeed);
-}
-
-/** 切换到下一页（主页面 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面），带渐隐渐现 + 切页音效 */
+/** 切换到下一页（主页面 → 震动 → 蜂鸣 → 重置 → 主页面），带渐隐渐现 + 切页音效 */
 void nextPage() {
   for (int c = 255; c > 0; c -= 20) { u8g2.setContrast(c); delay(4); }   // 渐隐
   switch (page) {
     case P_MAIN:  page = P_VIB;  break;
     case P_VIB:   page = P_BUZZ; break;
-    case P_BUZZ:  page = P_FAN;  break;
-    case P_FAN:   page = P_RESET;break;
+    case P_BUZZ:  page = P_RESET;break;
     default:      page = P_MAIN; break;
   }
   buzzerBeep(60, 70);                  // 切页音效（小音量）
@@ -423,7 +387,7 @@ void resetBox() {
   drawStatus("正在重置…");
   delay(300);
   prefs.end();
-  nvs_flash_erase();     // 擦除 NVS（含服务器/房间/风扇/已存 WiFi）
+  nvs_flash_erase();     // 擦除 NVS（含服务器/房间/已存 WiFi）
   nvs_flash_init();
   ESP.restart();
 }
@@ -447,7 +411,6 @@ void handleButton() {
         longHandled = true;
         if (page == P_VIB)   toggleVib();
         else if (page == P_BUZZ) toggleBuzz();
-        else if (page == P_FAN) toggleFan();
         else if (page == P_RESET && !resetWaitingConfirm) {
           resetArmed = true; resetArmedAt = now;
         }
@@ -495,7 +458,7 @@ void drawHeart(int color = 1) {
 }
 
 // ============================================================
-// 切页屏（震动 / 蜂鸣 / 风扇 / 重置）
+// 切页屏（震动 / 蜂鸣 / 重置）
 // ============================================================
 
 /** 开关页：居中的"开 / 关"选择器，当前态高亮（白底黑字），另一态只描边 + 白字 */
@@ -570,7 +533,6 @@ void refreshScreen() {
     case P_MAIN:  drawMainStatus(); break;
     case P_VIB:   drawSwitchPage("震动开关", vibrateOn); break;
     case P_BUZZ:  drawSwitchPage("蜂鸣开关", buzzerOn); break;
-    case P_FAN:   drawSwitchPage("风扇开关", fanOn); break;
     case P_RESET: drawResetPage(); break;
   }
 }
@@ -683,15 +645,8 @@ void handleCommand(const char* json, size_t len) {
     Serial.printf("[WS] 控制端在线数=%d\n", viewers);
     return;
   }
-  // 运行时配置指令：{type:"config", fan:0..100, vib:bool, buzz:bool, beep:bool, room:"..."}
+  // 运行时配置指令：{type:"config", vib:bool, buzz:bool, beep:bool, room:"..."}
   if (strcmp(type, "config") == 0) {
-    if (doc["fan"].is<int>()) {
-      fanSpeed = constrain((int)doc["fan"], 0, 100);
-      fanOn = fanSpeed > 0;              // App 下发的转速同步到开关态
-      prefs.putInt("fan", fanSpeed);
-      applyFan();
-      Serial.printf("[CFG] 风扇 <- %d%%\n", fanSpeed);
-    }
     if (doc["vib"].is<bool>()) {
       vibrateOn = doc["vib"];
       prefs.putBool("vib", vibrateOn);
@@ -890,8 +845,7 @@ void drawMainStatus() {
   u8g2.drawHLine(0, 50, 128);
   String roomLine = "房间 " + room;
   u8g2.drawUTF8(2, 59, roomLine.c_str());
-  String periLine = "风扇" + String(fanSpeed) + "%" +
-                    String(buzzerOn ? " 音" : " 静音") +
+  String periLine = String(buzzerOn ? "音" : "静音") +
                     String(vibrateOn ? " 振" : "");
   u8g2.drawUTF8(66, 59, periLine.c_str());
 

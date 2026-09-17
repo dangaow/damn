@@ -176,7 +176,7 @@
         android:layout_marginTop="8dp"
         android:background="@drawable/bg_btn_ghost"
         android:stateListAnimator="@null"
-        android:text="⚙ 盒子设置（风扇 / 提示音 / 震动 / 房间码）"
+        android:text="&#9881; 盒子设置（提示音 / 震动 / 房间码）"
         android:textColor="#FFFFFF"
         android:textSize="13sp" />
 

@@ -432,7 +432,7 @@ class ControlActivity : AppCompatActivity() {
         Toast.makeText(this, "已通过盒子键盘键入", Toast.LENGTH_SHORT).show()
     }
 
-    /** 盒子设置对话框：风扇转速 / 提示音 / 震动 / 换房间码（经服务器 config 指令下发，桥接盒实时生效） */
+    /** 盒子设置对话框：提示音 / 震动 / 换房间码（经服务器 config 指令下发，桥接盒实时生效） */
     private fun showBoxSettings() {
         if (!useBridge) {
             Toast.makeText(this, "需开启桥接盒模式才能控制盒子", Toast.LENGTH_SHORT).show()
@@ -448,8 +448,6 @@ class ControlActivity : AppCompatActivity() {
     /** 实际弹窗（含测试按钮，点击即发一次蜂鸣） */
     private fun showBoxSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_box_settings, null)
-        val fanSeek = view.findViewById<android.widget.SeekBar>(R.id.fanSeek)
-        val fanVal = view.findViewById<TextView>(R.id.fanValue)
         val vibSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.vibSwitch)
         val buzzSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.buzzSwitch)
         val beepBtn = view.findViewById<Button>(R.id.beepBtn)
@@ -463,17 +461,10 @@ class ControlActivity : AppCompatActivity() {
         alertDlg = dlg
         dlg.setOnShowListener {
             dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                sendConfig(fan = fanSeek.progress, vib = vibSwitch.isChecked, buzz = buzzSwitch.isChecked)
-                Toast.makeText(this, "已下发：风扇 ${fanSeek.progress}%", Toast.LENGTH_SHORT).show()
+                sendConfig(vib = vibSwitch.isChecked, buzz = buzzSwitch.isChecked)
+                Toast.makeText(this, "已下发设置", Toast.LENGTH_SHORT).show()
             }
         }
-        fanSeek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s: android.widget.SeekBar?, v: Int, f: Boolean) {
-                fanVal.text = "风扇转速：$v%"
-            }
-            override fun onStartTrackingTouch(s: android.widget.SeekBar?) {}
-            override fun onStopTrackingTouch(s: android.widget.SeekBar?) {}
-        })
         beepBtn.setOnClickListener { sendConfig(beep = true) }
         dlg.show()
     }
@@ -482,11 +473,10 @@ class ControlActivity : AppCompatActivity() {
     private var alertDlg: AlertDialog? = null
 
     /** 下发 config 指令到盒子（仅带参数项被发送，其余保持盒子当前值） */
-    private fun sendConfig(fan: Int? = null, vib: Boolean? = null, buzz: Boolean? = null,
+    private fun sendConfig(vib: Boolean? = null, buzz: Boolean? = null,
                            beep: Boolean? = null, room: String? = null) {
         val msg = JSONObject().apply {
             put("type", "config")
-            if (fan != null) put("fan", fan)
             if (vib != null) put("vib", vib)
             if (buzz != null) put("buzz", buzz)
             if (beep != null) put("beep", true)
