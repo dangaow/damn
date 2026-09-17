@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与固件配网页同款背景：linear-gradient(135deg, #667eea, #764ba2) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="315"
+        android:startColor="@color/brand_start"
+        android:endColor="@color/brand_end"
+        android:type="linear" />
+</shape>

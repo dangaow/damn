@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 品牌渐变（与 ESP32 配网页一致） -->
+    <color name="brand_start">#667eea</color>
+    <color name="brand_end">#764ba2</color>
+    <color name="brand_deep">#5a63d6</color>
+
+    <!-- 卡片与文字 -->
+    <color name="card">#FFFFFF</color>
+    <color name="ink">#2d2a3e</color>
+    <color name="sub">#8a8a9e</color>
+    <color name="field_bg">#f4f3fa</color>
+    <color name="field_stroke">#e8e6f2</color>
+
+    <!-- 状态 -->
+    <color name="dot_idle">#c9c9d6</color>
+    <color name="dot_ok">#2ecc71</color>
+    <color name="dot_warn">#f5a623</color>
+
+    <!-- 远程画面区 -->
+    <color name="screen_bg">#161322</color>
+</resources>

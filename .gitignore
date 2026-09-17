@@ -1,0 +1,16 @@
+# ---- Android 编译产物 / 构建缓存 ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+
+# ---- Node 依赖 ----
+server/node_modules/
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+*.log
+
+# ---- 私人 / 密钥 ----
+.gh_bridge_token

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.RCViewer" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">@color/brand_start</item>
+        <item name="colorPrimaryDark">@color/brand_deep</item>
+        <item name="colorAccent">@color/brand_end</item>
+        <item name="android:statusBarColor">@color/brand_deep</item>
+        <item name="android:windowBackground">@drawable/bg_gradient</item>
+        <item name="android:textColorHint">#9a97ad</item>
+    </style>
+</resources>
