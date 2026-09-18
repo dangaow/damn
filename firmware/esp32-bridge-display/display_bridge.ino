@@ -211,7 +211,7 @@ void setup() {
   // ---- 状态屏启动 ----
   u8g2.begin();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);   // 中文字体（含常用汉字）
-  runBootAnimation();                        // 开启动画：MAKE STUDIO 渐显→停留→渐隐
+  runBootAnimation();                        // 开启动画：双光柱对扫→爆闪→LOGO 揭示→渐隐
   drawStatus("启动中…");
 
   // ---- 蓝牙 HID 键鼠启动（iPhone 配对后终身自动回连）----
@@ -757,40 +757,107 @@ void typeString(const char* s) {
 // 状态屏
 // ============================================================
 
-/** 开启动画：插电 → 停 1s → MAKE STUDIO 渐显（居中）→ 停留 3s（期间初始化）→ 渐隐 */
+/** 画一根竖直光柱：cx 为柱心，dir=+1 尾迹朝左（柱从左向右扫），dir=-1 尾迹朝右 */
+void drawLightBeam(int cx, int dir) {
+  // 核心亮柱：3px 宽、全高
+  for (int x = cx - 1; x <= cx + 1; x++)
+    if (x >= 0 && x < 128) u8g2.drawVLine(x, 0, 64);
+  // 柱身边缘柔化：紧邻 2 列隔行点亮
+  for (int k = 2; k <= 3; k++) {
+    int x = cx + dir * k;
+    if (x < 0 || x >= 128) continue;
+    for (int y = 0; y < 64; y += 2) u8g2.drawPixel(x, y);
+  }
+  // 尾迹光锥：离柱越远越稀疏，像舞台灯扫过的余晖
+  for (int k = 4; k <= 34; k++) {
+    int x = cx + dir * k;
+    if (x < 0 || x >= 128) break;
+    int step = (k < 10) ? 3 : (k < 20) ? 5 : 8;
+    for (int y = 0; y < 64; y += step) u8g2.drawPixel(x, y);
+  }
+}
+
+/** 已被光扫过的区域铺一层稀疏网点残光 */
+void drawAfterglow(int x0, int x1) {
+  for (int x = x0; x < x1; x += 2)
+    for (int y = (x % 4); y < 64; y += 4) u8g2.drawPixel(x, y);
+}
+
+/**
+ * 开机动画（Kurogame 风）：
+ *   黑屏 → 左右两道光柱在屏幕边缘亮起（闪烁两下像舞台灯通电）
+ *   → 双柱向中间对扫，扫过之处留残光余晖
+ *   → 中心交汇白闪 → LOGO 从正中向两侧展开揭示 + 副标题"莫莫专属助手"
+ *   → 停留 3s（期间后台初始化）→ 渐隐
+ */
 void runBootAnimation() {
   const char* logo = "MAKE STUDIO";
+  u8g2.setContrast(255);
 
-  // 1) 插电后先停 1 秒（黑屏，等价"上电即启动"）
-  delay(1000);
+  // 1) 插电后先黑屏 0.7s（上电即启动）
+  delay(700);
 
-  // 2) 把 LOGO 画进缓冲（先淡，等待对比度爬升）
-  u8g2.clearBuffer();
-  u8g2.setDrawColor(1);
-  int w = u8g2.getStrWidth(logo);
-  int x = (128 - w) / 2;
-  if (x < 0) x = 0;
-  u8g2.drawStr(x, 40, logo);   // 主 LOGO，水平居中
-  drawUTF8Center("远程助手", 54);   // 副标题小字
-  u8g2.setContrast(0);         // 初始对比度为 0（全黑）
+  // 2) 左右两道光在屏幕边缘"啪啪"亮起（闪两下）
+  for (int flick = 0; flick < 2; flick++) {
+    u8g2.clearBuffer();
+    drawLightBeam(1, +1);
+    drawLightBeam(126, -1);
+    u8g2.sendBuffer(); delay(90);
+    u8g2.clearBuffer(); u8g2.sendBuffer(); delay(60);
+  }
+  u8g2.clearBuffer();                      // 常亮蓄力
+  drawLightBeam(1, +1);
+  drawLightBeam(126, -1);
   u8g2.sendBuffer();
+  delay(350);
 
-  // 3) 渐显：对比度 0 → 255（约 1.5s）
-  for (int c = 8; c <= 255; c += 14) {
-    u8g2.setContrast(c);
-    delay(65);
+  // 3) 双光柱向中间对扫（约 1.1s），扫过区域留网点残光
+  const int steps = 24;
+  for (int i = 1; i <= steps; i++) {
+    int l = 1 + (62 - 1) * i / steps;      // 左柱位置（向右扫）
+    int r = 126 - (126 - 65) * i / steps;  // 右柱位置（向左扫）
+    u8g2.clearBuffer();
+    drawAfterglow(0, l - 3);
+    drawAfterglow(r + 4, 128);
+    drawLightBeam(l, +1);
+    drawLightBeam(r, -1);
+    u8g2.sendBuffer();
+    delay(45);
   }
 
-  // 4) 停留 3 秒：画面全亮，后台正好做蓝牙/配网初始化
+  // 4) 双柱中心交汇 → 全屏白闪两帧（能量爆发的瞬间）
+  u8g2.clearBuffer();
+  u8g2.drawBox(0, 0, 128, 64);
+  u8g2.sendBuffer(); delay(40);
+  u8g2.clearBuffer(); u8g2.sendBuffer(); delay(30);
+
+  // 5) LOGO 从正中向两侧展开揭示（跟光柱交汇点呼应）
+  u8g2.setFont(u8g2_font_logisoso16_tr);   // 大号 ASCII 字体
+  int w = u8g2.getStrWidth(logo);
+  int lx = (128 - w) / 2;
+  if (lx < 0) lx = 0;
+  for (int half = 0; half <= 64; half += 8) {
+    u8g2.clearBuffer();
+    u8g2.setClipRegion(64 - half, 0, 64 + half, 64);   // 只画中间这段
+    u8g2.setFont(u8g2_font_logisoso16_tr);
+    u8g2.drawStr(lx, 38, logo);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+    drawUTF8Center("莫莫专属助手", 56);        // 副标题
+    u8g2.endClip();
+    u8g2.sendBuffer();
+    delay(40);
+  }
+
+  // 6) 停留 3 秒：画面全亮，后台正好做蓝牙/配网初始化
   delay(3000);
 
-  // 5) 渐隐：对比度 255 → 0（约 1.5s）
+  // 7) 渐隐：对比度 255 → 0（约 1.5s）
   for (int c = 255; c > 0; c -= 14) {
     u8g2.setContrast(c);
     delay(65);
   }
 
-  // 6) 清屏，交给后续 drawStatus/drawMainStatus 接管
+  // 8) 清屏，交给后续 drawStatus/drawMainStatus 接管
   u8g2.setContrast(255);       // 恢复默认对比度，避免后续画面偏暗
   u8g2.clear();
   u8g2.sendBuffer();
