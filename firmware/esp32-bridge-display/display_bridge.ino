@@ -318,20 +318,87 @@ void buzzerBeep(int ms = 120, int duty = 110) {
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
-/** 开机低音量音效（两短音） */
-void bootTune() {
+/** 播放指定频率音符（单位 Hz/ms），结束后恢复默认提示音频率 2500Hz */
+void playTone(int freq, int ms, int duty = 110) {
   if (!buzzerOn) return;
-  ledcWrite(BUZZ_PWM_CH, 45);  delay(90);  ledcWrite(BUZZ_PWM_CH, 0);
-  delay(40);
-  ledcWrite(BUZZ_PWM_CH, 70);  delay(120); ledcWrite(BUZZ_PWM_CH, 0);
+  ledcSetup(BUZZ_PWM_CH, freq, PWM_BITS);
+  ledcWrite(BUZZ_PWM_CH, duty);
+  delay(ms);
+  ledcWrite(BUZZ_PWM_CH, 0);
+  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);   // 恢复事件提示音频率
 }
 
-/** 震动一次（事件提示，强度 0..255） */
+/** 震动：强度从低到高线性爬升（苹果式"嗡——"），到顶立刻停止，无下降沿 */
+void vibrateRamp(int ms, int maxStrength = 220) {
+  if (!vibrateOn) return;
+  int steps = ms / 10;
+  if (steps < 1) steps = 1;
+  for (int i = 0; i <= steps; i++) {
+    int duty = map(i, 0, steps, 40, maxStrength);
+    ledcWrite(VIB_PWM_CH, duty);
+    delay(ms / steps);
+  }
+  ledcWrite(VIB_PWM_CH, 0);
+}
+
+/** 震动一次（事件提示，强度固定，0..255） */
 void vibrateOnce(int ms = 200, int strength = 200) {
   if (!vibrateOn) return;
   ledcWrite(VIB_PWM_CH, strength);
   delay(ms);
   ledcWrite(VIB_PWM_CH, 0);
+}
+
+/** 开机音效：do mi so do'，每个音符同步一段上升震动 */
+void bootTune() {
+  // 音符频率：C4, E4, G4, C5
+  const int tones[4] = {262, 330, 392, 523};
+  const int toneMs = 170;
+  const int gapMs  = 50;
+  for (int i = 0; i < 4; i++) {
+    // 蜂鸣 + 震动同时开始
+    if (buzzerOn) {
+      ledcSetup(BUZZ_PWM_CH, tones[i], PWM_BITS);
+      ledcWrite(BUZZ_PWM_CH, 100);
+    }
+    if (vibrateOn) {
+      // 震动在音符期间从弱快速爬到强，然后断掉
+      int rampSteps = toneMs / 12;
+      for (int s = 0; s <= rampSteps; s++) {
+        int duty = map(s, 0, rampSteps, 35, 230);
+        ledcWrite(VIB_PWM_CH, duty);
+        delay(toneMs / rampSteps);
+        if (s == rampSteps) ledcWrite(VIB_PWM_CH, 0);
+      }
+    } else {
+      delay(toneMs);
+    }
+    // 音符结束，蜂鸣停
+    ledcWrite(BUZZ_PWM_CH, 0);
+    if (i < 3) delay(gapMs);
+  }
+  // 恢复默认提示音频率
+  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
+}
+
+/** 切页同步音效：蜂鸣 "bi" 一声 + 震动完全同步 */
+void pageBeepVib() {
+  const int beepMs = 80;
+  if (buzzerOn) {
+    ledcSetup(BUZZ_PWM_CH, 2000, PWM_BITS);
+    ledcWrite(BUZZ_PWM_CH, 90);
+  }
+  if (vibrateOn) {
+    int steps = beepMs / 8;
+    for (int s = 0; s <= steps; s++) {
+      int duty = map(s, 0, steps, 50, 200);
+      ledcWrite(VIB_PWM_CH, duty);
+      delay(beepMs / steps);
+      if (s == steps) ledcWrite(VIB_PWM_CH, 0);
+    }
+  }
+  ledcWrite(BUZZ_PWM_CH, 0);
+  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
 }
 
 /** 初始化所有外设 PWM 通道并应用到保存的配置 */
@@ -367,8 +434,9 @@ void toggleBuzz() {
   Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
 }
 
-/** 切换到下一页（主页面 → 震动 → 蜂鸣 → 重置 → 主页面），带渐隐渐现 + 切页音效 */
+/** 切换到下一页（主页面 → 震动 → 蜂鸣 → 重置 → 主页面），带渐隐渐现 + 同步切页音效 */
 void nextPage() {
+  pageBeepVib();                         // 切页瞬间同步 "bi" + 震动
   for (int c = 255; c > 0; c -= 20) { u8g2.setContrast(c); delay(4); }   // 渐隐
   switch (page) {
     case P_MAIN:  page = P_VIB;  break;
@@ -376,7 +444,6 @@ void nextPage() {
     case P_BUZZ:  page = P_RESET;break;
     default:      page = P_MAIN; break;
   }
-  buzzerBeep(60, 70);                  // 切页音效（小音量）
   refreshScreen();                     // 立刻画新页
   for (int c = 0; c <= 255; c += 20) { u8g2.setContrast(c); delay(4); } // 渐现
   u8g2.setContrast(255);
