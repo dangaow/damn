@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.rcviewer"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.5"
+        versionCode = 6
+        versionName = "1.6"
     }
 
     // 正式签名：凭据读 android/keystore.properties（已 gitignore，不进公开仓库）
