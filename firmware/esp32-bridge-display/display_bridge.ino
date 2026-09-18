@@ -30,11 +30,11 @@
  *   - 运行中可被手机 App 实时下发 config 指令开关蜂鸣震动/换房间码，免重烧录
  *
  * 物理按键（板载 BOOT 键，GPIO0，免接线）：
- *   - 短按（< 0.9s 松开）：循环切页  主页面 → 震动 → 蜂鸣 → 重置 → 主页面
- *   - 长按（≥ 0.9s）在【震动/蜂鸣】页：切换该外设 开/关
- *   - 长按在【重置】页：进入 5s 倒计时进度条（显示"此操作不可逆"）；中途松开 = 取消并回主页面；
- *     持续按满 5s 后进入"连按 3 下确认"，3 下到位即清空配置并重启重开热点
- *   - 屏幕右上角常驻小爱心 ♡；切页有渐隐渐现过渡
+ *   - 单击：循环切页  主页面 → 震动 → 蜂鸣 → 重置 → 主页面
+ *   - 双击：在【震动/蜂鸣】页切换该外设 开/关；在【重置】页启动 5s 倒计时
+ *   - 重置倒计时期间：任意按键 = 取消；5s 走满后进入三击确认
+ *   - 重置确认页：双击退出，三击执行恢复出厂并重启
+ *   - 屏幕右上角常驻小爱心 ♡；切页有渐隐渐现过渡；操作页底部常驻提示条
  *
  * 开机逻辑：若已填过配置并连上服务器 → 首次连接弹出"配置成功！"烟花特效后进入主屏
  *
@@ -169,27 +169,27 @@ bool vibrateOn = true;
 bool buzzerOn = true;
 
 // ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
-#define PIN_BUTTON  0                  // 免额外接线，直接用板子自带 BOOT 键
-#define SC_CLICK_MS  70                // 松开时长 ≥ 此值且未达长按 → 短按（切页）
-#define LC_PRESS_MS  900               // 按住 ≥ 此值 → 长按（切开关 / 开始重置倒计时）
-#define RST_HOLD_MS  5000              // 重置倒计时（需持续按住满 5s）
-#define RST_CONFIRM  3                 // 倒计时完成后需连按确认次数
+#define PIN_BUTTON    0                // 免额外接线，直接用板子自带 BOOT 键
+#define DBL_GAP_MS    280              // 两次松开在多少毫秒内算双击
+#define DEBOUNCE_MS   20               // 按下抖动过滤
 
 // 页面
 enum Page { P_MAIN, P_VIB, P_BUZZ, P_RESET };
 Page page = P_MAIN;
 
-// 按键状态机
+// 按键状态机（单击 / 双击）
 bool btnDown = false;
 unsigned long btnDownAt = 0;
-bool longHandled = false;              // 本次按下的长按动作是否已触发
+unsigned long btnUpAt = 0;             // 松开时刻，用于识别双击
+int clickCount = 0;                    // 当前窗口内点击次数
 
 // 重置流程
-bool resetArmed = false;               // 正在 5s 倒计时（须持续按住）
+#define RST_HOLD_MS   5000             // 重置倒计时 5s
+bool resetArmed = false;               // 正在 5s 走条（任意按键取消）
 unsigned long resetArmedAt = 0;
-bool resetWaitingConfirm = false;      // 5s 完成，等待"连按三下"
-int  resetConfirmCount = 0;
-unsigned long confirmDeadline = 0;     // 连按窗口超时（超时放弃）
+bool resetConfirming = false;          // 走条完成，等待三击确认（双击退出）
+int  resetConfirmCount = 0;            // 确认阶段累计点击数
+unsigned long confirmDeadline = 0;     // 确认窗口超时
 
 // 配置成功烟花
 struct Part { float x, y, vx, vy; uint8_t life; };
@@ -353,6 +353,8 @@ void toggleVib() {
   vibrateOn = !vibrateOn;
   prefs.putBool("vib", vibrateOn);
   if (!vibrateOn) ledcWrite(VIB_PWM_CH, 0);
+  else vibrateOnce(120, 160);
+  buzzerBeep(60, 70);
   Serial.printf("[BTN] 震动 %s\n", vibrateOn ? "开" : "关");
 }
 
@@ -361,6 +363,7 @@ void toggleBuzz() {
   prefs.putBool("buzz", buzzerOn);
   if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
   else buzzerBeep(120, 90);   // 打开时回一个提示音确认
+  buzzerBeep(60, 70);
   Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
 }
 
@@ -379,71 +382,130 @@ void nextPage() {
   u8g2.setContrast(255);
 }
 
+/** 启动重置倒计时（重置页双击进入） */
+void startResetArmed() {
+  resetArmed = true;
+  resetArmedAt = millis();
+  resetConfirming = false;
+  resetConfirmCount = 0;
+  buzzerBeep(80, 100);
+  Serial.println("[RST] 进入 5s 重置倒计时");
+}
+
+/** 取消重置倒计时 */
+void cancelResetArmed() {
+  resetArmed = false;
+  resetConfirming = false;
+  resetConfirmCount = 0;
+  buzzerBeep(60, 60);
+  Serial.println("[RST] 倒计时取消");
+  refreshScreen();
+}
+
+/** 重置倒计时走满 → 进入三击确认 */
+void enterResetConfirm() {
+  resetArmed = false;
+  resetConfirming = true;
+  resetConfirmCount = 0;
+  confirmDeadline = millis() + 10000;
+  buzzerBeep(200, 120);
+  Serial.println("[RST] 进入三击确认");
+  refreshScreen();
+}
+
 /** 重置盒子：清空全部 NVS（含 WiFi 凭据）→ 重启自动重开配网热点 */
 void resetBox() {
   // 重置必须震动 + 提示音（不受开关限制）
   ledcWrite(VIB_PWM_CH, 255); delay(220); ledcWrite(VIB_PWM_CH, 0);
   ledcWrite(BUZZ_PWM_CH, 130); delay(150); ledcWrite(BUZZ_PWM_CH, 0);
-  drawStatus("正在重置…");
-  delay(300);
+
+  drawStatus("正在清除配置…");
+  delay(400);
   prefs.end();
   nvs_flash_erase();     // 擦除 NVS（含服务器/房间/已存 WiFi）
   nvs_flash_init();
+
+  drawStatus("重启中…");
+  delay(500);
   ESP.restart();
 }
 
-/** 按键扫描：短按切页 / 长按切开关 / 重置页长按倒计时 + 连按三下 */
+/**
+ * 按键扫描：
+ *   单击 = 切下一页；双击 = 切换当前页状态（震动/蜂鸣页切换开关；重置页进入 5s 倒计时）
+ *   重置倒计时期间任意按键 = 取消；倒计时满 5s 后进入确认页
+ *   确认页：双击 = 退出确认；三击 = 执行重置
+ */
 void handleButton() {
   unsigned long now = millis();
   bool pressed = (digitalRead(PIN_BUTTON) == LOW);   // GPIO0 按下接地
 
+  // 重置倒计时期间：任意按键按下即取消
+  if (resetArmed && pressed && !btnDown) {
+    cancelResetArmed();
+    // 让本次按下也参与后续的 click 统计，所以不 return
+  }
+
   if (pressed) {
     if (!btnDown) {                       // 按下沿
-      btnDown = true; btnDownAt = now; longHandled = false;
-      if (resetWaitingConfirm) {          // 连按三下确认阶段：每按一次记一次
-        resetConfirmCount++;
-        buzzerBeep(60, 80);
-        confirmDeadline = now + 6000;
-        if (resetConfirmCount >= RST_CONFIRM) resetBox();
-      }
-    } else {                              // 保持按住
-      if (!longHandled && now - btnDownAt >= LC_PRESS_MS) {
-        longHandled = true;
-        if (page == P_VIB)   toggleVib();
-        else if (page == P_BUZZ) toggleBuzz();
-        else if (page == P_RESET && !resetWaitingConfirm) {
-          resetArmed = true; resetArmedAt = now;
-        }
-      }
-      // 重置倒计时满 5s → 进入"连按三下"确认
-      if (resetArmed && now - resetArmedAt >= RST_HOLD_MS) {
-        resetArmed = false;
-        resetWaitingConfirm = true;
-        resetConfirmCount = 0;
-        confirmDeadline = now + 10000;
-        buzzerBeep(200, 120);             // 提示进入确认阶段
-        refreshScreen();
-      }
+      btnDown = true; btnDownAt = now;
     }
   } else {
     if (btnDown) {                        // 松开沿
       btnDown = false;
-      if (resetArmed) {                   // 倒计时中途松开 → 取消回主页面
-        resetArmed = false;
-        page = P_MAIN;
-        buzzerBeep(60, 60);
-        refreshScreen();
-      } else if (!longHandled && (now - btnDownAt) >= SC_CLICK_MS && !resetWaitingConfirm) {
-        nextPage();                       // 短按切页（确认阶段不切页，避免打断连按）
-      }
+      if (now - btnDownAt < DEBOUNCE_MS) return;   // 抖动忽略
+      btnUpAt = now;
+      clickCount++;
     }
   }
 
-  // 连按三下窗口超时 → 放弃并回主页面
-  if (resetWaitingConfirm && now > confirmDeadline) {
-    resetWaitingConfirm = false;
+  // 双击窗口结束后再判定动作
+  if (clickCount > 0 && !btnDown && now - btnUpAt > DBL_GAP_MS) {
+    int clicks = clickCount;
+    clickCount = 0;
+
+    if (resetConfirming) {
+      // 确认页：双击退出，三击执行重置
+      if (clicks == 2) {
+        resetConfirming = false;
+        resetConfirmCount = 0;
+        buzzerBeep(60, 60);
+        refreshScreen();
+      } else if (clicks >= 3) {
+        resetBox();
+      } else {
+        // 单击：记录为确认计数
+        resetConfirmCount++;
+        buzzerBeep(60, 80);
+        confirmDeadline = now + 10000;
+        refreshScreen();
+        if (resetConfirmCount >= 3) resetBox();
+      }
+      return;
+    }
+
+    if (clicks == 2) {
+      // 双击：切换当前页状态 / 重置页进入倒计时
+      if (page == P_VIB) { toggleVib(); refreshScreen(); }
+      else if (page == P_BUZZ) { toggleBuzz(); refreshScreen(); }
+      else if (page == P_RESET) { startResetArmed(); }
+    } else {
+      // 单击：切页
+      nextPage();
+    }
+  }
+
+  // 重置倒计时走满
+  if (resetArmed && now - resetArmedAt >= RST_HOLD_MS) {
+    enterResetConfirm();
+  }
+
+  // 确认窗口超时 → 放弃
+  if (resetConfirming && now > confirmDeadline) {
+    resetConfirming = false;
     resetConfirmCount = 0;
     page = P_MAIN;
+    buzzerBeep(60, 60);
     refreshScreen();
   }
 }
@@ -461,6 +523,16 @@ void drawHeart(int color = 1) {
 // 切页屏（震动 / 蜂鸣 / 重置）
 // ============================================================
 
+/** 底部操作提示条：在所有操作页面底部常驻 */
+void drawFooterHint(const char* hint) {
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.drawHLine(0, 51, 128);
+  int w = u8g2.getUTF8Width(hint);
+  int x = (128 - w) / 2;
+  if (x < 0) x = 0;
+  u8g2.drawUTF8(x, 62, hint);
+}
+
 /** 开关页：居中的"开 / 关"选择器，当前态高亮（白底黑字），另一态只描边 + 白字 */
 void drawSwitchPage(const char* title, bool isOn) {
   u8g2.clearBuffer();
@@ -469,10 +541,9 @@ void drawSwitchPage(const char* title, bool isOn) {
   u8g2.setDrawColor(1);
   u8g2.drawUTF8(2, 12, title);
   u8g2.drawHLine(0, 15, 128);
-  u8g2.drawUTF8(2, 29, "长按切换开关");
 
   int segW = 34, segH = 22, gap = 10;
-  int x0 = (128 - (segW * 2 + gap)) / 2, x1 = x0 + segW + gap, y0 = 35;
+  int x0 = (128 - (segW * 2 + gap)) / 2, x1 = x0 + segW + gap, y0 = 28;
 
   // 开段
   u8g2.setDrawColor(isOn ? 1 : 0);          // 激活填充白底
@@ -491,10 +562,11 @@ void drawSwitchPage(const char* title, bool isOn) {
   u8g2.drawUTF8(x1 + (segW - u8g2.getUTF8Width("关")) / 2, y0 + 15, "关");
 
   u8g2.setDrawColor(1);
+  drawFooterHint("单击切页 · 双击切开关");
   u8g2.sendBuffer();
 }
 
-/** 重置页：三态（待触发 / 倒计时读条 / 等待连按三下） */
+/** 重置页：三态（待机 / 5s 倒计时 / 三击确认） */
 void drawResetPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
@@ -503,26 +575,26 @@ void drawResetPage() {
   u8g2.drawUTF8(2, 12, "重置配置");
   u8g2.drawHLine(0, 15, 128);
 
-  if (resetWaitingConfirm) {
+  if (resetConfirming) {
+    u8g2.drawUTF8(2, 28, "确认要恢复出厂？");
     char buf[24];
-    snprintf(buf, sizeof(buf), "请连按 %d 下确认", RST_CONFIRM);
-    u8g2.drawUTF8(2, 34, buf);
-    snprintf(buf, sizeof(buf), "已按 %d/%d", resetConfirmCount, RST_CONFIRM);
-    u8g2.drawUTF8(2, 48, buf);
-    u8g2.drawUTF8(2, 60, "将清空配置重开热点");
+    snprintf(buf, sizeof(buf), "已按 %d/3", resetConfirmCount);
+    u8g2.drawUTF8(2, 42, buf);
+    drawFooterHint("双击退出 · 三击重置");
   } else if (resetArmed) {
     int pct = (int)((long)(millis() - resetArmedAt) * 100 / RST_HOLD_MS);
     if (pct > 100) pct = 100;
-    u8g2.drawUTF8(2, 30, "警告：此操作不可逆！");
-    u8g2.drawFrame(14, 38, 100, 9);                       // 进度条外框
+    u8g2.drawUTF8(2, 26, "警告：此操作不可逆！");
+    u8g2.drawFrame(14, 34, 100, 9);                       // 进度条外框
     u8g2.setDrawColor(0);
-    u8g2.drawBox(17, 41, 94 * pct / 100, 3);              // 填充
+    u8g2.drawBox(17, 37, 94 * pct / 100, 3);              // 填充
     u8g2.setDrawColor(1);
-    u8g2.drawUTF8(2, 58, "满格后连按3下确认");
+    u8g2.drawUTF8(2, 50, "任意按键取消");
+    drawFooterHint("双击进入确认 · 按取消");
   } else {
-    u8g2.drawUTF8(2, 34, "长按进入重置");
-    u8g2.drawUTF8(2, 48, "松开即取消");
-    u8g2.drawUTF8(2, 60, "将在满5秒后询问确认");
+    u8g2.drawUTF8(2, 28, "双击开始重置倒计时");
+    u8g2.drawUTF8(2, 42, "将清空配置重开热点");
+    drawFooterHint("单击切页 · 双击开始");
   }
   u8g2.sendBuffer();
 }
@@ -886,8 +958,8 @@ void loop() {
   if (bleNow && !lastBleConnected) { vibrateOnce(180); buzzerBeep(120, 90); }
   lastBleConnected = bleNow;
 
-  // 屏幕刷新：正常 500ms；重置倒计时需更跟手，100ms
-  unsigned long refreshMs = (page == P_RESET && resetArmed) ? 100 : 500;
+  // 屏幕刷新：正常 500ms；重置倒计时/确认阶段需更跟手，100ms
+  unsigned long refreshMs = (page == P_RESET && (resetArmed || resetConfirming)) ? 100 : 500;
   if (now - lastDraw > refreshMs) {
     lastDraw = now;
     refreshScreen();
