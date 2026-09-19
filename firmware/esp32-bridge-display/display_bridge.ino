@@ -1173,21 +1173,17 @@ void drawMainStatus() {
   u8g2.setDrawColor(1);
   drawHeart(0);           // 白标题栏上用黑色小爱心（常驻右上角）
 
-  // WiFi 行（实时查询，掉线立刻变"未连接"，不缓存启动时的结果）
+  // WiFi 行（实时查询，掉线立刻变空心，不缓存启动时的结果）
   bool wifiLive = (WiFi.status() == WL_CONNECTED);
-  String wifiLine = wifiLive ? ("已连 " + WiFi.SSID()) : String("未连接");
-  drawStateLine(1, "WiFi", wifiLive, wifiLine.c_str());
+  drawStateLine(1, "WiFi", wifiLive);
 
   // 被控端行：朋友的 iPhone 是否连上盒子的蓝牙（HID 库实时状态）
   bool bleOk = compositeHID.isConnected();
-  drawStateLine(2, "被控端", bleOk, bleOk ? "已连接" : "未连接");
+  drawStateLine(2, "被控端", bleOk);
 
   // 控制端行：服务器 room_state 实时通知（viewer 加入/离开 1 秒内推送）
-  // 三种状态：已连接 / 未连接 / 服务器断开（此时无从得知控制端状态，如实显示）
   bool ctrlOk = wifiLive && wsConnected && controllerOnline;
-  const char* ctrlDetail = ctrlOk ? "已连接"
-                       : (wifiLive && !wsConnected) ? "无服务器" : "未连接";
-  drawStateLine(3, "控制端", ctrlOk, ctrlDetail);
+  drawStateLine(3, "控制端", ctrlOk);
 
   // 底部：房间号 + 外设状态（含风扇档位）
   u8g2.drawHLine(0, 50, 128);
@@ -1202,12 +1198,13 @@ void drawMainStatus() {
   u8g2.sendBuffer();
 }
 
-/** 画一行状态：标签 + ✓/✗ + 说明 */
-void drawStateLine(int row, const char* label, bool ok, const char* detail) {
-  int y = 18 + row * 11;               // 行高 11px
+/** 画一行状态：标签 + 右侧圆点（实心=已连接，空心=未连接） */
+void drawStateLine(int row, const char* label, bool ok) {
+  int y = 18 + row * 11;               // 行基线
   u8g2.drawUTF8(2, y, label);
-  u8g2.drawStr(46, y, ok ? "[OK]" : "[--]");   // 纯 ASCII，避免符号字体缺字
-  u8g2.drawUTF8(78, y, detail);
+  int cx = 120, cy = y - 6;            // 状态圆点中心（上移避免碰底部分割线）
+  if (ok) u8g2.drawDisc(cx, cy, 4, U8G2_DRAW_ALL);     // 实心=已连接
+  else    u8g2.drawCircle(cx, cy, 4, U8G2_DRAW_ALL);   // 空心=未连接
 }
 
 // ============================================================

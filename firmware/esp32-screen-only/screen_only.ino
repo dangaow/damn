@@ -719,16 +719,13 @@ void drawMainStatus() {
   drawHeart(0);
 
   bool wifiLive = (WiFi.status() == WL_CONNECTED);
-  String wifiLine = wifiLive ? ("已连 " + WiFi.SSID()) : String("未连接");
-  drawStateLine(1, "WiFi", wifiLive, wifiLine.c_str());
+  drawStateLine(1, "WiFi", wifiLive);
 
   bool bleOk = compositeHID.isConnected();
-  drawStateLine(2, "被控端", bleOk, bleOk ? "已连接" : "未连接");
+  drawStateLine(2, "被控端", bleOk);
 
   bool ctrlOk = wifiLive && wsConnected && controllerOnline;
-  const char* ctrlDetail = ctrlOk ? "已连接"
-                       : (wifiLive && !wsConnected) ? "无服务器" : "未连接";
-  drawStateLine(3, "控制端", ctrlOk, ctrlDetail);
+  drawStateLine(3, "控制端", ctrlOk);
 
   u8g2.drawHLine(0, 50, 128);
   String roomLine = "房间 " + room;
@@ -737,11 +734,12 @@ void drawMainStatus() {
   u8g2.sendBuffer();
 }
 
-void drawStateLine(int row, const char* label, bool ok, const char* detail) {
-  int y = 18 + row * 11;
+void drawStateLine(int row, const char* label, bool ok) {
+  int y = 18 + row * 11;                 // 行基线
   u8g2.drawUTF8(2, y, label);
-  u8g2.drawStr(46, y, ok ? "[OK]" : "[--]");
-  u8g2.drawUTF8(78, y, detail);
+  int cx = 120, cy = y - 6;              // 状态圆点中心（上移避免碰底部分割线）
+  if (ok) u8g2.drawDisc(cx, cy, 4, U8G2_DRAW_ALL);     // 实心=已连接
+  else    u8g2.drawCircle(cx, cy, 4, U8G2_DRAW_ALL);   // 空心=未连接
 }
 
 // ============================================================
