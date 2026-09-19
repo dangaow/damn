@@ -169,6 +169,7 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #define BUZZ_PWM_CH  1   // LEDC 通道 1 → 蜂鸣
 #define FAN_PWM_CH   2   // LEDC 通道 2 → 风扇
 #define PWM_BITS     8   // 8 位分辨率，占空比 0..255
+#define FAN_PWM_INVERTED 1 // 1=低电平触发模块（如 JY-25-003），输出占空比取反
 
 bool vibrateOn = true;
 bool buzzerOn = true;
@@ -430,6 +431,9 @@ void setupPeripherals() {
 /** 应用风扇 PWM 输出 */
 void applyFan() {
   uint8_t duty = (fanOn && fanLevel > 0) ? fanSpeeds[fanLevel] : 0;
+#if FAN_PWM_INVERTED
+  duty = 255 - duty; // 低电平触发模块：高电平=关，低电平=开
+#endif
   ledcWrite(FAN_PWM_CH, duty);
   Serial.printf("[FAN] %s 档位=%d duty=%d\n", fanOn ? "开" : "关", fanLevel, duty);
 }
