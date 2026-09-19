@@ -1080,7 +1080,7 @@ void handleCommand(const char* json, size_t len) {
       flushHid();
       // 库的 mouseClick() 是空实现（No-op），这里手动按下+松开模拟一次点击
       mouse->mousePress();
-      delay(20);                               // 确保按下报告先入队被发送，再入队松开
+      delay(60);                               // 按下保持 60ms，确保 iOS 能识别为一次点击
       mouse->mouseRelease();
     } else if (action == "scroll") {
       pendingWheel = (int8_t)constrain((int)pendingWheel + dx, -127, 127);  // 累积滚轮

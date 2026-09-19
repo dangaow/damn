@@ -311,6 +311,10 @@ class ControlActivity : AppCompatActivity() {
         // 桥接模式但房间里没有盒子：一律不处理（遮罩层也会挡住触摸）
         if (useBridge && !bridgeOnline) return
 
+        // 相对映射（触控板模式）：手指滑过整个红框宽度 ≈ 指针横穿整块屏幕；
+        // 增益钳制在合理区间，避免红框过窄时"飞"
+        val gain = (PHONE_W / padFrame.width.coerceAtLeast(1)).coerceIn(0.6f, 2.0f)
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 touchDownAt = System.currentTimeMillis()
@@ -319,12 +323,6 @@ class ControlActivity : AppCompatActivity() {
                 movedFar = false
                 dragArmed = false
                 twoFingerScroll = false
-                // 对齐参考：红点跳到手指按下位置（只改显示，不发移动指令），拖动时指针就"从手指处开始"
-                val fw = padFrame.width.coerceAtLeast(1)
-                val fh = padFrame.height.coerceAtLeast(1)
-                px = ((event.x / fw) * PHONE_W).coerceIn(0f, PHONE_W)
-                py = ((event.y / fh) * PHONE_H).coerceIn(0f, PHONE_H)
-                updatePointerDot()
                 view.postDelayed(dragArmRunnable, 550)  // 550ms 长按 → 按下左键
             }
 
@@ -357,19 +355,12 @@ class ControlActivity : AppCompatActivity() {
                         }
                     }
                 } else {
-                    if (kotlin.math.hypot(dx, dy) > 8) movedFar = true
+                    if (kotlin.math.hypot(dx, dy) > 15) movedFar = true
                     if (movedFar) view.removeCallbacks(dragArmRunnable)
 
-                    // 绝对映射：手指位置 → iPhone 指针位置，逐帧追踪（拖到哪，指针到哪）
-                    val fw = padFrame.width.coerceAtLeast(1)
-                    val fh = padFrame.height.coerceAtLeast(1)
-                    val targetX = (event.x / fw) * PHONE_W
-                    val targetY = (event.y / fh) * PHONE_H
-                    var rdx = (targetX - px).toInt()
-                    var rdy = (targetY - py).toInt()
-                    // 单步限幅：抑制 iOS 蓝牙鼠标的指针加速，避免快速拖动"飞出去"
-                    rdx = rdx.coerceIn(-40, 40)
-                    rdy = rdy.coerceIn(-40, 40)
+                    // 相对映射（触控板）：手指移动多少，指针移动多少；单步限幅抑制 iOS 指针加速
+                    val rdx = (dx * gain).toInt().coerceIn(-40, 40)
+                    val rdy = (dy * gain).toInt().coerceIn(-40, 40)
 
                     if (rdx != 0 || rdy != 0) {
                         val now = System.currentTimeMillis()
