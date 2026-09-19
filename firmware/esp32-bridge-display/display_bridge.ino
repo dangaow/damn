@@ -661,9 +661,9 @@ void handleButton() {
 /** 右上角常驻小爱心 ♡（图形绘制，避免字体缺字；color 决定深浅以适配背景） */
 void drawHeart(int color = 1) {
   u8g2.setDrawColor(color);
-  u8g2.drawCircle(115, 6, 3, U8G2_DRAW_ALL);          // 左圆
-  u8g2.drawCircle(121, 6, 3, U8G2_DRAW_ALL);          // 右圆
-  u8g2.drawTriangle(112, 5, 124, 5, 118, 13);  // 下尖
+  u8g2.drawDisc(112, 5, 4, U8G2_DRAW_ALL);   // 左鼓包
+  u8g2.drawDisc(119, 5, 4, U8G2_DRAW_ALL);   // 右鼓包（与左重叠，形成连续上缘）
+  u8g2.drawTriangle(108, 5, 123, 5, 116, 14); // 下尖（收窄，衔接两个鼓包）
   u8g2.setDrawColor(1);
 }
 
@@ -761,6 +761,7 @@ void drawSegmentBarFrame(int selected, const char* labels[], int count, const ch
     u8g2.drawUTF8(tx, ty, labels[i]);
   }
   u8g2.setDrawColor(1);
+  drawHeart(0);   // 右上角黑色爱心（标题栏白底上）
 }
 
 /** 带白底划过动画的选项条；from=-1 表示无动画 */
@@ -775,7 +776,6 @@ void drawSegmentBar(int selected, int from, const char* labels[], int count, con
     for (int s = 0; s <= steps; s++) {
       int fillX = startX + (targetX - startX) * s / steps;
       u8g2.clearBuffer();
-      drawHeart();
       // 画静态背景（标题 + 框线 + 分隔线）
       drawSegmentBarFrame(selected, labels, count, title, iconType);
       // 擦除高亮区并重画滑块到中间位置
@@ -800,7 +800,6 @@ void drawSegmentBar(int selected, int from, const char* labels[], int count, con
 
   // 最终帧
   u8g2.clearBuffer();
-  drawHeart();
   drawSegmentBarFrame(selected, labels, count, title, iconType);
 }
 
@@ -827,7 +826,6 @@ void drawFanPage(int& lastSel) {
 void drawHelpPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
-  drawHeart();
 
   // 标题栏白底黑字
   u8g2.drawBox(0, 0, 128, 15);
@@ -835,10 +833,11 @@ void drawHelpPage() {
   drawIconHelp(2, 2, 0);
   u8g2.drawUTF8(16, 12, "帮助");
   u8g2.setDrawColor(1);
+  drawHeart(0);   // 右上角黑色爱心（标题栏白底上）
 
-  u8g2.drawUTF8(4, 28, "单击按钮：切换页面");
-  u8g2.drawUTF8(4, 42, "双击按钮：改变开关/转速");
-  u8g2.drawUTF8(4, 56, "重置页：双击启动倒计时");
+  u8g2.drawUTF8(4, 26, "单击按钮：切换页面");
+  u8g2.drawUTF8(4, 38, "双击按钮：改变开关/转速");
+  u8g2.drawUTF8(4, 50, "重置页：双击启动倒计时");
 
   drawFooterHint("单击切页");
   u8g2.sendBuffer();
@@ -848,7 +847,6 @@ void drawHelpPage() {
 void drawResetPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
-  drawHeart();
 
   // 标题栏白底黑字
   u8g2.drawBox(0, 0, 128, 15);
@@ -856,6 +854,7 @@ void drawResetPage() {
   drawIconReset(2, 2, 0);
   u8g2.drawUTF8(16, 12, "重置配置");
   u8g2.setDrawColor(1);
+  drawHeart(0);   // 右上角黑色爱心（标题栏白底上）
 
   if (resetConfirming) {
     u8g2.drawUTF8(4, 28, "确认要恢复出厂？");
