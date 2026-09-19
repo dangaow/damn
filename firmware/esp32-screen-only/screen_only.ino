@@ -73,12 +73,12 @@ static const char settingsHead[] PROGMEM = R"html(<style>
   .sub{color:#8a8a9e;font-size:12px;margin:2px 0 18px}
   .card form{display:flex;flex-direction:column;gap:12px}
   .card label{font-size:13px;color:#2d2a3e;text-align:left;font-weight:700}
-  .card input[type=text],.card input[type=password]{
+  .card input[type=text],.card input[type=password],.card select{
     width:100%;padding:12px 14px;font-size:15px;color:#2d2a3e;
     background:#f4f3fa;border:1px solid #e8e6f2;
     border-radius:12px;outline:none;transition:.2s;
   }
-  .card input:focus{border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.18)}
+  .card input:focus,.card select:focus{border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.18)}
   .hint{font-size:12px;color:#8a8a9e;text-align:left;margin-top:-4px}
   .card input[type=submit],.card input[type=button],.card button{
     width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;
@@ -149,6 +149,7 @@ bool btnDown = false;
 unsigned long btnDownAt = 0;
 unsigned long btnUpAt = 0;
 int clickCount = 0;
+bool skipRelease = false;         // 重置倒计时取消后，吞掉本次松开的点击，避免误切页
 
 // 重置流程
 #define RST_HOLD_MS   5000
@@ -316,9 +317,11 @@ void handleButton() {
   unsigned long now = millis();
   bool pressed = (digitalRead(PIN_BUTTON) == LOW);
 
-  // 重置倒计时期间：任意按键按下即取消
+  // 重置倒计时期间：任意按键按下即取消，并吞掉本次按键（不触发切页/双击）
   if (resetArmed && pressed && !btnDown) {
     cancelResetArmed();
+    btnDown = true;
+    skipRelease = true;
   }
 
   if (pressed) {
@@ -326,6 +329,7 @@ void handleButton() {
   } else {
     if (btnDown) {
       btnDown = false;
+      if (skipRelease) { skipRelease = false; return; }   // 吞掉取消用的松开
       if (now - btnDownAt < DEBOUNCE_MS) return;
       btnUpAt = now;
       clickCount++;
@@ -435,7 +439,6 @@ void drawResetPage() {
     u8g2.setDrawColor(0);
     u8g2.drawBox(17, 37, 94 * pct / 100, 3);
     u8g2.setDrawColor(1);
-    u8g2.drawUTF8(4, 50, "任意按键取消");
     drawFooterHint("按任意键取消");
   } else {
     u8g2.drawUTF8(4, 28, "双击开始重置倒计时");
@@ -456,7 +459,7 @@ void refreshScreen() {
 // ---- 配置成功烟花 ----
 void initFireworks() {
   randomSeed(esp_random());
-  for (int i = 0; i < 26; i++) {
+  for (int i = 0; i < 42; i++) {
     float a = (random(360) * 3.14159f) / 180.0f;
     float sp = random(28, 90) / 10.0f;
     parts[i].x = 64; parts[i].y = 18;
@@ -470,7 +473,7 @@ void updateFireworks() {
   unsigned long now = millis();
   if (now - last < 35) return;
   last = now;
-  for (int i = 0; i < 26; i++) {
+  for (int i = 0; i < 42; i++) {
     parts[i].vy += 0.35f;
     parts[i].x += parts[i].vx;
     parts[i].y += parts[i].vy;
@@ -483,7 +486,7 @@ void drawFireworksFrame() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setDrawColor(1);
-  for (int i = 0; i < 26; i++) {
+  for (int i = 0; i < 42; i++) {
     int x = (int)parts[i].x, y = (int)parts[i].y;
     if (x >= 0 && x < 128 && y >= 0 && y < 64 && parts[i].life > 120) {
       u8g2.drawPixel(x, y);
@@ -646,33 +649,46 @@ void typeString(const char* s) {
 
 void runBootAnimation() {
   const char* logo = "MAKE STUDIO";
+  const char* sub = "莫莫专属助手";
 
-  delay(1000);
-
-  u8g2.clearBuffer();
-  u8g2.setDrawColor(1);
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
-  int w = u8g2.getStrWidth(logo);
-  int x = (128 - w) / 2;
-  if (x < 0) x = 0;
-  u8g2.drawStr(x, 40, logo);
-  drawUTF8Center("莫莫专属助手", 54);
-  u8g2.setContrast(0);
+  u8g2.setMaxClipWindow();
+  u8g2.clearBuffer();
   u8g2.sendBuffer();
+  delay(800);
 
-  for (int c = 8; c <= 255; c += 14) {
-    u8g2.setContrast(c);
-    delay(65);
+  // 计算 LOGO 与副标题的左右边界，用于逐列扫描
+  int lw = u8g2.getUTF8Width(logo);
+  int lx = (128 - lw) / 2; if (lx < 0) lx = 0;
+  int sw = u8g2.getUTF8Width(sub);
+  int sx = (128 - sw) / 2; if (sx < 0) sx = 0;
+  int left  = (lx < sx) ? lx : sx;
+  int right = (lx + lw > sx + sw) ? (lx + lw) : (sx + sw);
+  if (right > 128) right = 128;
+
+  // 渐显：逐列从左到右揭示（真正"从无到有"，不依赖对比度）
+  for (int x = left; x <= right; x += 3) {
+    u8g2.clearBuffer();
+    u8g2.setDrawColor(1);
+    u8g2.setClipWindow(0, 0, x, 63);
+    drawUTF8Center(logo, 40);
+    drawUTF8Center(sub, 54);
+    u8g2.sendBuffer();
+    u8g2.setMaxClipWindow();
+    delay(10);
   }
 
-  delay(3000);
+  delay(3000);   // 停留 3 秒，后台初始化
 
-  for (int c = 255; c > 0; c -= 14) {
-    u8g2.setContrast(c);
-    delay(65);
+  // 渐隐：从右向左逐列擦黑
+  for (int x = 128; x >= 0; x -= 4) {
+    u8g2.clearBuffer();
+    u8g2.setClipWindow(x, 0, 128, 63);
+    u8g2.sendBuffer();
+    u8g2.setMaxClipWindow();
+    delay(6);
   }
 
-  u8g2.setContrast(255);
   u8g2.clear();
   u8g2.sendBuffer();
 }

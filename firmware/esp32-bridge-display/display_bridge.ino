@@ -92,12 +92,12 @@ static const char settingsHead[] PROGMEM = R"html(<style>
   .sub{color:#8a8a9e;font-size:12px;margin:2px 0 18px}
   .card form{display:flex;flex-direction:column;gap:12px}
   .card label{font-size:13px;color:#2d2a3e;text-align:left;font-weight:700}
-  .card input[type=text],.card input[type=password]{
+  .card input[type=text],.card input[type=password],.card select{
     width:100%;padding:12px 14px;font-size:15px;color:#2d2a3e;
     background:#f4f3fa;border:1px solid #e8e6f2;
     border-radius:12px;outline:none;transition:.2s;
   }
-  .card input:focus{border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.18)}
+  .card input:focus,.card select:focus{border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.18)}
   .hint{font-size:12px;color:#8a8a9e;text-align:left;margin-top:-4px}
   .card input[type=submit],.card input[type=button],.card button{
     width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;
@@ -194,6 +194,7 @@ bool btnDown = false;
 unsigned long btnDownAt = 0;
 unsigned long btnUpAt = 0;             // 松开时刻，用于识别双击
 int clickCount = 0;                    // 当前窗口内点击次数
+bool skipRelease = false;              // 重置倒计时取消后，吞掉本次松开的点击
 
 // 重置流程
 #define RST_HOLD_MS   5000             // 重置倒计时 5s
@@ -247,6 +248,7 @@ void setup() {
 
   // ---- WiFi 配网 ----
   drawStatus("配网/连WiFi…");
+  softBeep();
   WiFi.mode(WIFI_STA);
   WiFiManager wm;
   wm.setConfigPortalTimeout(180);
@@ -280,6 +282,7 @@ void setup() {
   if (newRoom.length()) { room = newRoom; prefs.putString("room", room); }                    // 留空则沿用上次
 
   wifiOk = true;
+  softBeep();                            // 配置保存完成，小声提示
   Serial.printf("[WiFi] 已连接 %s\n", WiFi.SSID().c_str());
   Serial.printf("[CFG] server=%s room=%s\n", serverUrl.c_str(), room.c_str());
 
@@ -292,6 +295,7 @@ void setup() {
 
   // ---- WebSocket 连中继服务器 ----
   drawStatus("连接服务器…");
+  softBeep();
   connectWebSocket();
 }
 
@@ -328,6 +332,14 @@ void connectWebSocket() {
 void buzzerBeep(int ms = 120, int duty = 110) {
   if (!buzzerOn) return;
   ledcWrite(BUZZ_PWM_CH, duty);
+  delay(ms);
+  ledcWrite(BUZZ_PWM_CH, 0);
+}
+
+/** 状态切换小声提示音（音量统一、小声） */
+void softBeep(int ms = 40) {
+  if (!buzzerOn) return;
+  ledcWrite(BUZZ_PWM_CH, 60);
   delay(ms);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
@@ -547,10 +559,11 @@ void handleButton() {
   unsigned long now = millis();
   bool pressed = (digitalRead(PIN_BUTTON) == LOW);   // GPIO0 按下接地
 
-  // 重置倒计时期间：任意按键按下即取消
+  // 重置倒计时期间：任意按键按下即取消，并吞掉本次按键（不触发切页/双击）
   if (resetArmed && pressed && !btnDown) {
     cancelResetArmed();
-    // 让本次按下也参与后续的 click 统计，所以不 return
+    btnDown = true;
+    skipRelease = true;
   }
 
   if (pressed) {
@@ -560,6 +573,7 @@ void handleButton() {
   } else {
     if (btnDown) {                        // 松开沿
       btnDown = false;
+      if (skipRelease) { skipRelease = false; return; }   // 吞掉取消用的松开
       if (now - btnDownAt < DEBOUNCE_MS) return;   // 抖动忽略
       btnUpAt = now;
       clickCount++;
@@ -831,8 +845,7 @@ void drawResetPage() {
     u8g2.setDrawColor(0);
     u8g2.drawBox(17, 37, 94 * pct / 100, 3);              // 填充
     u8g2.setDrawColor(1);
-    u8g2.drawUTF8(4, 50, "任意按键取消");
-    drawFooterHint("双击进入确认 · 按取消");
+    drawFooterHint("按任意键取消");
   } else {
     u8g2.drawUTF8(4, 28, "双击开始重置倒计时");
     u8g2.drawUTF8(4, 42, "将清空配置重开热点");
@@ -857,7 +870,7 @@ void refreshScreen() {
 // ---- 配置成功烟花：粒子从屏幕上部爆开 + 背景文字 ----
 void initFireworks() {
   randomSeed(esp_random());
-  for (int i = 0; i < 26; i++) {
+  for (int i = 0; i < 42; i++) {
     float a = (random(360) * 3.14159f) / 180.0f;
     float sp = random(28, 90) / 10.0f;
     parts[i].x = 64; parts[i].y = 18;
@@ -872,7 +885,7 @@ void updateFireworks() {
   if (now - last < 35) return;
   int dt = (int)(now - last); last = now;
   (void)dt;
-  for (int i = 0; i < 26; i++) {
+  for (int i = 0; i < 42; i++) {
     parts[i].vy += 0.35f;                 // 重力
     parts[i].x += parts[i].vx;
     parts[i].y += parts[i].vy;
@@ -885,7 +898,7 @@ void drawFireworksFrame() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setDrawColor(1);
-  for (int i = 0; i < 26; i++) {
+  for (int i = 0; i < 42; i++) {
     int x = (int)parts[i].x, y = (int)parts[i].y;
     if (x >= 0 && x < 128 && y >= 0 && y < 64 && parts[i].life > 120) {
       u8g2.drawPixel(x, y);
@@ -1087,39 +1100,46 @@ void typeString(const char* s) {
  */
 void runBootAnimation() {
   const char* logo = "MAKE STUDIO";
+  const char* sub = "莫莫专属助手";
 
-  // 1) 插电后先停 1 秒（黑屏，等价"上电即启动"）
-  delay(1000);
-
-  // 2) 把 LOGO 画进缓冲（先淡，等待对比度爬升）
-  u8g2.clearBuffer();
-  u8g2.setDrawColor(1);
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
-  int w = u8g2.getStrWidth(logo);
-  int x = (128 - w) / 2;
-  if (x < 0) x = 0;
-  u8g2.drawStr(x, 40, logo);   // 主 LOGO，水平居中
-  drawUTF8Center("莫莫专属助手", 54);   // 副标题小字
-  u8g2.setContrast(0);         // 初始对比度为 0（全黑）
+  u8g2.setMaxClipWindow();
+  u8g2.clearBuffer();
   u8g2.sendBuffer();
+  delay(800);
 
-  // 3) 渐显：对比度 0 → 255（约 1.5s）
-  for (int c = 8; c <= 255; c += 14) {
-    u8g2.setContrast(c);
-    delay(65);
+  // 计算 LOGO 与副标题的左右边界，用于逐列扫描
+  int lw = u8g2.getUTF8Width(logo);
+  int lx = (128 - lw) / 2; if (lx < 0) lx = 0;
+  int sw = u8g2.getUTF8Width(sub);
+  int sx = (128 - sw) / 2; if (sx < 0) sx = 0;
+  int left  = (lx < sx) ? lx : sx;
+  int right = (lx + lw > sx + sw) ? (lx + lw) : (sx + sw);
+  if (right > 128) right = 128;
+
+  // 渐显：逐列从左到右揭示（真正"从无到有"，不依赖对比度）
+  for (int x = left; x <= right; x += 3) {
+    u8g2.clearBuffer();
+    u8g2.setDrawColor(1);
+    u8g2.setClipWindow(0, 0, x, 63);
+    drawUTF8Center(logo, 40);
+    drawUTF8Center(sub, 54);
+    u8g2.sendBuffer();
+    u8g2.setMaxClipWindow();
+    delay(10);
   }
 
-  // 4) 停留 3 秒：画面全亮，后台正好做蓝牙/配网初始化
-  delay(3000);
+  delay(3000);   // 停留 3 秒，后台初始化
 
-  // 5) 渐隐：对比度 255 → 0（约 1.5s）
-  for (int c = 255; c > 0; c -= 14) {
-    u8g2.setContrast(c);
-    delay(65);
+  // 渐隐：从右向左逐列擦黑
+  for (int x = 128; x >= 0; x -= 4) {
+    u8g2.clearBuffer();
+    u8g2.setClipWindow(x, 0, 128, 63);
+    u8g2.sendBuffer();
+    u8g2.setMaxClipWindow();
+    delay(6);
   }
 
-  // 6) 清屏，交给后续 drawStatus/drawMainStatus 接管
-  u8g2.setContrast(255);       // 恢复默认对比度，避免后续画面偏暗
   u8g2.clear();
   u8g2.sendBuffer();
 }
