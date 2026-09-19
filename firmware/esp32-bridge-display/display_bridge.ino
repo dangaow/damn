@@ -141,9 +141,17 @@ window.addEventListener('DOMContentLoaded',function(){
 // ---- 屏幕（外接 SSD1306 OLED，HW I2C 默认 SDA=GPIO21 SCL=GPIO22）----
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
+// 鼠标配置：启用 AutoDefer，mouseMove 只入队、由 BLE 后台任务异步发送，
+// 避免 notify 在 WiFi/BLE 共存下阻塞主循环，导致 WebSocket 心跳超时断连
+MouseConfiguration makeMouseConfig() {
+  MouseConfiguration c;
+  c.setAutoDefer(true);
+  return c;
+}
+
 BleCompositeHID compositeHID("MochaTool", "MochaTool", 100);
 KeyboardDevice* keyboard = new KeyboardDevice();
-MouseDevice* mouse = new MouseDevice();
+MouseDevice* mouse = new MouseDevice(makeMouseConfig());
 
 WebSocketsClient ws;
 Preferences prefs;
@@ -255,7 +263,11 @@ void setup() {
   // ---- 蓝牙 HID 键鼠启动（iPhone 配对后终身自动回连）----
   compositeHID.addDevice(keyboard);
   compositeHID.addDevice(mouse);
-  compositeHID.begin();
+  // 启用后台异步发送（queued sending）：notify 移到独立任务，主循环不被 BLE 阻塞
+  BLEHostConfiguration hostConfig;
+  hostConfig.setQueuedSending(true);
+  hostConfig.setQueueSendRate(80);    // 80Hz 后台发送节奏（≈12.5ms/报告，流畅且降低射频压力）
+  compositeHID.begin(hostConfig);
   Serial.println("[BLE] MochaTool 已广播，等待 iPhone 配对…");
 
   // ---- 读取保存的配置 ----
@@ -1080,7 +1092,7 @@ void handleCommand(const char* json, size_t len) {
       flushHid();
       // 库的 mouseClick() 是空实现（No-op），这里手动按下+松开模拟一次点击
       mouse->mousePress();
-      delay(15);                               // 确保按下报告先送达，再发松开
+      delay(20);                               // 确保按下报告先入队被发送，再入队松开
       mouse->mouseRelease();
     } else if (action == "scroll") {
       pendingWheel = (int8_t)constrain((int)pendingWheel + dx, -127, 127);  // 累积滚轮
