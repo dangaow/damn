@@ -226,6 +226,13 @@ bool configSplashShown = false;        // 是否已展示过烟花（仅首次�
 // 被控端（iPhone 蓝牙）连接沿触发震动
 bool lastBleConnected = false;
 
+// ---- HID 鼠标位移累积 + 节流（避免 BLE 报告队列积压导致卡顿/断连）----
+int  pendingDx = 0, pendingDy = 0;   // 累积的鼠标位移（待合并发送）
+int8_t pendingWheel = 0;             // 累积滚轮
+bool dragHeld = false;               // 左键是否处于按下拖动状态
+unsigned long lastHidFlush = 0;
+#define HID_FLUSH_MS  15             // 每 15ms 合并刷新一次（≈66 报告/s，稳妥不积压）
+
 // ============================================================
 // 初始化
 // ============================================================
@@ -976,6 +983,21 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t len) {
   }
 }
 
+/** 把累积的鼠标位移/滚轮合并成一次 HID 报告发送（loop 里定时调用，避免逐条发导致 BLE 积压） */
+void flushHid() {
+  if (pendingWheel != 0) {
+    mouse->mouseMove(0, 0, 0, pendingWheel);   // dx/dy=0，wheel=pendingWheel
+    pendingWheel = 0;
+  }
+  if (pendingDx != 0 || pendingDy != 0) {
+    int sx = constrain(pendingDx, -127, 127);
+    int sy = constrain(pendingDy, -127, 127);
+    mouse->mouseMove((signed char)sx, (signed char)sy);
+    pendingDx -= sx;   // 超出 ±127 的余量留给下一帧，不丢位移
+    pendingDy -= sy;
+  }
+}
+
 void handleCommand(const char* json, size_t len) {
   DynamicJsonDocument doc(1024);   // 打字文本较长，静态 384 会解析失败，改用 1KB 动态缓冲
   if (deserializeJson(doc, json, len)) return;
@@ -1038,18 +1060,26 @@ void handleCommand(const char* json, size_t len) {
     int dy = doc["dy"] | 0;
 
     if (action == "move") {
-      mouse->mouseMove((signed char)dx, (signed char)dy);
+      pendingDx += dx; pendingDy += dy;        // 累积，等 loop 定时合并发送
     } else if (action == "drag") {
-      mouse->mousePress();                          // 默认参数 = 左键
-      mouse->mouseMove((signed char)dx, (signed char)dy);
+      if (!dragHeld) { mouse->mousePress(); dragHeld = true; }  // 按下只在首次触发，不重复 press
+      pendingDx += dx; pendingDy += dy;
     } else if (action == "down") {
+      flushHid();                              // 先把积压的位移发掉，再按下
       mouse->mousePress();
+      dragHeld = true;
     } else if (action == "up") {
+      flushHid();                              // 松手前把剩余位移发完
       mouse->mouseRelease();
+      dragHeld = false;
     } else if (action == "click") {
-      mouse->mouseClick();
+      flushHid();
+      // 库的 mouseClick() 是空实现（No-op），这里手动按下+松开模拟一次点击
+      mouse->mousePress();
+      delay(15);                               // 确保按下报告先送达，再发松开
+      mouse->mouseRelease();
     } else if (action == "scroll") {
-      mouse->mouseMove(0, 0, 0, (signed char)dx);   // dx 字段复用承载滚轮值
+      pendingWheel = (int8_t)constrain((int)pendingWheel + dx, -127, 127);  // 累积滚轮
     }
   }
   else if (strcmp(type, "hid_text") == 0) {
@@ -1237,6 +1267,12 @@ void loop() {
 
   // 物理按键：短按切页 / 长按切开关 / 重置流程
   handleButton();
+
+  // HID 鼠标位移合并发送（每 15ms 一次，避免逐条发导致 BLE 队列积压）
+  if (now - lastHidFlush >= HID_FLUSH_MS) {
+    lastHidFlush = now;
+    flushHid();
+  }
 
   // 心跳保活
   if (wsConnected && now - lastPing > 20000) {

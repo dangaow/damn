@@ -346,7 +346,13 @@ class ControlActivity : AppCompatActivity() {
                 if (twoFingerScroll) {
                     val wheel = (-dy / 6f).toInt().coerceIn(-127, 127)
                     mouse?.scroll(wheel)
-                    if (useBridge) sendHid("scroll", wheel, 0)
+                    if (useBridge) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastHidSentAt >= 40) {   // 滚动同样节流，避免高频轰炸
+                            lastHidSentAt = now
+                            sendHid("scroll", wheel, 0)
+                        }
+                    }
                 } else {
                     if (kotlin.math.hypot(dx, dy) > 8) movedFar = true
                     if (movedFar) view.removeCallbacks(dragArmRunnable)
@@ -355,7 +361,7 @@ class ControlActivity : AppCompatActivity() {
                     val rdy = (dy * gain).toInt()
                     if (rdx != 0 || rdy != 0) {
                         val now = System.currentTimeMillis()
-                        val hidOk = useBridge && now - lastHidSentAt >= 33
+                        val hidOk = useBridge && now - lastHidSentAt >= 40
                         var sent = false
                         if (useBridge) {
                             // 桥接盒模式：只在真实发出一条指令时才更新指针定位（避免节流丢弃导致的偏移）
