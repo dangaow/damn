@@ -165,10 +165,24 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #define PIN_FAN     26   // 散热风扇 PWM：GPIO26 → MOS/风扇 PWM 控制脚
 
 // ---- 运行时配置（存 NVS，可在手机端/本地面板实时调整，免重烧录） ----
-#define VIB_PWM_CH   0   // LEDC 通道 0 → 震动
-#define BUZZ_PWM_CH  1   // LEDC 通道 1 → 蜂鸣
-#define FAN_PWM_CH   2   // LEDC 通道 2 → 风扇
+// ---- LEDC 通道：core 3.x 用 pin 寻址（ledcWrite 传 pin），core 2.x 用 channel ----
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  #define VIB_PWM_CH   PIN_VIB
+  #define BUZZ_PWM_CH  PIN_BUZZER
+  #define FAN_PWM_CH   PIN_FAN
+#else
+  #define VIB_PWM_CH   0   // LEDC 通道 0 → 震动
+  #define BUZZ_PWM_CH  1   // LEDC 通道 1 → 蜂鸣
+  #define FAN_PWM_CH   2   // LEDC 通道 2 → 风扇
+#endif
 #define PWM_BITS     8   // 8 位分辨率，占空比 0..255
+
+// 动态改蜂鸣频率：core 3.x 用 ledcChangeFrequency，core 2.x 用 ledcSetup
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  #define BUZZ_SET_FREQ(f)  ledcChangeFrequency(PIN_BUZZER, (f), PWM_BITS)
+#else
+  #define BUZZ_SET_FREQ(f)  ledcSetup(BUZZ_PWM_CH, (f), PWM_BITS)
+#endif
 #define FAN_PWM_INVERTED 1 // 1=低电平触发模块（如 JY-25-003），输出占空比取反
 
 bool vibrateOn = true;
@@ -337,21 +351,21 @@ void buzzerBeep(int ms = 120, int duty = 110) {
 }
 
 /** 状态切换小声提示音（音量统一、小声） */
-void softBeep(int ms = 40) {
+void softBeep() {
   if (!buzzerOn) return;
   ledcWrite(BUZZ_PWM_CH, 60);
-  delay(ms);
+  delay(40);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
 /** 播放指定频率音符（单位 Hz/ms），结束后恢复默认提示音频率 2500Hz */
 void playTone(int freq, int ms, int duty = 110) {
   if (!buzzerOn) return;
-  ledcSetup(BUZZ_PWM_CH, freq, PWM_BITS);
+  BUZZ_SET_FREQ(freq);
   ledcWrite(BUZZ_PWM_CH, duty);
   delay(ms);
   ledcWrite(BUZZ_PWM_CH, 0);
-  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);   // 恢复事件提示音频率
+  BUZZ_SET_FREQ(2500);   // 恢复事件提示音频率
 }
 
 /** 震动：强度从低到高线性爬升（苹果式"嗡——"），到顶立刻停止，无下降沿 */
@@ -384,7 +398,7 @@ void bootTune() {
   for (int i = 0; i < 4; i++) {
     // 蜂鸣 + 震动同时开始
     if (buzzerOn) {
-      ledcSetup(BUZZ_PWM_CH, tones[i], PWM_BITS);
+      BUZZ_SET_FREQ(tones[i]);
       ledcWrite(BUZZ_PWM_CH, 100);
     }
     if (vibrateOn) {
@@ -404,14 +418,14 @@ void bootTune() {
     if (i < 3) delay(gapMs);
   }
   // 恢复默认提示音频率
-  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
+  BUZZ_SET_FREQ(2500);
 }
 
 /** 切页同步音效：蜂鸣 "bi" 一声 + 震动完全同步 */
 void pageBeepVib() {
   const int beepMs = 80;
   if (buzzerOn) {
-    ledcSetup(BUZZ_PWM_CH, 2000, PWM_BITS);
+    BUZZ_SET_FREQ(2000);
     ledcWrite(BUZZ_PWM_CH, 90);
   }
   if (vibrateOn) {
@@ -424,19 +438,24 @@ void pageBeepVib() {
     }
   }
   ledcWrite(BUZZ_PWM_CH, 0);
-  ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
+  BUZZ_SET_FREQ(2500);
 }
 
 /** 初始化所有外设 PWM 通道并应用到保存的配置 */
 void setupPeripherals() {
-  // 震动 & 蜂鸣：PWM 5kHz（无源蜂鸣器靠方波出声，频率即音调）
+  // 震动 5kHz / 蜂鸣 2.5kHz / 风扇 25kHz
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  ledcAttach(PIN_VIB, 5000, PWM_BITS);
+  ledcAttach(PIN_BUZZER, 2500, PWM_BITS);
+  ledcAttach(PIN_FAN, 25000, PWM_BITS);
+#else
   ledcSetup(VIB_PWM_CH, 5000, PWM_BITS);
   ledcAttachPin(PIN_VIB, VIB_PWM_CH);
   ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
   ledcAttachPin(PIN_BUZZER, BUZZ_PWM_CH);
-  // 风扇：25kHz 常规 PWM 调速
   ledcSetup(FAN_PWM_CH, 25000, PWM_BITS);
   ledcAttachPin(PIN_FAN, FAN_PWM_CH);
+#endif
   applyFan();
 }
 
