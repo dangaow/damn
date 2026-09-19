@@ -233,6 +233,10 @@ bool dragHeld = false;               // 左键是否处于按下拖动状态
 unsigned long lastHidFlush = 0;
 #define HID_FLUSH_MS  15             // 每 15ms 合并刷新一次（≈66 报告/s，稳妥不积压）
 
+// WiFi 断线自愈
+unsigned long lastWifiRetry = 0;
+int wifiFailCount = 0;
+
 // ============================================================
 // 初始化
 // ============================================================
@@ -303,6 +307,7 @@ void setup() {
   if (newRoom.length()) { room = newRoom; prefs.putString("room", room); }                    // 留空则沿用上次
 
   wifiOk = true;
+  WiFi.setSleep(false);                  // 关闭 WiFi 省电（modem sleep），避免 WebSocket 心跳延迟导致断连
   softBeep();                            // 配置保存完成，小声提示
   Serial.printf("[WiFi] 已连接 %s\n", WiFi.SSID().c_str());
   Serial.printf("[CFG] server=%s room=%s\n", serverUrl.c_str(), room.c_str());
@@ -1263,6 +1268,24 @@ void loop() {
   ws.loop();
 
   unsigned long now = millis();
+
+  // WiFi 断线检测与自愈：掉线后异步重连，多次失败则重启（长年待命设备最可靠）
+  if (wifiOk && WiFi.status() != WL_CONNECTED) {
+    if (now - lastWifiRetry > 10000) {
+      lastWifiRetry = now;
+      wifiFailCount++;
+      Serial.printf("[WiFi] 掉线，第 %d 次重连…\n", wifiFailCount);
+      WiFi.disconnect();
+      WiFi.reconnect();            // 异步触发重连，不阻塞 loop
+      if (wifiFailCount >= 5) {    // 约 50s 仍未恢复 → 重启
+        Serial.println("[WiFi] 重连多次失败，重启…");
+        delay(200);
+        ESP.restart();
+      }
+    }
+  } else if (WiFi.status() == WL_CONNECTED) {
+    wifiFailCount = 0;
+  }
 
   // 物理按键：短按切页 / 长按切开关 / 重置流程
   handleButton();
