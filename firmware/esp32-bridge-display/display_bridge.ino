@@ -66,7 +66,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <nvs_flash.h>
-#include <BleCompositeHid.h>
+#include <BleCompositeHID.h>
 #include <KeyboardDevice.h>
 #include <MouseDevice.h>
 
