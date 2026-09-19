@@ -73,6 +73,7 @@ class ControlActivity : AppCompatActivity() {
     private var movedFar = false
     private var dragArmed = false
     private var twoFingerScroll = false
+    private var lastTapTime = 0L    // 上次单击抬起时间，用于双击判定
     private val dragArmRunnable = Runnable {
         if (!movedFar) {
             dragArmed = true
@@ -323,7 +324,7 @@ class ControlActivity : AppCompatActivity() {
                 movedFar = false
                 dragArmed = false
                 twoFingerScroll = false
-                view.postDelayed(dragArmRunnable, 550)  // 550ms 长按 → 按下左键
+                view.postDelayed(dragArmRunnable, 1000)  // 1 秒长按 → 拖拽
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -392,14 +393,21 @@ class ControlActivity : AppCompatActivity() {
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 view.removeCallbacks(dragArmRunnable)
-                val elapsed = System.currentTimeMillis() - touchDownAt
+                val now = System.currentTimeMillis()
+                val elapsed = now - touchDownAt
 
                 if (dragArmed) {
                     mouse?.leftUp()
                     if (useBridge) sendHid("up", 0, 0)
-                } else if (!movedFar && elapsed < 550) {
-                    mouse?.click()
-                    if (useBridge) sendHid("click", 0, 0)
+                } else if (!movedFar && elapsed < 1000) {
+                    // 双击判定：第一次轻点只记录，300ms 内第二次轻点才触发点击
+                    if (now - lastTapTime < 300) {
+                        lastTapTime = 0
+                        mouse?.click()
+                        if (useBridge) sendHid("click", 0, 0)
+                    } else {
+                        lastTapTime = now
+                    }
                 }
                 dragArmed = false
                 twoFingerScroll = false
