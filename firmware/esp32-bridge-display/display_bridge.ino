@@ -344,10 +344,10 @@ void connectWebSocket() {
   ws.begin(host, port, "/");
   if (secure) ws.beginSSL(host.c_str(), port, "/");
   ws.onEvent(onWebSocketEvent);
-  ws.setReconnectInterval(5000);
-  // 协议层心跳：15s 一次 ping、3s 超时、连失 2 次判死线
+  ws.setReconnectInterval(3000);
+  // 协议层心跳：15s 一次 ping、5s 超时、连失 2 次判死线
   // 防止 WiFi 静默断链后 wsConnected 还挂在 true（屏幕显示"控制端已连接"骗人）
-  ws.enableHeartbeat(15000, 3000, 2);
+  ws.enableHeartbeat(15000, 5000, 2);
 }
 
 // ============================================================
