@@ -1,5 +1,5 @@
 /**
- * RC Bridge —— ESP32 蓝牙 HID 桥接盒固件
+ * MochaTool —— ESP32 蓝牙 HID 桥接盒固件
  *
  * 作用：常驻被控方（朋友家），WiFi 连中继服务器接收指令，
  *       对 iPhone 以 BLE HID 键盘+鼠标身份发出真实输入（全局有效、无需越狱）。
@@ -26,7 +26,7 @@
  *   1. 首次上电 → 手机连热点 "mochadangao"（无密码），
  *      填朋友家 WiFi + 服务器地址（ws://你的服务器:9000）+ 房间号
  *   2. iPhone：设置 → 辅助功能 → 触控 → 辅助触控打开
- *      → 设备 → 蓝牙设备 → 配对 "RC Bridge"
+ *      → 设备 → 蓝牙设备 → 配对 "MochaTool"
  *   3. 之后通电即用，断电重启自动恢复（配置存 NVS）
  */
 
@@ -44,7 +44,7 @@
 // {type:"hid", action:"move|drag|down|up|click|scroll", dx:int, dy:int}
 // {type:"hid_text", value:"要打的字（英文/拼音，走真实键盘）"}
 
-BleCompositeHID compositeHID("RC Bridge", "RCD", 100);
+BleCompositeHID compositeHID("MochaTool", "MochaTool", 100);
 KeyboardDevice* keyboard = new KeyboardDevice();
 MouseDevice* mouse = new MouseDevice();
 
@@ -72,7 +72,7 @@ void setup() {
   compositeHID.addDevice(keyboard);
   compositeHID.addDevice(mouse);
   compositeHID.begin();
-  Serial.println("[BLE] RC Bridge 已广播，等待 iPhone 配对…");
+  Serial.println("[BLE] MochaTool 已广播，等待 iPhone 配对…");
 
   // ---- 读取保存的配置 ----
   prefs.begin("rcbridge", false);

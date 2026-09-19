@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RC 远程助手 - 中继服务器一键部署脚本（Debian / Ubuntu）
+# MochaTool - 中继服务器一键部署脚本（Debian / Ubuntu）
 # 用法（在你的服务器上，root 或 sudo）：
 #   bash deploy.sh
 #
@@ -59,7 +59,7 @@ npm install --omit=dev
 echo "==> [4/5] 创建 systemd 服务 $SVC_NAME"
 cat > /etc/systemd/system/${SVC_NAME}.service <<EOF
 [Unit]
-Description=RC Relay WebSocket Server
+Description=MochaTool Relay WebSocket Server
 After=network.target
 
 [Service]

@@ -1,5 +1,5 @@
 /**
- * RC Bridge Screen-Only —— 只有屏幕 + 板子（无蜂鸣/震动/风扇）的测试固件
+ * MochaTool Screen-Only —— 只有屏幕 + 板子（无蜂鸣/震动/风扇）的测试固件
  *
  * 用途：配件（蜂鸣器/震动电机/风扇）还没到齐时，先用这块板子 + 屏幕
  *       验证「屏幕显示 / 开机动画 / 按键切页 / 配网 / 蓝牙 HID / 服务器连接」全流程。
@@ -15,7 +15,7 @@
  *
  * 屏幕（128x64）实时显示：
  *   ┌────────────────┐
- *   │ RC 远程助手      │
+ *   │ MochaTool        │
  *   │ WiFi  [OK] 已连 │
  *   │ 被控端[OK] 已连接│  ← 朋友 iPhone 蓝牙连上了盒子
  *   │ 控制端[--] 未连接│  ← 你在家还没通过服务器接入
@@ -95,7 +95,7 @@ window.addEventListener('DOMContentLoaded',function(){
   var f=document.querySelector('form');
   if(f && f.parentNode){
     var c=document.createElement('div'); c.className='card';
-    var logo=document.createElement('div'); logo.className='logo'; logo.textContent='RC 远程助手';
+    var logo=document.createElement('div'); logo.className='logo'; logo.textContent='MochaTool';
     var sub=document.createElement('div'); sub.className='sub'; sub.textContent='请配置 WiFi 网络';
     f.parentNode.insertBefore(c, f); c.appendChild(logo); c.appendChild(sub); c.appendChild(f);
   }
@@ -117,7 +117,7 @@ window.addEventListener('DOMContentLoaded',function(){
 // ---- 屏幕（外接 SSD1306 OLED，HW I2C 默认 SDA=GPIO21 SCL=GPIO22）----
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
-BleCompositeHID compositeHID("RC Bridge", "RCD", 100);
+BleCompositeHID compositeHID("MochaTool", "MochaTool", 100);
 KeyboardDevice* keyboard = new KeyboardDevice();
 MouseDevice* mouse = new MouseDevice();
 
@@ -186,7 +186,7 @@ void setup() {
   compositeHID.addDevice(keyboard);
   compositeHID.addDevice(mouse);
   compositeHID.begin();
-  Serial.println("[BLE] RC Bridge 已广播，等待 iPhone 配对…");
+  Serial.println("[BLE] MochaTool 已广播，等待 iPhone 配对…");
 
   // ---- 读取保存的配置 ----
   prefs.begin("rcbridge", false);
@@ -378,8 +378,8 @@ void handleButton() {
 /** 右上角常驻小爱心 ♡ */
 void drawHeart(int color = 1) {
   u8g2.setDrawColor(color);
-  u8g2.drawCircle(115, 6, 3, 1);
-  u8g2.drawCircle(121, 6, 3, 1);
+  u8g2.drawCircle(115, 6, 3, U8G2_DRAW_ALL);
+  u8g2.drawCircle(121, 6, 3, U8G2_DRAW_ALL);
   u8g2.drawTriangle(112, 5, 124, 5, 118, 13);
   u8g2.setDrawColor(1);
 }
@@ -703,7 +703,7 @@ void drawUTF8Center(const char* s, int y) {
 void drawStatus(const char* msg) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
-  u8g2.drawStr(4, 16, "RC Bridge");
+  u8g2.drawStr(4, 16, "MochaTool");
   u8g2.drawUTF8(4, 44, msg);
   u8g2.sendBuffer();
 }
@@ -714,7 +714,7 @@ void drawMainStatus() {
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.drawBox(0, 0, 128, 15);
   u8g2.setDrawColor(0);
-  u8g2.drawUTF8(2, 12, "RC 远程助手");
+  u8g2.drawUTF8(2, 12, "MochaTool");
   u8g2.setDrawColor(1);
   drawHeart(0);
 

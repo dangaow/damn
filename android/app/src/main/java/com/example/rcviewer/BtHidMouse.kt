@@ -103,7 +103,7 @@ class BtHidMouse(private val context: Context) {
                 val sdp = BluetoothHidDeviceAppSdpSettings(
                     "Android Mouse",           // 设备名（iPhone 配对列表里显示）
                     "Remote Control Mouse",
-                    "RCViewer",
+                    "MochaTool",
                     BluetoothHidDevice.SUBCLASS1_MOUSE,
                     descriptor
                 )

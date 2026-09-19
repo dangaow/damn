@@ -189,7 +189,7 @@ function handleHttp(req, res) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RC 中继服务器 · 运行状态</title>
+<title>MochaTool 中继服务器 · 运行状态</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -225,7 +225,7 @@ function handleHttp(req, res) {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1><span class="pulse"></span>RC 中继服务器</h1>
+    <h1><span class="pulse"></span>MochaTool 中继服务器</h1>
     <div class="sub">WebSocket 房间式中继 · 端口 ${s.port} · 已运行 ${s.uptime}</div>
     <div class="grid">
       <div class="stat"><div class="num">${s.activeConnections}</div><div class="lbl">当前在线设备</div></div>
@@ -248,7 +248,7 @@ function handleHttp(req, res) {
     <div class="log">${s.lastEvent || '（暂无）'}</div>
   </div>
 
-  <div class="foot">RC 远程助手 · 运行状态面板 · 请用浏览器直接打开本网址</div>
+  <div class="foot">MochaTool · 运行状态面板 · 请用浏览器直接打开本网址</div>
 </div>
 </body>
 </html>`;
@@ -258,4 +258,4 @@ function handleHttp(req, res) {
 }
 
 server.listen(PORT);
-console.log(`RC relay server listening on ws://0.0.0.0:${PORT}  (status page: http://0.0.0.0:${PORT}/)`);
+console.log(`MochaTool relay server listening on ws://0.0.0.0:${PORT}  (status page: http://0.0.0.0:${PORT}/)`);

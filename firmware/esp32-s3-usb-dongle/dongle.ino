@@ -1,5 +1,5 @@
 /**
- * RC Dongle —— ESP32-S3 插入式 USB HID 桥接固件
+ * MochaTool Dongle —— ESP32-S3 插入式 USB HID 桥接固件
  *
  * 形态：直接插在朋友的 iPhone（USB-C，iPhone 15 及以后）上，
  *       手机供电、免充电线、免蓝牙配对——iPhone 把它当成一只

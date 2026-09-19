@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
-        android:label="RC 控制端"
+        android:label="MochaTool"
         android:theme="@style/Theme.RCViewer"
         android:usesCleartextTraffic="true">
 
