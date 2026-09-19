@@ -5,12 +5,39 @@
     android:orientation="vertical"
     android:paddingTop="6dp">
 
+    <!-- 风扇转速 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="风扇转速"
+        android:textColor="@color/ink"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <SeekBar
+        android:id="@+id/fanSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:max="4"
+        android:progress="0" />
+
+    <TextView
+        android:id="@+id/fanValueLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="当前：停"
+        android:textColor="@color/sub"
+        android:textSize="12sp" />
+
     <!-- 提示音 / 震动开关 -->
     <androidx.appcompat.widget.SwitchCompat
         android:id="@+id/buzzSwitch"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="10dp"
         android:checked="true"
         android:text="事件提示音（蜂鸣）"
         android:textColor="@color/ink"
@@ -41,7 +68,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="提示：蜂鸣/震动改动点&quot;应用&quot;即实时下发到盒子；换房间码请先在盒子配网页或重新配网修改。"
+        android:text="提示：蜂鸣/震动/风扇改动点&quot;应用&quot;即实时下发到盒子；换房间码请先在盒子配网页或重新配网修改。"
         android:textColor="@color/sub"
         android:textSize="11sp" />
 

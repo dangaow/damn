@@ -24,17 +24,20 @@
  *   屏幕 SDA → 板子 D21 (GPIO21)
  *   蜂鸣器(+/-) → GPIO33 / GND（如无源蜂鸣器两极可反接；有源只用2脚）
  *   震动电机 → GPIO25（小电流电机可直接接；稍大用三极管/MOS 驱动）
+ *   散热风扇 PWM → GPIO26（可用 MOS 模块调速，或接支持 PWM 的风扇）
  *
- * 外设（蜂鸣 / 震动）接口：
+ * 外设（蜂鸣 / 震动 / 风扇）接口：
  *   - 开机有低音量开机音效；连服务器/双方在线会"嘀"一声并震动
- *   - 运行中可被手机 App 实时下发 config 指令开关蜂鸣震动/换房间码，免重烧录
+ *   - 风扇 5 档调速：0%/20%/50%/70%/100%，操作页用格子状态显示
+ *   - 运行中可被手机 App 实时下发 config 指令开关蜂鸣震动/风扇/换房间码，免重烧录
  *
  * 物理按键（板载 BOOT 键，GPIO0，免接线）：
- *   - 单击：循环切页  主页面 → 震动 → 蜂鸣 → 重置 → 主页面
- *   - 双击：在【震动/蜂鸣】页切换该外设 开/关；在【重置】页启动 5s 倒计时
+ *   - 单击：循环切页  主页面 → 帮助 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面
+ *   - 双击：在【震动/蜂鸣】页切换该外设 开/关；在【风扇】页循环切换 5 档转速；
+ *           在【重置】页启动 5s 倒计时
  *   - 重置倒计时期间：任意按键 = 取消；5s 走满后进入三击确认
  *   - 重置确认页：双击退出，三击执行恢复出厂并重启
- *   - 屏幕右上角常驻小爱心 ♡；切页有渐隐渐现过渡；操作页底部常驻提示条
+ *   - 屏幕右上角常驻小爱心 ♡；切页有渐隐渐现过渡；操作页底部操作提示
  *
  * 开机逻辑：若已填过配置并连上服务器 → 首次连接弹出"配置成功！"烟花特效后进入主屏
  *
@@ -159,14 +162,22 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 // ---- 外设引脚（接线见文件头注释；部分 ROM 引脚可能不同，按需改这里） ----
 #define PIN_BUZZER  33   // 蜂鸣器：GPIO33 → 蜂鸣器正极（负极接 GND）
 #define PIN_VIB     25   // 震动电机：GPIO25 → 电机驱动管控制脚（小电流电机也可直连）
+#define PIN_FAN     26   // 散热风扇 PWM：GPIO26 → MOS/风扇 PWM 控制脚
 
 // ---- 运行时配置（存 NVS，可在手机端/本地面板实时调整，免重烧录） ----
 #define VIB_PWM_CH   0   // LEDC 通道 0 → 震动
 #define BUZZ_PWM_CH  1   // LEDC 通道 1 → 蜂鸣
+#define FAN_PWM_CH   2   // LEDC 通道 2 → 风扇
 #define PWM_BITS     8   // 8 位分辨率，占空比 0..255
 
 bool vibrateOn = true;
 bool buzzerOn = true;
+
+// 风扇 5 档转速：0/20/50/70/100
+const uint8_t FAN_LEVELS = 5;
+const uint8_t fanSpeeds[FAN_LEVELS] = {0, 51, 128, 178, 255}; // 0%,20%,50%,70%,100%
+uint8_t fanLevel = 0;          // 当前档位下标（默认 0 档 = 停）
+bool fanOn = false;            // 风扇开关（0 档时视为关）
 
 // ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
 #define PIN_BUTTON    0                // 免额外接线，直接用板子自带 BOOT 键
@@ -174,7 +185,7 @@ bool buzzerOn = true;
 #define DEBOUNCE_MS   20               // 按下抖动过滤
 
 // 页面
-enum Page { P_MAIN, P_VIB, P_BUZZ, P_RESET };
+enum Page { P_MAIN, P_HELP, P_VIB, P_BUZZ, P_FAN, P_RESET };
 Page page = P_MAIN;
 
 // 按键状态机（单击 / 双击）
@@ -225,11 +236,13 @@ void setup() {
   serverUrl = prefs.getString("server", "");   // 无内置默认服务器，由用户填写
   room = prefs.getString("room", "");          // 无内置默认房间码，由用户填写
 
-  // 外设配置：蜂鸣器/震动开关
+  // 外设配置：蜂鸣器/震动/风扇
   vibrateOn = prefs.getBool("vib", true);
   buzzerOn = prefs.getBool("buzz", true);
+  fanLevel = constrain(prefs.getInt("fan", 0), 0, FAN_LEVELS - 1);
+  fanOn = (fanLevel > 0) ? prefs.getBool("fanOn", true) : false;
   setupPeripherals();                          // 初始化 PWM 并应用到保存的配置
-  bootTune();                                  // 低音量开机音效
+  bootTune();                                  // 四音符开机音效 + 同步震动
 
   // ---- WiFi 配网 ----
   drawStatus("配网/连WiFi…");
@@ -408,8 +421,29 @@ void setupPeripherals() {
   ledcAttachPin(PIN_VIB, VIB_PWM_CH);
   ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
   ledcAttachPin(PIN_BUZZER, BUZZ_PWM_CH);
-  ledcWrite(VIB_PWM_CH, 0);
-  ledcWrite(BUZZ_PWM_CH, 0);
+  // 风扇：25kHz 常规 PWM 调速
+  ledcSetup(FAN_PWM_CH, 25000, PWM_BITS);
+  ledcAttachPin(PIN_FAN, FAN_PWM_CH);
+  applyFan();
+}
+
+/** 应用风扇 PWM 输出 */
+void applyFan() {
+  uint8_t duty = (fanOn && fanLevel > 0) ? fanSpeeds[fanLevel] : 0;
+  ledcWrite(FAN_PWM_CH, duty);
+  Serial.printf("[FAN] %s 档位=%d duty=%d\n", fanOn ? "开" : "关", fanLevel, duty);
+}
+
+/** 循环切换风扇档位：0→20→50→70→100→0 */
+void cycleFanLevel() {
+  fanLevel++;
+  if (fanLevel >= FAN_LEVELS) fanLevel = 0;
+  fanOn = (fanLevel > 0);
+  prefs.putInt("fan", fanLevel);
+  prefs.putBool("fanOn", fanOn);
+  applyFan();
+  buzzerBeep(60, 70);
+  Serial.printf("[BTN] 风扇 -> %d%%\n", (fanSpeeds[fanLevel] * 100 + 127) / 255);
 }
 
 // ============================================================
@@ -434,14 +468,16 @@ void toggleBuzz() {
   Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
 }
 
-/** 切换到下一页（主页面 → 震动 → 蜂鸣 → 重置 → 主页面），带渐隐渐现 + 同步切页音效 */
+/** 切换到下一页（主页面 → 帮助 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面） */
 void nextPage() {
   pageBeepVib();                         // 切页瞬间同步 "bi" + 震动
   for (int c = 255; c > 0; c -= 20) { u8g2.setContrast(c); delay(4); }   // 渐隐
   switch (page) {
-    case P_MAIN:  page = P_VIB;  break;
+    case P_MAIN:  page = P_HELP; break;
+    case P_HELP:  page = P_VIB;  break;
     case P_VIB:   page = P_BUZZ; break;
-    case P_BUZZ:  page = P_RESET;break;
+    case P_BUZZ:  page = P_FAN;  break;
+    case P_FAN:   page = P_RESET;break;
     default:      page = P_MAIN; break;
   }
   refreshScreen();                     // 立刻画新页
@@ -552,9 +588,10 @@ void handleButton() {
     }
 
     if (clicks == 2) {
-      // 双击：切换当前页状态 / 重置页进入倒计时
+      // 双击：切换当前页状态 / 风扇档 / 重置页进入倒计时
       if (page == P_VIB) { toggleVib(); refreshScreen(); }
       else if (page == P_BUZZ) { toggleBuzz(); refreshScreen(); }
+      else if (page == P_FAN) { cycleFanLevel(); refreshScreen(); }
       else if (page == P_RESET) { startResetArmed(); }
     } else {
       // 单击：切页
@@ -587,7 +624,48 @@ void drawHeart(int color = 1) {
 }
 
 // ============================================================
-// 切页屏（震动 / 蜂鸣 / 重置）
+// 图标绘制（12x12 像素级极简图标）
+// ============================================================
+
+/** 画一个 12x12 图标在 (x,y)，y 为顶部；color=1 白，0 黑 */
+void drawIconHelp(int x, int y, int color) {
+  u8g2.setDrawColor(color);
+  u8g2.drawCircle(x + 6, y + 6, 5, 1);
+  u8g2.setDrawColor(1);
+}
+void drawIconVib(int x, int y, int color) {
+  u8g2.setDrawColor(color);
+  u8g2.drawFrame(x + 2, y + 1, 8, 10);
+  u8g2.drawVLine(x + 4, y + 3, 6);
+  u8g2.drawVLine(x + 6, y + 3, 6);
+  u8g2.setDrawColor(1);
+}
+void drawIconBuzz(int x, int y, int color) {
+  u8g2.setDrawColor(color);
+  u8g2.drawTriangle(x + 2, y + 9, x + 5, y + 1, x + 5, y + 7);
+  u8g2.drawLine(x + 7, y + 2, x + 9, y);
+  u8g2.drawLine(x + 7, y + 5, x + 10, y + 4);
+  u8g2.drawLine(x + 7, y + 8, x + 9, y + 10);
+  u8g2.setDrawColor(1);
+}
+void drawIconFan(int x, int y, int color) {
+  u8g2.setDrawColor(color);
+  u8g2.drawCircle(x + 6, y + 6, 5, 1);
+  for (int i = 0; i < 4; i++)
+    u8g2.drawLine(x + 6, y + 6, x + 6 + (int)(5 * cos(i * 1.57f)), y + 6 - (int)(5 * sin(i * 1.57f)));
+  u8g2.setDrawColor(1);
+}
+void drawIconReset(int x, int y, int color) {
+  u8g2.setDrawColor(color);
+  u8g2.drawCircle(x + 6, y + 7, 4, 1);
+  u8g2.drawLine(x + 9, y + 2, x + 10, y);
+  u8g2.drawLine(x + 10, y, x + 6, y);
+  u8g2.drawLine(x + 6, y, x + 6, y + 4);
+  u8g2.setDrawColor(1);
+}
+
+// ============================================================
+// 操作页：统一设计语言（图标 + 大状态条 + 白底划过动画）
 // ============================================================
 
 /** 底部操作提示条：在所有操作页面底部常驻 */
@@ -600,36 +678,125 @@ void drawFooterHint(const char* hint) {
   u8g2.drawUTF8(x, 62, hint);
 }
 
-/** 开关页：居中的"开 / 关"选择器，当前态高亮（白底黑字），另一态只描边 + 白字 */
-void drawSwitchPage(const char* title, bool isOn) {
+/** 画横向选项条静态帧：selected 项白底黑字，其余黑底白字 */
+void drawSegmentBarFrame(int selected, const char* labels[], int count, const char* title, int iconType) {
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+
+  // 标题栏
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, 0, 128, 15);
+  u8g2.setDrawColor(0);
+  switch (iconType) {
+    case 0: drawIconVib(2, 2, 0); break;
+    case 1: drawIconBuzz(2, 2, 0); break;
+    case 2: drawIconFan(2, 2, 0); break;
+    case 3: drawIconReset(2, 2, 0); break;
+    case 4: drawIconHelp(2, 2, 0); break;
+  }
+  u8g2.drawUTF8(16, 12, title);
+  u8g2.setDrawColor(1);
+
+  int barX = 4, barY = 24, barW = 120, barH = 22;
+  int segW = barW / count;
+  int fillX = barX + selected * segW;
+
+  // 外框与分隔线
+  u8g2.drawFrame(barX, barY, barW, barH);
+  for (int i = 1; i < count; i++)
+    u8g2.drawVLine(barX + i * segW, barY + 1, barH - 2);
+
+  // 白色高亮块
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(fillX + 1, barY + 1, segW - 2, barH - 2);
+
+  // 文字：当前项黑字，其余白字
+  for (int i = 0; i < count; i++) {
+    int tx = barX + i * segW + (segW - u8g2.getUTF8Width(labels[i])) / 2;
+    int ty = barY + 15;
+    u8g2.setDrawColor(i == selected ? 0 : 1);
+    u8g2.drawUTF8(tx, ty, labels[i]);
+  }
+  u8g2.setDrawColor(1);
+}
+
+/** 带白底划过动画的选项条；from=-1 表示无动画 */
+void drawSegmentBar(int selected, int from, const char* labels[], int count, const char* title, int iconType) {
+  int barX = 4, barY = 24, barW = 120, barH = 22;
+  int segW = barW / count;
+  int targetX = barX + selected * segW;
+  int startX = (from >= 0) ? (barX + from * segW) : targetX;
+
+  if (from != selected && from >= 0) {
+    int steps = 6;
+    for (int s = 0; s <= steps; s++) {
+      int fillX = startX + (targetX - startX) * s / steps;
+      u8g2.clearBuffer();
+      drawHeart();
+      // 画静态背景（标题 + 框线 + 分隔线）
+      drawSegmentBarFrame(selected, labels, count, title, iconType);
+      // 擦除高亮区并重画滑块到中间位置
+      u8g2.setDrawColor(0);
+      u8g2.drawBox(barX + 1, barY + 1, barW - 2, barH - 2);
+      u8g2.setDrawColor(1);
+      u8g2.drawBox(fillX + 1, barY + 1, segW - 2, barH - 2);
+      // 文字：滑块覆盖的项黑字，其余白字
+      for (int i = 0; i < count; i++) {
+        int cellCenter = barX + i * segW + segW / 2;
+        bool under = (cellCenter >= fillX && cellCenter < fillX + segW);
+        int tx = barX + i * segW + (segW - u8g2.getUTF8Width(labels[i])) / 2;
+        int ty = barY + 15;
+        u8g2.setDrawColor(under ? 0 : 1);
+        u8g2.drawUTF8(tx, ty, labels[i]);
+      }
+      u8g2.setDrawColor(1);
+      u8g2.sendBuffer();
+      delay(10);
+    }
+  }
+
+  // 最终帧
+  u8g2.clearBuffer();
+  drawHeart();
+  drawSegmentBarFrame(selected, labels, count, title, iconType);
+}
+
+/** 开关页：震动 / 蜂鸣，统一用大状态条显示"开/关" */
+void drawSwitchPage(const char* title, bool isOn, int iconType, int& lastSel) {
+  int sel = isOn ? 1 : 0;
+  const char* labels[2] = {"关", "开"};
+  drawSegmentBar(sel, lastSel, labels, 2, title, iconType);
+  lastSel = sel;
+  drawFooterHint("单击切页 · 双击切开关");
+  u8g2.sendBuffer();
+}
+
+/** 风扇页：5 档 0/20/50/70/100 */
+void drawFanPage(int& lastSel) {
+  const char* labels[5] = {"0%", "20%", "50%", "70%", "100%"};
+  drawSegmentBar(fanLevel, lastSel, labels, 5, "风扇调速", 2);
+  lastSel = fanLevel;
+  drawFooterHint("单击切页 · 双击切转速");
+  u8g2.sendBuffer();
+}
+
+/** 帮助页 */
+void drawHelpPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   drawHeart();
-  u8g2.setDrawColor(1);
-  u8g2.drawUTF8(2, 12, title);
-  u8g2.drawHLine(0, 15, 128);
 
-  int segW = 34, segH = 22, gap = 10;
-  int x0 = (128 - (segW * 2 + gap)) / 2, x1 = x0 + segW + gap, y0 = 28;
-
-  // 开段
-  u8g2.setDrawColor(isOn ? 1 : 0);          // 激活填充白底
-  u8g2.drawBox(x0, y0, segW, segH);
+  // 标题栏白底黑字
+  u8g2.drawBox(0, 0, 128, 15);
+  u8g2.setDrawColor(0);
+  drawIconHelp(2, 2, 0);
+  u8g2.drawUTF8(16, 12, "帮助");
   u8g2.setDrawColor(1);
-  u8g2.drawFrame(x0, y0, segW, segH);
-  u8g2.setDrawColor(isOn ? 0 : 1);          // 激活 = 黑字
-  u8g2.drawUTF8(x0 + (segW - u8g2.getUTF8Width("开")) / 2, y0 + 15, "开");
 
-  // 关段
-  u8g2.setDrawColor(isOn ? 0 : 1);
-  u8g2.drawBox(x1, y0, segW, segH);
-  u8g2.setDrawColor(1);
-  u8g2.drawFrame(x1, y0, segW, segH);
-  u8g2.setDrawColor(isOn ? 1 : 0);
-  u8g2.drawUTF8(x1 + (segW - u8g2.getUTF8Width("关")) / 2, y0 + 15, "关");
+  u8g2.drawUTF8(4, 28, "单击按钮：切换页面");
+  u8g2.drawUTF8(4, 42, "双击按钮：改变开关/转速");
+  u8g2.drawUTF8(4, 56, "重置页：双击启动倒计时");
 
-  u8g2.setDrawColor(1);
-  drawFooterHint("单击切页 · 双击切开关");
+  drawFooterHint("单击切页");
   u8g2.sendBuffer();
 }
 
@@ -638,29 +805,33 @@ void drawResetPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   drawHeart();
+
+  // 标题栏白底黑字
+  u8g2.drawBox(0, 0, 128, 15);
+  u8g2.setDrawColor(0);
+  drawIconReset(2, 2, 0);
+  u8g2.drawUTF8(16, 12, "重置配置");
   u8g2.setDrawColor(1);
-  u8g2.drawUTF8(2, 12, "重置配置");
-  u8g2.drawHLine(0, 15, 128);
 
   if (resetConfirming) {
-    u8g2.drawUTF8(2, 28, "确认要恢复出厂？");
+    u8g2.drawUTF8(4, 28, "确认要恢复出厂？");
     char buf[24];
     snprintf(buf, sizeof(buf), "已按 %d/3", resetConfirmCount);
-    u8g2.drawUTF8(2, 42, buf);
+    u8g2.drawUTF8(4, 42, buf);
     drawFooterHint("双击退出 · 三击重置");
   } else if (resetArmed) {
     int pct = (int)((long)(millis() - resetArmedAt) * 100 / RST_HOLD_MS);
     if (pct > 100) pct = 100;
-    u8g2.drawUTF8(2, 26, "警告：此操作不可逆！");
+    u8g2.drawUTF8(4, 26, "警告：此操作不可逆！");
     u8g2.drawFrame(14, 34, 100, 9);                       // 进度条外框
     u8g2.setDrawColor(0);
     u8g2.drawBox(17, 37, 94 * pct / 100, 3);              // 填充
     u8g2.setDrawColor(1);
-    u8g2.drawUTF8(2, 50, "任意按键取消");
+    u8g2.drawUTF8(4, 50, "任意按键取消");
     drawFooterHint("双击进入确认 · 按取消");
   } else {
-    u8g2.drawUTF8(2, 28, "双击开始重置倒计时");
-    u8g2.drawUTF8(2, 42, "将清空配置重开热点");
+    u8g2.drawUTF8(4, 28, "双击开始重置倒计时");
+    u8g2.drawUTF8(4, 42, "将清空配置重开热点");
     drawFooterHint("单击切页 · 双击开始");
   }
   u8g2.sendBuffer();
@@ -668,10 +839,13 @@ void drawResetPage() {
 
 /** 按当前页重绘屏幕（主循环周期调用；每页自带 latest 帧） */
 void refreshScreen() {
+  static int lastVibSel = -1, lastBuzzSel = -1, lastFanSel = -1;
   switch (page) {
     case P_MAIN:  drawMainStatus(); break;
-    case P_VIB:   drawSwitchPage("震动开关", vibrateOn); break;
-    case P_BUZZ:  drawSwitchPage("蜂鸣开关", buzzerOn); break;
+    case P_HELP:  drawHelpPage(); break;
+    case P_VIB:   drawSwitchPage("震动开关", vibrateOn, 0, lastVibSel); break;
+    case P_BUZZ:  drawSwitchPage("蜂鸣开关", buzzerOn, 1, lastBuzzSel); break;
+    case P_FAN:   drawFanPage(lastFanSel); break;
     case P_RESET: drawResetPage(); break;
   }
 }
@@ -784,7 +958,7 @@ void handleCommand(const char* json, size_t len) {
     Serial.printf("[WS] 控制端在线数=%d\n", viewers);
     return;
   }
-  // 运行时配置指令：{type:"config", vib:bool, buzz:bool, beep:bool, room:"..."}
+  // 运行时配置指令：{type:"config", vib:bool, buzz:bool, fan:int, beep:bool, room:"..."}
   if (strcmp(type, "config") == 0) {
     if (doc["vib"].is<bool>()) {
       vibrateOn = doc["vib"];
@@ -795,6 +969,14 @@ void handleCommand(const char* json, size_t len) {
       buzzerOn = doc["buzz"];
       prefs.putBool("buzz", buzzerOn);
       if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
+    }
+    if (doc["fan"].is<int>()) {
+      int fanIdx = doc["fan"];
+      fanLevel = constrain(fanIdx, 0, FAN_LEVELS - 1);
+      fanOn = (fanLevel > 0);
+      prefs.putInt("fan", fanLevel);
+      prefs.putBool("fanOn", fanOn);
+      applyFan();
     }
     // 主动请求一次提示音（App 里"测试蜂鸣"）
     if (doc["beep"].is<bool>() && doc["beep"]) {
@@ -983,12 +1165,14 @@ void drawMainStatus() {
                        : (wifiLive && !wsConnected) ? "无服务器" : "未连接";
   drawStateLine(3, "控制端", ctrlOk, ctrlDetail);
 
-  // 底部：房间号 + 外设状态
+  // 底部：房间号 + 外设状态（含风扇档位）
   u8g2.drawHLine(0, 50, 128);
   String roomLine = "房间 " + room;
   u8g2.drawUTF8(2, 59, roomLine.c_str());
-  String periLine = String(buzzerOn ? "音" : "静音") +
-                    String(vibrateOn ? " 振" : "");
+  String periLine = String(buzzerOn ? "音" : "") +
+                    String(vibrateOn ? " 振" : "") +
+                    String(fanLevel > 0 ? " 风" : "") +
+                    String(fanLevel > 0 ? String((fanSpeeds[fanLevel] * 100 + 127) / 255) + "%" : "");
   u8g2.drawUTF8(66, 59, periLine.c_str());
 
   u8g2.sendBuffer();

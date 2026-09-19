@@ -445,12 +445,23 @@ class ControlActivity : AppCompatActivity() {
         showBoxSettingsDialog()
     }
 
-    /** 实际弹窗（含测试按钮，点击即发一次蜂鸣） */
+    /** 实际弹窗（含风扇转速 + 测试按钮，点击即发一次蜂鸣） */
     private fun showBoxSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_box_settings, null)
         val vibSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.vibSwitch)
         val buzzSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.buzzSwitch)
+        val fanSeekBar = view.findViewById<android.widget.SeekBar>(R.id.fanSeekBar)
+        val fanValueLabel = view.findViewById<TextView>(R.id.fanValueLabel)
         val beepBtn = view.findViewById<Button>(R.id.beepBtn)
+
+        val fanNames = listOf("停", "20%", "50%", "70%", "100%")
+        fanSeekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                fanValueLabel.text = "当前：${fanNames[progress]}"
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
 
         val dlg = AlertDialog.Builder(this)
             .setTitle("盒子设置")
@@ -461,7 +472,11 @@ class ControlActivity : AppCompatActivity() {
         alertDlg = dlg
         dlg.setOnShowListener {
             dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                sendConfig(vib = vibSwitch.isChecked, buzz = buzzSwitch.isChecked)
+                sendConfig(
+                    vib = vibSwitch.isChecked,
+                    buzz = buzzSwitch.isChecked,
+                    fan = fanSeekBar.progress
+                )
                 Toast.makeText(this, "已下发设置", Toast.LENGTH_SHORT).show()
             }
         }
@@ -474,11 +489,13 @@ class ControlActivity : AppCompatActivity() {
 
     /** 下发 config 指令到盒子（仅带参数项被发送，其余保持盒子当前值） */
     private fun sendConfig(vib: Boolean? = null, buzz: Boolean? = null,
+                           fan: Int? = null,
                            beep: Boolean? = null, room: String? = null) {
         val msg = JSONObject().apply {
             put("type", "config")
             if (vib != null) put("vib", vib)
             if (buzz != null) put("buzz", buzz)
+            if (fan != null) put("fan", fan)
             if (beep != null) put("beep", true)
             if (room != null) put("room", room)
         }
