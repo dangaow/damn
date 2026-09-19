@@ -311,9 +311,9 @@ class ControlActivity : AppCompatActivity() {
         // 桥接模式但房间里没有盒子：一律不处理（遮罩层也会挡住触摸）
         if (useBridge && !bridgeOnline) return
 
-        // 相对映射（触控板模式）：手指滑过整个红框宽度 ≈ 指针横穿整块屏幕；
-        // 增益钳制在合理区间，避免红框过窄时"飞"
-        val gain = (PHONE_W / padFrame.width.coerceAtLeast(1)).coerceIn(0.6f, 2.0f)
+        // 相对映射（触控板模式）：iOS 会对相对位移做指针加速，
+        // 所以增益取偏低区间，抵消加速放大，让指针"走多少跟手多少"
+        val gain = (PHONE_W / padFrame.width.coerceAtLeast(1)).coerceIn(0.4f, 1.0f)
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -359,8 +359,8 @@ class ControlActivity : AppCompatActivity() {
                     if (movedFar) view.removeCallbacks(dragArmRunnable)
 
                     // 相对映射（触控板）：手指移动多少，指针移动多少；单步限幅抑制 iOS 指针加速
-                    val rdx = (dx * gain).toInt().coerceIn(-40, 40)
-                    val rdy = (dy * gain).toInt().coerceIn(-40, 40)
+                    val rdx = (dx * gain).toInt().coerceIn(-20, 20)
+                    val rdy = (dy * gain).toInt().coerceIn(-20, 20)
 
                     if (rdx != 0 || rdy != 0) {
                         val now = System.currentTimeMillis()
