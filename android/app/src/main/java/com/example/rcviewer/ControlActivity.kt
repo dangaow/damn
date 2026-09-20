@@ -74,6 +74,10 @@ class ControlActivity : AppCompatActivity() {
     private var dragArmed = false
     private var twoFingerScroll = false
     private var lastTapTime = 0L    // 上次单击抬起时间，用于双击判定
+    // 桥接盒位移累加器：节流期间不丢位移，保证红点与实际发出的指令严格同步，不漂移
+    private var accDx = 0
+    private var accDy = 0
+
     private val dragArmRunnable = Runnable {
         if (!movedFar) {
             dragArmed = true
@@ -363,26 +367,29 @@ class ControlActivity : AppCompatActivity() {
                     val rdx = (dx * gain).toInt().coerceIn(-20, 20)
                     val rdy = (dy * gain).toInt().coerceIn(-20, 20)
 
-                    if (rdx != 0 || rdy != 0) {
+                    if (useBridge) {
+                        // 桥接盒模式：位移先累积，节流窗口到点后一起发出，绝不丢步
+                        if (rdx != 0 || rdy != 0) { accDx += rdx; accDy += rdy }
                         val now = System.currentTimeMillis()
-                        val hidOk = useBridge && now - lastHidSentAt >= 40
-                        var sent = false
-                        if (useBridge) {
-                            // 桥接盒模式：只在真实发出一条指令时才更新指针定位（避免节流丢弃导致的偏移）
-                            if (hidOk) {
-                                lastHidSentAt = now
-                                sendHid(if (dragArmed) "drag" else "move", rdx, rdy)
-                                sent = true
+                        if (now - lastHidSentAt >= 40) {
+                            lastHidSentAt = now
+                            val sx = accDx.coerceIn(-127, 127)
+                            val sy = accDy.coerceIn(-127, 127)
+                            if (sx != 0 || sy != 0) {
+                                sendHid(if (dragArmed) "drag" else "move", sx, sy)
+                                accDx -= sx
+                                accDy -= sy
+                                px = (px + sx).coerceIn(0f, PHONE_W)
+                                py = (py + sy).coerceIn(0f, PHONE_H)
+                                updatePointerDot()
                             }
-                        } else {
-                            if (dragArmed) mouse?.drag(rdx, rdy) else mouse?.move(rdx, rdy)
-                            sent = true   // 本机蓝牙直控，每条都发，必然更新
                         }
-                        if (sent) {
-                            px = (px + rdx).coerceIn(0f, PHONE_W)
-                            py = (py + rdy).coerceIn(0f, PHONE_H)
-                            updatePointerDot()
-                        }
+                    } else if (rdx != 0 || rdy != 0) {
+                        // 本机蓝牙直控：每条都发，实时更新
+                        if (dragArmed) mouse?.drag(rdx, rdy) else mouse?.move(rdx, rdy)
+                        px = (px + rdx).coerceIn(0f, PHONE_W)
+                        py = (py + rdy).coerceIn(0f, PHONE_H)
+                        updatePointerDot()
                     }
                 }
             }
