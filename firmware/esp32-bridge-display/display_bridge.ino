@@ -177,12 +177,7 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #endif
 #define PWM_BITS     8   // 8 位分辨率，占空比 0..255
 
-// 动态改蜂鸣频率：core 3.x 用 ledcChangeFrequency，core 2.x 用 ledcSetup
-#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
-  #define BUZZ_SET_FREQ(f)  ledcChangeFrequency(PIN_BUZZER, (f), PWM_BITS)
-#else
-  #define BUZZ_SET_FREQ(f)  ledcSetup(BUZZ_PWM_CH, (f), PWM_BITS)
-#endif
+// 蜂鸣器为有源高电平触发：只需 duty 控制响/不响与响度，无法变调（故无动态改频宏）
 #define FAN_PWM_INVERTED 1 // 1=低电平触发模块（如 JY-25-003），输出占空比取反
 
 // 外设统一 5 档百分比：0/20/50/70/100（震动/蜂鸣/风扇共用同一档位结构）
@@ -271,7 +266,7 @@ void setup() {
   fanLevel = constrain(prefs.getInt("fan", 0), 0, PERI_LEVELS - 1);
   fanOn = (fanLevel > 0) ? prefs.getBool("fanOn", true) : false;
   setupPeripherals();                          // 初始化 PWM 并应用到保存的配置
-  bootTune();                                  // 四音符开机音效 + 同步震动
+  bootTune();                                  // 四声同音调开机音效 + 同步震动
 
   // ---- WiFi 配网 ----
   drawStatus("配网/连WiFi…");
@@ -372,16 +367,6 @@ void softBeep() {
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
-/** 播放指定频率音符（单位 Hz/ms），结束后恢复默认提示音频率 2500Hz */
-void playTone(int freq, int ms, int duty = 110) {
-  if (buzzLevel == 0) return;
-  BUZZ_SET_FREQ(freq);
-  ledcWrite(BUZZ_PWM_CH, (int)(duty * buzzSpeeds[buzzLevel] / 130.0f));
-  delay(ms);
-  ledcWrite(BUZZ_PWM_CH, 0);
-  BUZZ_SET_FREQ(2500);   // 恢复事件提示音频率
-}
-
 /** 震动：强度从低到高线性爬升（苹果式"嗡——"），到顶立刻停止，无下降沿 */
 void vibrateRamp(int ms, int maxStrength = 220) {
   if (vibLevel == 0) return;
@@ -404,44 +389,38 @@ void vibrateOnce(int ms = 200, int strength = 200) {
   ledcWrite(VIB_PWM_CH, 0);
 }
 
-/** 开机音效：do mi so do'，每个音符同步一段上升震动 */
+/** 开机音效：四声同音调短促"滴"（有源蜂鸣器高电平触发，无法变调，用节奏区分）+ 每声同步一段上升震动 */
 void bootTune() {
-  // 音符频率：C4, E4, G4, C5
-  const int tones[4] = {262, 330, 392, 523};
-  const int toneMs = 170;
-  const int gapMs  = 50;
+  const int beepMs = 120;
+  const int gapMs  = 90;
   for (int i = 0; i < 4; i++) {
     // 蜂鸣 + 震动同时开始
     if (buzzLevel > 0) {
-      BUZZ_SET_FREQ(tones[i]);
       ledcWrite(BUZZ_PWM_CH, (int)(100 * buzzSpeeds[buzzLevel] / 130.0f));
     }
     if (vibLevel > 0) {
-      // 震动在音符期间从弱快速爬到强，然后断掉
+      // 震动在每声期间从弱快速爬到强，然后断掉
       float g = vibSpeeds[vibLevel] / 255.0f;
-      int rampSteps = toneMs / 12;
+      int rampSteps = beepMs / 12;
       for (int s = 0; s <= rampSteps; s++) {
         int duty = (int)(map(s, 0, rampSteps, 35, 230) * g);
         ledcWrite(VIB_PWM_CH, duty);
-        delay(toneMs / rampSteps);
+        delay(beepMs / rampSteps);
         if (s == rampSteps) ledcWrite(VIB_PWM_CH, 0);
       }
     } else {
-      delay(toneMs);
+      delay(beepMs);
     }
-    // 音符结束，蜂鸣停
+    // 每声结束，蜂鸣停
     ledcWrite(BUZZ_PWM_CH, 0);
     if (i < 3) delay(gapMs);
   }
-  // 恢复默认提示音频率
-  BUZZ_SET_FREQ(2500);
 }
 
 /** 切页同步音效：蜂鸣 "bi" 一声 + 震动完全同步 */
 void pageBeepVib() {
   const int beepMs = 80;
   if (buzzLevel > 0) {
-    BUZZ_SET_FREQ(2000);
     ledcWrite(BUZZ_PWM_CH, (int)(90 * buzzSpeeds[buzzLevel] / 130.0f));
   }
   if (vibLevel > 0) {
@@ -455,7 +434,6 @@ void pageBeepVib() {
     }
   }
   ledcWrite(BUZZ_PWM_CH, 0);
-  BUZZ_SET_FREQ(2500);
 }
 
 /** 初始化所有外设 PWM 通道并应用到保存的配置 */
