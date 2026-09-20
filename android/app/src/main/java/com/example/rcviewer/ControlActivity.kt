@@ -469,15 +469,13 @@ class ControlActivity : AppCompatActivity() {
         showBoxSettingsDialog()
     }
 
-    /** 实际弹窗（风扇/蜂鸣/震动均 5 档百分比 + 测试按钮，点击即发一次蜂鸣） */
+    /** 实际弹窗（风扇/蜂鸣均 5 档百分比 + 测试按钮，点击即发一次蜂鸣） */
     private fun showBoxSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_box_settings, null)
         val fanSeekBar = view.findViewById<android.widget.SeekBar>(R.id.fanSeekBar)
         val fanValueLabel = view.findViewById<TextView>(R.id.fanValueLabel)
         val buzzSeekBar = view.findViewById<android.widget.SeekBar>(R.id.buzzSeekBar)
         val buzzValueLabel = view.findViewById<TextView>(R.id.buzzValueLabel)
-        val vibSeekBar = view.findViewById<android.widget.SeekBar>(R.id.vibSeekBar)
-        val vibValueLabel = view.findViewById<TextView>(R.id.vibValueLabel)
         val beepBtn = view.findViewById<Button>(R.id.beepBtn)
 
         val pctNames = listOf("停", "20%", "50%", "70%", "100%")
@@ -492,7 +490,6 @@ class ControlActivity : AppCompatActivity() {
         }
         bind(fanSeekBar, fanValueLabel)
         bind(buzzSeekBar, buzzValueLabel)
-        bind(vibSeekBar, vibValueLabel)
 
         val dlg = AlertDialog.Builder(this)
             .setTitle("盒子设置")
@@ -504,7 +501,6 @@ class ControlActivity : AppCompatActivity() {
         dlg.setOnShowListener {
             dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 sendConfig(
-                    vib = vibSeekBar.progress,
                     buzz = buzzSeekBar.progress,
                     fan = fanSeekBar.progress
                 )
@@ -519,12 +515,11 @@ class ControlActivity : AppCompatActivity() {
     private var alertDlg: AlertDialog? = null
 
     /** 下发 config 指令到盒子（仅带参数项被发送，其余保持盒子当前值） */
-    private fun sendConfig(vib: Int? = null, buzz: Int? = null,
+    private fun sendConfig(buzz: Int? = null,
                            fan: Int? = null,
                            beep: Boolean? = null, room: String? = null) {
         val msg = JSONObject().apply {
             put("type", "config")
-            if (vib != null) put("vib", vib)
             if (buzz != null) put("buzz", buzz)
             if (fan != null) put("fan", fan)
             if (beep != null) put("beep", true)

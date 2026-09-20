@@ -23,17 +23,16 @@
  *   屏幕 SCL → 板子 D22 (GPIO22)
  *   屏幕 SDA → 板子 D21 (GPIO21)
  *   蜂鸣器(+/-) → GPIO33 / GND（有源注意正负极、反接不响不坏；无源两极可反接；模块版 VCC→3V3、GND→GND、信号→GPIO33）
- *   震动电机 → GPIO25（小电流电机可直接接；稍大用三极管/MOS 驱动）
  *   散热风扇 PWM → GPIO26（可用 MOS 模块调速，或接支持 PWM 的风扇）
  *
- * 外设（蜂鸣 / 震动 / 风扇）接口：
- *   - 开机有低音量开机音效；连服务器/双方在线会"嘀"一声并震动
+ * 外设（蜂鸣 / 风扇）接口：
+ *   - 开机有低音量开机音效；连服务器/双方在线会"嘀"一声
  *   - 风扇 5 档调速：0%/20%/50%/70%/100%，操作页用格子状态显示
- *   - 运行中可被手机 App 实时下发 config 指令开关蜂鸣震动/风扇/换房间码，免重烧录
+ *   - 运行中可被手机 App 实时下发 config 指令开关蜂鸣/风扇/换房间码，免重烧录
  *
  * 物理按键（板载 BOOT 键，GPIO0，免接线）：
- *   - 单击：循环切页  主页面 → 帮助 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面
- *   - 双击：在【震动/蜂鸣】页切换该外设 开/关；在【风扇】页循环切换 5 档转速；
+ *   - 单击：循环切页  主页面 → 帮助 → 蜂鸣 → 风扇 → 重置 → 主页面
+ *   - 双击：在【蜂鸣】页切换音量档位；在【风扇】页循环切换 5 档转速；
  *           在【重置】页启动 5s 倒计时
  *   - 重置倒计时期间：任意按键 = 取消；5s 走满后进入三击确认
  *   - 重置确认页：双击退出，三击执行恢复出厂并重启
@@ -161,17 +160,14 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 
 // ---- 外设引脚（接线见文件头注释；部分 ROM 引脚可能不同，按需改这里） ----
 #define PIN_BUZZER  33   // 蜂鸣器：GPIO33 → 蜂鸣器正极（负极接 GND）
-#define PIN_VIB     25   // 震动电机：GPIO25 → 电机驱动管控制脚（小电流电机也可直连）
 #define PIN_FAN     26   // 散热风扇 PWM：GPIO26 → MOS/风扇 PWM 控制脚
 
 // ---- 运行时配置（存 NVS，可在手机端/本地面板实时调整，免重烧录） ----
 // ---- LEDC 通道：core 3.x 用 pin 寻址（ledcWrite 传 pin），core 2.x 用 channel ----
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
-  #define VIB_PWM_CH   PIN_VIB
   #define BUZZ_PWM_CH  PIN_BUZZER
   #define FAN_PWM_CH   PIN_FAN
 #else
-  #define VIB_PWM_CH   0   // LEDC 通道 0 → 震动
   #define BUZZ_PWM_CH  1   // LEDC 通道 1 → 蜂鸣
   #define FAN_PWM_CH   2   // LEDC 通道 2 → 风扇
 #endif
@@ -185,15 +181,13 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #endif
 #define FAN_PWM_INVERTED 1 // 1=低电平触发模块（如 JY-25-003），输出占空比取反
 
-// 外设统一 5 档百分比：0/20/50/70/100（震动/蜂鸣/风扇共用同一档位结构）
+// 外设统一 5 档百分比：0/20/50/70/100（蜂鸣/风扇共用同一档位结构）
 const uint8_t PERI_LEVELS = 5;
 const char* const PERI_PCT[PERI_LEVELS] = {"0%", "20%", "50%", "70%", "100%"};
 const uint8_t fanSpeeds[PERI_LEVELS]  = {0, 51, 128, 178, 255}; // 风扇 duty
-const uint8_t vibSpeeds[PERI_LEVELS]  = {0, 51, 128, 178, 255}; // 震动强度 duty（与风扇同映射）
 const uint8_t buzzSpeeds[PERI_LEVELS] = {0, 40, 70, 100, 130};  // 蜂鸣音量 duty（上限低，避免太吵）
 uint8_t fanLevel = 0;          // 风扇档位（默认 0 档 = 停）
 bool fanOn = false;            // 风扇开关（0 档时视为关）
-uint8_t vibLevel = 3;          // 震动强度档位（默认 70%）
 uint8_t buzzLevel = 3;         // 蜂鸣音量档位（默认 70%）
 
 // ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
@@ -202,7 +196,7 @@ uint8_t buzzLevel = 3;         // 蜂鸣音量档位（默认 70%）
 #define DEBOUNCE_MS   20               // 按下抖动过滤
 
 // 页面
-enum Page { P_MAIN, P_HELP, P_VIB, P_BUZZ, P_FAN, P_RESET };
+enum Page { P_MAIN, P_HELP, P_BUZZ, P_FAN, P_RESET };
 Page page = P_MAIN;
 
 // 按键状态机（单击 / 双击）
@@ -225,7 +219,7 @@ struct Part { float x, y, vx, vy; uint8_t life; };
 Part parts[42];
 bool configSplashShown = false;        // 是否已展示过烟花（仅首次连服务器展示）
 
-// 被控端（iPhone 蓝牙）连接沿触发震动
+// 被控端（iPhone 蓝牙）连接沿触发提示音
 bool lastBleConnected = false;
 
 // ---- HID 鼠标位移累积 + 节流（避免 BLE 报告队列积压导致卡顿/断连）----
@@ -265,13 +259,12 @@ void setup() {
   serverUrl = prefs.getString("server", "");   // 无内置默认服务器，由用户填写
   room = prefs.getString("room", "");          // 无内置默认房间码，由用户填写
 
-  // 外设配置：蜂鸣器/震动/风扇（均 5 档百分比，存 NVS）
-  vibLevel  = constrain(prefs.getInt("vib", 3), 0, PERI_LEVELS - 1);
+  // 外设配置：蜂鸣器/风扇（均 5 档百分比，存 NVS）
   buzzLevel = constrain(prefs.getInt("buzz", 3), 0, PERI_LEVELS - 1);
   fanLevel = constrain(prefs.getInt("fan", 0), 0, PERI_LEVELS - 1);
   fanOn = (fanLevel > 0) ? prefs.getBool("fanOn", true) : false;
   setupPeripherals();                          // 初始化 PWM 并应用到保存的配置
-  bootTune();                                  // 四音符开机音效 + 同步震动
+  bootTune();                                  // 四音符开机音效
 
   // ---- WiFi 配网 ----
   drawStatus("配网/连WiFi…");
@@ -353,7 +346,7 @@ void connectWebSocket() {
 }
 
 // ============================================================
-// 外设：蜂鸣器 / 震动
+// 外设：蜂鸣器
 // ============================================================
 
 /** 蜂鸣器短鸣一次（事件提示音，蜂鸣 0 档静音；duty=相对音量 0..255，按档位缩放） */
@@ -382,53 +375,18 @@ void playTone(int freq, int ms, int duty = 110) {
   BUZZ_SET_FREQ(2500);   // 恢复事件提示音频率
 }
 
-/** 震动：强度从低到高线性爬升（苹果式"嗡——"），到顶立刻停止，无下降沿 */
-void vibrateRamp(int ms, int maxStrength = 220) {
-  if (vibLevel == 0) return;
-  float g = vibSpeeds[vibLevel] / 255.0f;
-  int steps = ms / 10;
-  if (steps < 1) steps = 1;
-  for (int i = 0; i <= steps; i++) {
-    int duty = (int)(map(i, 0, steps, 40, maxStrength) * g);
-    ledcWrite(VIB_PWM_CH, duty);
-    delay(ms / steps);
-  }
-  ledcWrite(VIB_PWM_CH, 0);
-}
-
-/** 震动一次（事件提示，强度固定，按档位缩放） */
-void vibrateOnce(int ms = 200, int strength = 200) {
-  if (vibLevel == 0) return;
-  ledcWrite(VIB_PWM_CH, (int)(strength * vibSpeeds[vibLevel] / 255.0f));
-  delay(ms);
-  ledcWrite(VIB_PWM_CH, 0);
-}
-
-/** 开机音效：do mi so do'（无源蜂鸣器变调），每个音符同步一段上升震动 */
+/** 开机音效：do mi so do'（无源蜂鸣器变调） */
 void bootTune() {
   // 音符频率：C4, E4, G4, C5
   const int tones[4] = {262, 330, 392, 523};
   const int toneMs = 170;
   const int gapMs  = 50;
   for (int i = 0; i < 4; i++) {
-    // 蜂鸣 + 震动同时开始
     if (buzzLevel > 0) {
       BUZZ_SET_FREQ(tones[i]);
       ledcWrite(BUZZ_PWM_CH, (int)(100 * buzzSpeeds[buzzLevel] / 130.0f));
     }
-    if (vibLevel > 0) {
-      // 震动在音符期间从弱快速爬到强，然后断掉
-      float g = vibSpeeds[vibLevel] / 255.0f;
-      int rampSteps = toneMs / 12;
-      for (int s = 0; s <= rampSteps; s++) {
-        int duty = (int)(map(s, 0, rampSteps, 35, 230) * g);
-        ledcWrite(VIB_PWM_CH, duty);
-        delay(toneMs / rampSteps);
-        if (s == rampSteps) ledcWrite(VIB_PWM_CH, 0);
-      }
-    } else {
-      delay(toneMs);
-    }
+    delay(toneMs);
     // 音符结束，蜂鸣停
     ledcWrite(BUZZ_PWM_CH, 0);
     if (i < 3) delay(gapMs);
@@ -437,22 +395,13 @@ void bootTune() {
   BUZZ_SET_FREQ(2500);
 }
 
-/** 切页同步音效：蜂鸣 "bi" 一声 + 震动完全同步 */
+/** 切页同步音效：蜂鸣 "bi" 一声 */
 void pageBeepVib() {
   const int beepMs = 80;
   if (buzzLevel > 0) {
     BUZZ_SET_FREQ(2000);
     ledcWrite(BUZZ_PWM_CH, (int)(90 * buzzSpeeds[buzzLevel] / 130.0f));
-  }
-  if (vibLevel > 0) {
-    float g = vibSpeeds[vibLevel] / 255.0f;
-    int steps = beepMs / 8;
-    for (int s = 0; s <= steps; s++) {
-      int duty = (int)(map(s, 0, steps, 50, 200) * g);
-      ledcWrite(VIB_PWM_CH, duty);
-      delay(beepMs / steps);
-      if (s == steps) ledcWrite(VIB_PWM_CH, 0);
-    }
+    delay(beepMs);
   }
   ledcWrite(BUZZ_PWM_CH, 0);
   BUZZ_SET_FREQ(2500);
@@ -460,14 +409,11 @@ void pageBeepVib() {
 
 /** 初始化所有外设 PWM 通道并应用到保存的配置 */
 void setupPeripherals() {
-  // 震动 5kHz / 蜂鸣 2.5kHz / 风扇 25kHz
+  // 蜂鸣 2.5kHz / 风扇 25kHz
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
-  ledcAttach(PIN_VIB, 5000, PWM_BITS);
   ledcAttach(PIN_BUZZER, 2500, PWM_BITS);
   ledcAttach(PIN_FAN, 25000, PWM_BITS);
 #else
-  ledcSetup(VIB_PWM_CH, 5000, PWM_BITS);
-  ledcAttachPin(PIN_VIB, VIB_PWM_CH);
   ledcSetup(BUZZ_PWM_CH, 2500, PWM_BITS);
   ledcAttachPin(PIN_BUZZER, BUZZ_PWM_CH);
   ledcSetup(FAN_PWM_CH, 25000, PWM_BITS);
@@ -502,17 +448,6 @@ void cycleFanLevel() {
 // 外设开关 + 触摸切换（长按 切开关 / 短按 切页）
 // ============================================================
 
-/** 循环切换震动强度档位：0→20→50→70→100→0 */
-void cycleVibLevel() {
-  vibLevel++;
-  if (vibLevel >= PERI_LEVELS) vibLevel = 0;
-  prefs.putInt("vib", vibLevel);
-  if (vibLevel == 0) ledcWrite(VIB_PWM_CH, 0);
-  else vibrateOnce(120, 160);
-  buzzerBeep(60, 70);
-  Serial.printf("[BTN] 震动 -> %s\n", PERI_PCT[vibLevel]);
-}
-
 /** 循环切换蜂鸣音量档位：0→20→50→70→100→0 */
 void cycleBuzzLevel() {
   buzzLevel++;
@@ -523,14 +458,13 @@ void cycleBuzzLevel() {
   Serial.printf("[BTN] 蜂鸣 -> %s\n", PERI_PCT[buzzLevel]);
 }
 
-/** 切换到下一页（主页面 → 帮助 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面） */
+/** 切换到下一页（主页面 → 帮助 → 蜂鸣 → 风扇 → 重置 → 主页面） */
 void nextPage() {
-  pageBeepVib();                         // 切页瞬间同步 "bi" + 震动
+  pageBeepVib();                         // 切页瞬间 "bi" 一声
   for (int c = 255; c > 0; c -= 20) { u8g2.setContrast(c); delay(4); }   // 渐隐
   switch (page) {
     case P_MAIN:  page = P_HELP; break;
-    case P_HELP:  page = P_VIB;  break;
-    case P_VIB:   page = P_BUZZ; break;
+    case P_HELP:  page = P_BUZZ; break;
     case P_BUZZ:  page = P_FAN;  break;
     case P_FAN:   page = P_RESET;break;
     default:      page = P_MAIN; break;
@@ -573,8 +507,7 @@ void enterResetConfirm() {
 
 /** 重置盒子：清空全部 NVS（含 WiFi 凭据）→ 重启自动重开配网热点 */
 void resetBox() {
-  // 重置必须震动 + 提示音（不受开关限制）
-  ledcWrite(VIB_PWM_CH, 255); delay(220); ledcWrite(VIB_PWM_CH, 0);
+  // 重置时强制提示音（不受音量档位限制）
   ledcWrite(BUZZ_PWM_CH, 130); delay(150); ledcWrite(BUZZ_PWM_CH, 0);
 
   drawStatus("正在清除配置…");
@@ -590,7 +523,7 @@ void resetBox() {
 
 /**
  * 按键扫描：
- *   单击 = 切下一页；双击 = 切换当前页状态（震动/蜂鸣页切换开关；重置页进入 5s 倒计时）
+ *   单击 = 切下一页；双击 = 切换当前页档位（蜂鸣/风扇页切档；重置页进入 5s 倒计时）
  *   重置倒计时期间任意按键 = 取消；倒计时满 5s 后进入确认页
  *   确认页：双击 = 退出确认；三击 = 执行重置
  */
@@ -646,8 +579,7 @@ void handleButton() {
 
     if (clicks == 2) {
       // 双击：切换当前页档位 / 重置页进入倒计时
-      if (page == P_VIB) { cycleVibLevel(); refreshScreen(); }
-      else if (page == P_BUZZ) { cycleBuzzLevel(); refreshScreen(); }
+      if (page == P_BUZZ) { cycleBuzzLevel(); refreshScreen(); }
       else if (page == P_FAN) { cycleFanLevel(); refreshScreen(); }
       else if (page == P_RESET) { startResetArmed(); }
     } else {
@@ -688,13 +620,6 @@ void drawHeart(int color = 1) {
 void drawIconHelp(int x, int y, int color) {
   u8g2.setDrawColor(color);
   u8g2.drawCircle(x + 6, y + 6, 5, 1);
-  u8g2.setDrawColor(1);
-}
-void drawIconVib(int x, int y, int color) {
-  u8g2.setDrawColor(color);
-  u8g2.drawFrame(x + 2, y + 1, 8, 10);
-  u8g2.drawVLine(x + 4, y + 3, 6);
-  u8g2.drawVLine(x + 6, y + 3, 6);
   u8g2.setDrawColor(1);
 }
 void drawIconBuzz(int x, int y, int color) {
@@ -744,7 +669,6 @@ void drawSegmentBarFrame(int selected, const char* const labels[], int count, co
   u8g2.drawBox(0, 0, 128, 15);
   u8g2.setDrawColor(0);
   switch (iconType) {
-    case 0: drawIconVib(2, 2, 0); break;
     case 1: drawIconBuzz(2, 2, 0); break;
     case 2: drawIconFan(2, 2, 0); break;
     case 3: drawIconReset(2, 2, 0); break;
@@ -816,7 +740,7 @@ void drawSegmentBar(int selected, int from, const char* const labels[], int coun
   drawSegmentBarFrame(selected, labels, count, title, iconType);
 }
 
-/** 档位页（震动/蜂鸣/风扇共用）：5 档百分比，双击循环切档 */
+/** 档位页（蜂鸣/风扇共用）：5 档百分比，双击循环切档 */
 void drawLevelPage(const char* title, int iconType, int level, int& lastSel) {
   drawSegmentBar(level, lastSel, PERI_PCT, PERI_LEVELS, title, iconType);
   lastSel = level;
@@ -883,11 +807,10 @@ void drawResetPage() {
 
 /** 按当前页重绘屏幕（主循环周期调用；每页自带 latest 帧） */
 void refreshScreen() {
-  static int lastVibSel = -1, lastBuzzSel = -1, lastFanSel = -1;
+  static int lastBuzzSel = -1, lastFanSel = -1;
   switch (page) {
     case P_MAIN:  drawMainStatus(); break;
     case P_HELP:  drawHelpPage(); break;
-    case P_VIB:   drawLevelPage("震动强度", 0, vibLevel, lastVibSel); break;
     case P_BUZZ:  drawLevelPage("蜂鸣音量", 1, buzzLevel, lastBuzzSel); break;
     case P_FAN:   drawLevelPage("风扇转速", 2, fanLevel, lastFanSel); break;
     case P_RESET: drawResetPage(); break;
@@ -935,7 +858,7 @@ void drawFireworksFrame() {
   u8g2.sendBuffer();
 }
 
-/** 首次连上服务器：烟花庆祝 3s + 提示音/震动，然后进主屏 */
+/** 首次连上服务器：烟花庆祝 3s + 提示音，然后进主屏 */
 void runConfigSuccess() {
   if (configSplashShown) return;
   configSplashShown = true;
@@ -947,7 +870,6 @@ void runConfigSuccess() {
     delay(35);
   }
   buzzerBeep(180, 100);
-  vibrateOnce(200);
   u8g2.setContrast(255);
   refreshScreen();
 }
@@ -969,7 +891,7 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t len) {
       Serial.println("[WS] 已连入房间 " + room);
       // 首次连上服务器 → 烟花"配置成功！"；之后的重连只做普通提示
       if (!configSplashShown) runConfigSuccess();
-      else { buzzerBeep(120); vibrateOnce(150); }
+      else { buzzerBeep(120); }
       break;
     }
     case WStype_DISCONNECTED:
@@ -1009,21 +931,15 @@ void handleCommand(const char* json, size_t len) {
     int viewers = doc["viewers"] | 0;
     bool wasOnline = controllerOnline;
     controllerOnline = viewers > 0;
-    // 控制端新上线（本房间有人接入）→ 震动 + 提示音（"双方在线"庆祝一次）
+    // 控制端新上线（本房间有人接入）→ 提示音（"双方在线"庆祝一次）
     if (controllerOnline && !wasOnline) {
-      vibrateOnce(160);
       buzzerBeep(120, 90);
     }
     Serial.printf("[WS] 控制端在线数=%d\n", viewers);
     return;
   }
-  // 运行时配置指令：{type:"config", vib:int, buzz:int, fan:int, beep:bool, room:"..."}
+  // 运行时配置指令：{type:"config", buzz:int, fan:int, beep:bool, room:"..."}
   if (strcmp(type, "config") == 0) {
-    if (doc["vib"].is<int>()) {
-      vibLevel = constrain((int)doc["vib"], 0, PERI_LEVELS - 1);
-      prefs.putInt("vib", vibLevel);
-      if (vibLevel == 0) ledcWrite(VIB_PWM_CH, 0);
-    }
     if (doc["buzz"].is<int>()) {
       buzzLevel = constrain((int)doc["buzz"], 0, PERI_LEVELS - 1);
       prefs.putInt("buzz", buzzLevel);
@@ -1295,9 +1211,9 @@ void loop() {
     ws.sendTXT("{\"type\":\"ping\"}");
   }
 
-  // 被控端（iPhone 蓝牙）连上沿 → 震动 + 提示音（代表"双方接通"）
+  // 被控端（iPhone 蓝牙）连上沿 → 提示音（代表"双方接通"）
   bool bleNow = compositeHID.isConnected();
-  if (bleNow && !lastBleConnected) { vibrateOnce(180); buzzerBeep(120, 90); }
+  if (bleNow && !lastBleConnected) { buzzerBeep(120, 90); }
   lastBleConnected = bleNow;
 
   // 屏幕刷新：正常 500ms；重置倒计时/确认阶段需更跟手，100ms
