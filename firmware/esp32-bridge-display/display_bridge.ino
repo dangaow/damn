@@ -185,14 +185,16 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #endif
 #define FAN_PWM_INVERTED 1 // 1=低电平触发模块（如 JY-25-003），输出占空比取反
 
-bool vibrateOn = true;
-bool buzzerOn = true;
-
-// 风扇 5 档转速：0/20/50/70/100
-const uint8_t FAN_LEVELS = 5;
-const uint8_t fanSpeeds[FAN_LEVELS] = {0, 51, 128, 178, 255}; // 0%,20%,50%,70%,100%
-uint8_t fanLevel = 0;          // 当前档位下标（默认 0 档 = 停）
+// 外设统一 5 档百分比：0/20/50/70/100（震动/蜂鸣/风扇共用同一档位结构）
+const uint8_t PERI_LEVELS = 5;
+const char* const PERI_PCT[PERI_LEVELS] = {"0%", "20%", "50%", "70%", "100%"};
+const uint8_t fanSpeeds[PERI_LEVELS]  = {0, 51, 128, 178, 255}; // 风扇 duty
+const uint8_t vibSpeeds[PERI_LEVELS]  = {0, 51, 128, 178, 255}; // 震动强度 duty（与风扇同映射）
+const uint8_t buzzSpeeds[PERI_LEVELS] = {0, 40, 70, 100, 130};  // 蜂鸣音量 duty（上限低，避免太吵）
+uint8_t fanLevel = 0;          // 风扇档位（默认 0 档 = 停）
 bool fanOn = false;            // 风扇开关（0 档时视为关）
+uint8_t vibLevel = 3;          // 震动强度档位（默认 70%）
+uint8_t buzzLevel = 3;         // 蜂鸣音量档位（默认 70%）
 
 // ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
 #define PIN_BUTTON    0                // 免额外接线，直接用板子自带 BOOT 键
@@ -263,10 +265,10 @@ void setup() {
   serverUrl = prefs.getString("server", "");   // 无内置默认服务器，由用户填写
   room = prefs.getString("room", "");          // 无内置默认房间码，由用户填写
 
-  // 外设配置：蜂鸣器/震动/风扇
-  vibrateOn = prefs.getBool("vib", true);
-  buzzerOn = prefs.getBool("buzz", true);
-  fanLevel = constrain(prefs.getInt("fan", 0), 0, FAN_LEVELS - 1);
+  // 外设配置：蜂鸣器/震动/风扇（均 5 档百分比，存 NVS）
+  vibLevel  = constrain(prefs.getInt("vib", 3), 0, PERI_LEVELS - 1);
+  buzzLevel = constrain(prefs.getInt("buzz", 3), 0, PERI_LEVELS - 1);
+  fanLevel = constrain(prefs.getInt("fan", 0), 0, PERI_LEVELS - 1);
   fanOn = (fanLevel > 0) ? prefs.getBool("fanOn", true) : false;
   setupPeripherals();                          // 初始化 PWM 并应用到保存的配置
   bootTune();                                  // 四音符开机音效 + 同步震动
@@ -354,27 +356,27 @@ void connectWebSocket() {
 // 外设：蜂鸣器 / 震动
 // ============================================================
 
-/** 蜂鸣器短鸣一次（事件提示音，蜂鸣开关关闭时静音；duty=音量 0..255） */
+/** 蜂鸣器短鸣一次（事件提示音，蜂鸣 0 档静音；duty=相对音量 0..255，按档位缩放） */
 void buzzerBeep(int ms = 120, int duty = 110) {
-  if (!buzzerOn) return;
-  ledcWrite(BUZZ_PWM_CH, duty);
+  if (buzzLevel == 0) return;
+  ledcWrite(BUZZ_PWM_CH, (int)(duty * buzzSpeeds[buzzLevel] / 130.0f));
   delay(ms);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
 /** 状态切换小声提示音（音量统一、小声） */
 void softBeep() {
-  if (!buzzerOn) return;
-  ledcWrite(BUZZ_PWM_CH, 60);
+  if (buzzLevel == 0) return;
+  ledcWrite(BUZZ_PWM_CH, (int)(60 * buzzSpeeds[buzzLevel] / 130.0f));
   delay(40);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
 /** 播放指定频率音符（单位 Hz/ms），结束后恢复默认提示音频率 2500Hz */
 void playTone(int freq, int ms, int duty = 110) {
-  if (!buzzerOn) return;
+  if (buzzLevel == 0) return;
   BUZZ_SET_FREQ(freq);
-  ledcWrite(BUZZ_PWM_CH, duty);
+  ledcWrite(BUZZ_PWM_CH, (int)(duty * buzzSpeeds[buzzLevel] / 130.0f));
   delay(ms);
   ledcWrite(BUZZ_PWM_CH, 0);
   BUZZ_SET_FREQ(2500);   // 恢复事件提示音频率
@@ -382,21 +384,22 @@ void playTone(int freq, int ms, int duty = 110) {
 
 /** 震动：强度从低到高线性爬升（苹果式"嗡——"），到顶立刻停止，无下降沿 */
 void vibrateRamp(int ms, int maxStrength = 220) {
-  if (!vibrateOn) return;
+  if (vibLevel == 0) return;
+  float g = vibSpeeds[vibLevel] / 255.0f;
   int steps = ms / 10;
   if (steps < 1) steps = 1;
   for (int i = 0; i <= steps; i++) {
-    int duty = map(i, 0, steps, 40, maxStrength);
+    int duty = (int)(map(i, 0, steps, 40, maxStrength) * g);
     ledcWrite(VIB_PWM_CH, duty);
     delay(ms / steps);
   }
   ledcWrite(VIB_PWM_CH, 0);
 }
 
-/** 震动一次（事件提示，强度固定，0..255） */
+/** 震动一次（事件提示，强度固定，按档位缩放） */
 void vibrateOnce(int ms = 200, int strength = 200) {
-  if (!vibrateOn) return;
-  ledcWrite(VIB_PWM_CH, strength);
+  if (vibLevel == 0) return;
+  ledcWrite(VIB_PWM_CH, (int)(strength * vibSpeeds[vibLevel] / 255.0f));
   delay(ms);
   ledcWrite(VIB_PWM_CH, 0);
 }
@@ -409,15 +412,16 @@ void bootTune() {
   const int gapMs  = 50;
   for (int i = 0; i < 4; i++) {
     // 蜂鸣 + 震动同时开始
-    if (buzzerOn) {
+    if (buzzLevel > 0) {
       BUZZ_SET_FREQ(tones[i]);
-      ledcWrite(BUZZ_PWM_CH, 100);
+      ledcWrite(BUZZ_PWM_CH, (int)(100 * buzzSpeeds[buzzLevel] / 130.0f));
     }
-    if (vibrateOn) {
+    if (vibLevel > 0) {
       // 震动在音符期间从弱快速爬到强，然后断掉
+      float g = vibSpeeds[vibLevel] / 255.0f;
       int rampSteps = toneMs / 12;
       for (int s = 0; s <= rampSteps; s++) {
-        int duty = map(s, 0, rampSteps, 35, 230);
+        int duty = (int)(map(s, 0, rampSteps, 35, 230) * g);
         ledcWrite(VIB_PWM_CH, duty);
         delay(toneMs / rampSteps);
         if (s == rampSteps) ledcWrite(VIB_PWM_CH, 0);
@@ -436,14 +440,15 @@ void bootTune() {
 /** 切页同步音效：蜂鸣 "bi" 一声 + 震动完全同步 */
 void pageBeepVib() {
   const int beepMs = 80;
-  if (buzzerOn) {
+  if (buzzLevel > 0) {
     BUZZ_SET_FREQ(2000);
-    ledcWrite(BUZZ_PWM_CH, 90);
+    ledcWrite(BUZZ_PWM_CH, (int)(90 * buzzSpeeds[buzzLevel] / 130.0f));
   }
-  if (vibrateOn) {
+  if (vibLevel > 0) {
+    float g = vibSpeeds[vibLevel] / 255.0f;
     int steps = beepMs / 8;
     for (int s = 0; s <= steps; s++) {
-      int duty = map(s, 0, steps, 50, 200);
+      int duty = (int)(map(s, 0, steps, 50, 200) * g);
       ledcWrite(VIB_PWM_CH, duty);
       delay(beepMs / steps);
       if (s == steps) ledcWrite(VIB_PWM_CH, 0);
@@ -484,35 +489,38 @@ void applyFan() {
 /** 循环切换风扇档位：0→20→50→70→100→0 */
 void cycleFanLevel() {
   fanLevel++;
-  if (fanLevel >= FAN_LEVELS) fanLevel = 0;
+  if (fanLevel >= PERI_LEVELS) fanLevel = 0;
   fanOn = (fanLevel > 0);
   prefs.putInt("fan", fanLevel);
   prefs.putBool("fanOn", fanOn);
   applyFan();
   buzzerBeep(60, 70);
-  Serial.printf("[BTN] 风扇 -> %d%%\n", (fanSpeeds[fanLevel] * 100 + 127) / 255);
+  Serial.printf("[BTN] 风扇 -> %s\n", PERI_PCT[fanLevel]);
 }
 
 // ============================================================
 // 外设开关 + 触摸切换（长按 切开关 / 短按 切页）
 // ============================================================
 
-void toggleVib() {
-  vibrateOn = !vibrateOn;
-  prefs.putBool("vib", vibrateOn);
-  if (!vibrateOn) ledcWrite(VIB_PWM_CH, 0);
+/** 循环切换震动强度档位：0→20→50→70→100→0 */
+void cycleVibLevel() {
+  vibLevel++;
+  if (vibLevel >= PERI_LEVELS) vibLevel = 0;
+  prefs.putInt("vib", vibLevel);
+  if (vibLevel == 0) ledcWrite(VIB_PWM_CH, 0);
   else vibrateOnce(120, 160);
   buzzerBeep(60, 70);
-  Serial.printf("[BTN] 震动 %s\n", vibrateOn ? "开" : "关");
+  Serial.printf("[BTN] 震动 -> %s\n", PERI_PCT[vibLevel]);
 }
 
-void toggleBuzz() {
-  buzzerOn = !buzzerOn;
-  prefs.putBool("buzz", buzzerOn);
-  if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
+/** 循环切换蜂鸣音量档位：0→20→50→70→100→0 */
+void cycleBuzzLevel() {
+  buzzLevel++;
+  if (buzzLevel >= PERI_LEVELS) buzzLevel = 0;
+  prefs.putInt("buzz", buzzLevel);
+  if (buzzLevel == 0) ledcWrite(BUZZ_PWM_CH, 0);
   else buzzerBeep(120, 90);   // 打开时回一个提示音确认
-  buzzerBeep(60, 70);
-  Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
+  Serial.printf("[BTN] 蜂鸣 -> %s\n", PERI_PCT[buzzLevel]);
 }
 
 /** 切换到下一页（主页面 → 帮助 → 震动 → 蜂鸣 → 风扇 → 重置 → 主页面） */
@@ -637,9 +645,9 @@ void handleButton() {
     }
 
     if (clicks == 2) {
-      // 双击：切换当前页状态 / 风扇档 / 重置页进入倒计时
-      if (page == P_VIB) { toggleVib(); refreshScreen(); }
-      else if (page == P_BUZZ) { toggleBuzz(); refreshScreen(); }
+      // 双击：切换当前页档位 / 重置页进入倒计时
+      if (page == P_VIB) { cycleVibLevel(); refreshScreen(); }
+      else if (page == P_BUZZ) { cycleBuzzLevel(); refreshScreen(); }
       else if (page == P_FAN) { cycleFanLevel(); refreshScreen(); }
       else if (page == P_RESET) { startResetArmed(); }
     } else {
@@ -728,7 +736,7 @@ void drawFooterHint(const char* hint) {
 }
 
 /** 画横向选项条静态帧：selected 项白底黑字，其余黑底白字 */
-void drawSegmentBarFrame(int selected, const char* labels[], int count, const char* title, int iconType) {
+void drawSegmentBarFrame(int selected, const char* const labels[], int count, const char* title, int iconType) {
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
 
   // 标题栏
@@ -770,7 +778,7 @@ void drawSegmentBarFrame(int selected, const char* labels[], int count, const ch
 }
 
 /** 带白底划过动画的选项条；from=-1 表示无动画 */
-void drawSegmentBar(int selected, int from, const char* labels[], int count, const char* title, int iconType) {
+void drawSegmentBar(int selected, int from, const char* const labels[], int count, const char* title, int iconType) {
   int barX = 4, barY = 24, barW = 120, barH = 22;
   int segW = barW / count;
   int targetX = barX + selected * segW;
@@ -808,22 +816,11 @@ void drawSegmentBar(int selected, int from, const char* labels[], int count, con
   drawSegmentBarFrame(selected, labels, count, title, iconType);
 }
 
-/** 开关页：震动 / 蜂鸣，统一用大状态条显示"开/关" */
-void drawSwitchPage(const char* title, bool isOn, int iconType, int& lastSel) {
-  int sel = isOn ? 1 : 0;
-  const char* labels[2] = {"关", "开"};
-  drawSegmentBar(sel, lastSel, labels, 2, title, iconType);
-  lastSel = sel;
-  drawFooterHint("单击切页 · 双击切开关");
-  u8g2.sendBuffer();
-}
-
-/** 风扇页：5 档 0/20/50/70/100 */
-void drawFanPage(int& lastSel) {
-  const char* labels[5] = {"0%", "20%", "50%", "70%", "100%"};
-  drawSegmentBar(fanLevel, lastSel, labels, 5, "风扇调速", 2);
-  lastSel = fanLevel;
-  drawFooterHint("单击切页 · 双击切转速");
+/** 档位页（震动/蜂鸣/风扇共用）：5 档百分比，双击循环切档 */
+void drawLevelPage(const char* title, int iconType, int level, int& lastSel) {
+  drawSegmentBar(level, lastSel, PERI_PCT, PERI_LEVELS, title, iconType);
+  lastSel = level;
+  drawFooterHint("单击切页 · 双击切档位");
   u8g2.sendBuffer();
 }
 
@@ -841,7 +838,7 @@ void drawHelpPage() {
   drawHeart(0);   // 右上角黑色爱心（标题栏白底上）
 
   u8g2.drawUTF8(4, 26, "单击按钮：切换页面");
-  u8g2.drawUTF8(4, 38, "双击按钮：改变开关/转速");
+  u8g2.drawUTF8(4, 38, "双击按钮：改变档位");
   u8g2.drawUTF8(4, 50, "重置页：双击启动倒计时");
 
   drawFooterHint("单击切页");
@@ -890,9 +887,9 @@ void refreshScreen() {
   switch (page) {
     case P_MAIN:  drawMainStatus(); break;
     case P_HELP:  drawHelpPage(); break;
-    case P_VIB:   drawSwitchPage("震动开关", vibrateOn, 0, lastVibSel); break;
-    case P_BUZZ:  drawSwitchPage("蜂鸣开关", buzzerOn, 1, lastBuzzSel); break;
-    case P_FAN:   drawFanPage(lastFanSel); break;
+    case P_VIB:   drawLevelPage("震动强度", 0, vibLevel, lastVibSel); break;
+    case P_BUZZ:  drawLevelPage("蜂鸣音量", 1, buzzLevel, lastBuzzSel); break;
+    case P_FAN:   drawLevelPage("风扇转速", 2, fanLevel, lastFanSel); break;
     case P_RESET: drawResetPage(); break;
   }
 }
@@ -1020,21 +1017,21 @@ void handleCommand(const char* json, size_t len) {
     Serial.printf("[WS] 控制端在线数=%d\n", viewers);
     return;
   }
-  // 运行时配置指令：{type:"config", vib:bool, buzz:bool, fan:int, beep:bool, room:"..."}
+  // 运行时配置指令：{type:"config", vib:int, buzz:int, fan:int, beep:bool, room:"..."}
   if (strcmp(type, "config") == 0) {
-    if (doc["vib"].is<bool>()) {
-      vibrateOn = doc["vib"];
-      prefs.putBool("vib", vibrateOn);
-      if (!vibrateOn) ledcWrite(VIB_PWM_CH, 0);
+    if (doc["vib"].is<int>()) {
+      vibLevel = constrain((int)doc["vib"], 0, PERI_LEVELS - 1);
+      prefs.putInt("vib", vibLevel);
+      if (vibLevel == 0) ledcWrite(VIB_PWM_CH, 0);
     }
-    if (doc["buzz"].is<bool>()) {
-      buzzerOn = doc["buzz"];
-      prefs.putBool("buzz", buzzerOn);
-      if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
+    if (doc["buzz"].is<int>()) {
+      buzzLevel = constrain((int)doc["buzz"], 0, PERI_LEVELS - 1);
+      prefs.putInt("buzz", buzzLevel);
+      if (buzzLevel == 0) ledcWrite(BUZZ_PWM_CH, 0);
     }
     if (doc["fan"].is<int>()) {
       int fanIdx = doc["fan"];
-      fanLevel = constrain(fanIdx, 0, FAN_LEVELS - 1);
+      fanLevel = constrain(fanIdx, 0, PERI_LEVELS - 1);
       fanOn = (fanLevel > 0);
       prefs.putInt("fan", fanLevel);
       prefs.putBool("fanOn", fanOn);
@@ -1238,15 +1235,11 @@ void drawMainStatus() {
   bool ctrlOk = wifiLive && wsConnected && controllerOnline;
   drawStateLine(3, "控制端", ctrlOk);
 
-  // 底部：房间号 + 外设状态（含风扇档位）
+  // 底部：只显示房间名称（居中）
   u8g2.drawHLine(0, 50, 128);
   String roomLine = "房间 " + room;
-  u8g2.drawUTF8(2, 59, roomLine.c_str());
-  String periLine = String(buzzerOn ? "音" : "") +
-                    String(vibrateOn ? " 振" : "") +
-                    String(fanLevel > 0 ? " 风" : "") +
-                    String(fanLevel > 0 ? String((fanSpeeds[fanLevel] * 100 + 127) / 255) + "%" : "");
-  u8g2.drawUTF8(66, 59, periLine.c_str());
+  int rw = u8g2.getUTF8Width(roomLine.c_str());
+  u8g2.drawUTF8((128 - rw) / 2, 59, roomLine.c_str());
 
   u8g2.sendBuffer();
 }

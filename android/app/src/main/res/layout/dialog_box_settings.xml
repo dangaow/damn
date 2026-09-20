@@ -32,25 +32,59 @@
         android:textColor="@color/sub"
         android:textSize="12sp" />
 
-    <!-- 提示音 / 震动开关 -->
-    <androidx.appcompat.widget.SwitchCompat
-        android:id="@+id/buzzSwitch"
+    <!-- 蜂鸣音量 -->
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:checked="true"
-        android:text="事件提示音（蜂鸣）"
+        android:text="蜂鸣音量"
         android:textColor="@color/ink"
-        android:textSize="14sp" />
+        android:textSize="14sp"
+        android:textStyle="bold" />
 
-    <androidx.appcompat.widget.SwitchCompat
-        android:id="@+id/vibSwitch"
+    <SeekBar
+        android:id="@+id/buzzSeekBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:checked="true"
-        android:text="事件震动"
+        android:layout_marginTop="4dp"
+        android:max="4"
+        android:progress="3" />
+
+    <TextView
+        android:id="@+id/buzzValueLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="当前：70%"
+        android:textColor="@color/sub"
+        android:textSize="12sp" />
+
+    <!-- 震动强度 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="震动强度"
         android:textColor="@color/ink"
-        android:textSize="14sp" />
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <SeekBar
+        android:id="@+id/vibSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:max="4"
+        android:progress="3" />
+
+    <TextView
+        android:id="@+id/vibValueLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="当前：70%"
+        android:textColor="@color/sub"
+        android:textSize="12sp" />
 
     <!-- 测试提示音 -->
     <Button
@@ -68,7 +102,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="提示：蜂鸣/震动/风扇改动点&quot;应用&quot;即实时下发到盒子；换房间码请先在盒子配网页或重新配网修改。"
+        android:text="提示：风扇/蜂鸣/震动均分 0/20/50/70/100% 五档，点&quot;应用&quot;即实时下发到盒子；换房间码请先在盒子配网页或重新配网修改。"
         android:textColor="@color/sub"
         android:textSize="11sp" />
 
