@@ -32,32 +32,16 @@
         android:textColor="@color/sub"
         android:textSize="12sp" />
 
-    <!-- 蜂鸣音量 -->
-    <TextView
+    <!-- 蜂鸣器开关（音量固定，只开关） -->
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/buzzSwitch"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:text="蜂鸣音量"
+        android:checked="true"
+        android:text="蜂鸣器提示音（音量固定，仅开关）"
         android:textColor="@color/ink"
-        android:textSize="14sp"
-        android:textStyle="bold" />
-
-    <SeekBar
-        android:id="@+id/buzzSeekBar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:max="4"
-        android:progress="3" />
-
-    <TextView
-        android:id="@+id/buzzValueLabel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:text="当前：70%"
-        android:textColor="@color/sub"
-        android:textSize="12sp" />
+        android:textSize="14sp" />
 
     <!-- 测试提示音 -->
     <Button
@@ -75,7 +59,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="提示：风扇/蜂鸣均分 0/20/50/70/100% 五档，点&quot;应用&quot;即实时下发到盒子；换房间码请先在盒子配网页或重新配网修改。"
+        android:text="提示：风扇分 0/20/50/70/100% 五档调速，蜂鸣器仅开关；点&quot;应用&quot;即实时下发到盒子；换房间码请先在盒子配网页或重新配网修改。"
         android:textColor="@color/sub"
         android:textSize="11sp" />
 

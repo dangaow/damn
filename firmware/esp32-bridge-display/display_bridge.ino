@@ -32,7 +32,7 @@
  *
  * 物理按键（板载 BOOT 键，GPIO0，免接线）：
  *   - 单击：循环切页  主页面 → 帮助 → 蜂鸣 → 风扇 → 重置 → 主页面
- *   - 双击：在【蜂鸣】页切换音量档位；在【风扇】页循环切换 5 档转速；
+ *   - 双击：在【蜂鸣】页切换 开/关；在【风扇】页循环切换 5 档转速；
  *           在【重置】页启动 5s 倒计时
  *   - 重置倒计时期间：任意按键 = 取消；5s 走满后进入三击确认
  *   - 重置确认页：双击退出，三击执行恢复出厂并重启
@@ -181,14 +181,14 @@ bool controllerOnline = false;   // 控制端（安卓 viewer）是否在本房�
 #endif
 #define FAN_PWM_INVERTED 1 // 1=低电平触发模块（如 JY-25-003），输出占空比取反
 
-// 外设统一 5 档百分比：0/20/50/70/100（蜂鸣/风扇共用同一档位结构）
+// 风扇 5 档百分比：0/20/50/70/100；蜂鸣器固定音量、仅开关
 const uint8_t PERI_LEVELS = 5;
 const char* const PERI_PCT[PERI_LEVELS] = {"0%", "20%", "50%", "70%", "100%"};
 const uint8_t fanSpeeds[PERI_LEVELS]  = {0, 51, 128, 178, 255}; // 风扇 duty
-const uint8_t buzzSpeeds[PERI_LEVELS] = {0, 40, 70, 100, 130};  // 蜂鸣音量 duty（上限低，避免太吵）
 uint8_t fanLevel = 0;          // 风扇档位（默认 0 档 = 停）
 bool fanOn = false;            // 风扇开关（0 档时视为关）
-uint8_t buzzLevel = 3;         // 蜂鸣音量档位（默认 70%）
+#define BUZZ_VOL  60           // 蜂鸣器固定音量 duty（0..255；太小有源蜂鸣器会不响）
+bool buzzerOn = true;          // 蜂鸣器开关（音量固定，不可调）
 
 // ---- 物理按键（板载 BOOT 键，GPIO0 = 电源键旁的 BOOT，按下接地，INPUT_PULLUP）----
 #define PIN_BUTTON    0                // 免额外接线，直接用板子自带 BOOT 键
@@ -259,8 +259,8 @@ void setup() {
   serverUrl = prefs.getString("server", "");   // 无内置默认服务器，由用户填写
   room = prefs.getString("room", "");          // 无内置默认房间码，由用户填写
 
-  // 外设配置：蜂鸣器/风扇（均 5 档百分比，存 NVS）
-  buzzLevel = constrain(prefs.getInt("buzz", 3), 0, PERI_LEVELS - 1);
+  // 外设配置：蜂鸣器（开关）/ 风扇（5 档）
+  buzzerOn = prefs.getBool("buzz", true);
   fanLevel = constrain(prefs.getInt("fan", 0), 0, PERI_LEVELS - 1);
   fanOn = (fanLevel > 0) ? prefs.getBool("fanOn", true) : false;
   setupPeripherals();                          // 初始化 PWM 并应用到保存的配置
@@ -349,27 +349,29 @@ void connectWebSocket() {
 // 外设：蜂鸣器
 // ============================================================
 
-/** 蜂鸣器短鸣一次（事件提示音，蜂鸣 0 档静音；duty=相对音量 0..255，按档位缩放） */
-void buzzerBeep(int ms = 120, int duty = 110) {
-  if (buzzLevel == 0) return;
-  ledcWrite(BUZZ_PWM_CH, (int)(duty * buzzSpeeds[buzzLevel] / 130.0f));
+/** 蜂鸣器短鸣一次（事件提示音，蜂鸣关闭时静音；音量固定 BUZZ_VOL） */
+void buzzerBeep(int ms = 120, int duty = BUZZ_VOL) {
+  if (!buzzerOn) return;
+  (void)duty;   // 音量固定，忽略调用处的音量差异
+  ledcWrite(BUZZ_PWM_CH, BUZZ_VOL);
   delay(ms);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
-/** 状态切换小声提示音（音量统一、小声） */
+/** 状态切换小声提示音（音量固定） */
 void softBeep() {
-  if (buzzLevel == 0) return;
-  ledcWrite(BUZZ_PWM_CH, (int)(60 * buzzSpeeds[buzzLevel] / 130.0f));
+  if (!buzzerOn) return;
+  ledcWrite(BUZZ_PWM_CH, BUZZ_VOL);
   delay(40);
   ledcWrite(BUZZ_PWM_CH, 0);
 }
 
 /** 播放指定频率音符（无源蜂鸣器变调，单位 Hz/ms），结束后恢复默认提示音频率 2500Hz */
-void playTone(int freq, int ms, int duty = 110) {
-  if (buzzLevel == 0) return;
+void playTone(int freq, int ms, int duty = BUZZ_VOL) {
+  if (!buzzerOn) return;
+  (void)duty;   // 音量固定，忽略调用处的音量差异
   BUZZ_SET_FREQ(freq);
-  ledcWrite(BUZZ_PWM_CH, (int)(duty * buzzSpeeds[buzzLevel] / 130.0f));
+  ledcWrite(BUZZ_PWM_CH, BUZZ_VOL);
   delay(ms);
   ledcWrite(BUZZ_PWM_CH, 0);
   BUZZ_SET_FREQ(2500);   // 恢复事件提示音频率
@@ -382,9 +384,9 @@ void bootTune() {
   const int toneMs = 170;
   const int gapMs  = 50;
   for (int i = 0; i < 4; i++) {
-    if (buzzLevel > 0) {
+    if (buzzerOn) {
       BUZZ_SET_FREQ(tones[i]);
-      ledcWrite(BUZZ_PWM_CH, (int)(100 * buzzSpeeds[buzzLevel] / 130.0f));
+      ledcWrite(BUZZ_PWM_CH, BUZZ_VOL);
     }
     delay(toneMs);
     // 音符结束，蜂鸣停
@@ -398,9 +400,9 @@ void bootTune() {
 /** 切页同步音效：蜂鸣 "bi" 一声 */
 void pageBeepVib() {
   const int beepMs = 80;
-  if (buzzLevel > 0) {
+  if (buzzerOn) {
     BUZZ_SET_FREQ(2000);
-    ledcWrite(BUZZ_PWM_CH, (int)(90 * buzzSpeeds[buzzLevel] / 130.0f));
+    ledcWrite(BUZZ_PWM_CH, BUZZ_VOL);
     delay(beepMs);
   }
   ledcWrite(BUZZ_PWM_CH, 0);
@@ -448,14 +450,13 @@ void cycleFanLevel() {
 // 外设开关 + 触摸切换（长按 切开关 / 短按 切页）
 // ============================================================
 
-/** 循环切换蜂鸣音量档位：0→20→50→70→100→0 */
-void cycleBuzzLevel() {
-  buzzLevel++;
-  if (buzzLevel >= PERI_LEVELS) buzzLevel = 0;
-  prefs.putInt("buzz", buzzLevel);
-  if (buzzLevel == 0) ledcWrite(BUZZ_PWM_CH, 0);
+/** 切换蜂鸣器 开/关（音量固定，不可调） */
+void toggleBuzz() {
+  buzzerOn = !buzzerOn;
+  prefs.putBool("buzz", buzzerOn);
+  if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
   else buzzerBeep(120, 90);   // 打开时回一个提示音确认
-  Serial.printf("[BTN] 蜂鸣 -> %s\n", PERI_PCT[buzzLevel]);
+  Serial.printf("[BTN] 蜂鸣 %s\n", buzzerOn ? "开" : "关");
 }
 
 /** 切换到下一页（主页面 → 帮助 → 蜂鸣 → 风扇 → 重置 → 主页面） */
@@ -507,8 +508,8 @@ void enterResetConfirm() {
 
 /** 重置盒子：清空全部 NVS（含 WiFi 凭据）→ 重启自动重开配网热点 */
 void resetBox() {
-  // 重置时强制提示音（不受音量档位限制）
-  ledcWrite(BUZZ_PWM_CH, 130); delay(150); ledcWrite(BUZZ_PWM_CH, 0);
+  // 重置时强制提示音（不受蜂鸣开关限制）
+  ledcWrite(BUZZ_PWM_CH, BUZZ_VOL); delay(150); ledcWrite(BUZZ_PWM_CH, 0);
 
   drawStatus("正在清除配置…");
   delay(400);
@@ -523,7 +524,7 @@ void resetBox() {
 
 /**
  * 按键扫描：
- *   单击 = 切下一页；双击 = 切换当前页档位（蜂鸣/风扇页切档；重置页进入 5s 倒计时）
+ *   单击 = 切下一页；双击 = 切换当前页开关/档位（蜂鸣页切开关；风扇页切档；重置页进入 5s 倒计时）
  *   重置倒计时期间任意按键 = 取消；倒计时满 5s 后进入确认页
  *   确认页：双击 = 退出确认；三击 = 执行重置
  */
@@ -578,8 +579,8 @@ void handleButton() {
     }
 
     if (clicks == 2) {
-      // 双击：切换当前页档位 / 重置页进入倒计时
-      if (page == P_BUZZ) { cycleBuzzLevel(); refreshScreen(); }
+      // 双击：切换当前页开关/档位 / 重置页进入倒计时
+      if (page == P_BUZZ) { toggleBuzz(); refreshScreen(); }
       else if (page == P_FAN) { cycleFanLevel(); refreshScreen(); }
       else if (page == P_RESET) { startResetArmed(); }
     } else {
@@ -740,7 +741,17 @@ void drawSegmentBar(int selected, int from, const char* const labels[], int coun
   drawSegmentBarFrame(selected, labels, count, title, iconType);
 }
 
-/** 档位页（蜂鸣/风扇共用）：5 档百分比，双击循环切档 */
+/** 开关页（蜂鸣器）：开/关 两档 */
+void drawSwitchPage(const char* title, bool isOn, int iconType, int& lastSel) {
+  int sel = isOn ? 1 : 0;
+  const char* labels[2] = {"关", "开"};
+  drawSegmentBar(sel, lastSel, labels, 2, title, iconType);
+  lastSel = sel;
+  drawFooterHint("单击切页 · 双击切开关");
+  u8g2.sendBuffer();
+}
+
+/** 档位页（风扇）：5 档百分比，双击循环切档 */
 void drawLevelPage(const char* title, int iconType, int level, int& lastSel) {
   drawSegmentBar(level, lastSel, PERI_PCT, PERI_LEVELS, title, iconType);
   lastSel = level;
@@ -762,7 +773,7 @@ void drawHelpPage() {
   drawHeart(0);   // 右上角黑色爱心（标题栏白底上）
 
   u8g2.drawUTF8(4, 26, "单击按钮：切换页面");
-  u8g2.drawUTF8(4, 38, "双击按钮：改变档位");
+  u8g2.drawUTF8(4, 38, "双击按钮：切开关/调档");
   u8g2.drawUTF8(4, 50, "重置页：双击启动倒计时");
 
   drawFooterHint("单击切页");
@@ -811,7 +822,7 @@ void refreshScreen() {
   switch (page) {
     case P_MAIN:  drawMainStatus(); break;
     case P_HELP:  drawHelpPage(); break;
-    case P_BUZZ:  drawLevelPage("蜂鸣音量", 1, buzzLevel, lastBuzzSel); break;
+    case P_BUZZ:  drawSwitchPage("蜂鸣开关", buzzerOn, 1, lastBuzzSel); break;
     case P_FAN:   drawLevelPage("风扇转速", 2, fanLevel, lastFanSel); break;
     case P_RESET: drawResetPage(); break;
   }
@@ -938,12 +949,12 @@ void handleCommand(const char* json, size_t len) {
     Serial.printf("[WS] 控制端在线数=%d\n", viewers);
     return;
   }
-  // 运行时配置指令：{type:"config", buzz:int, fan:int, beep:bool, room:"..."}
+  // 运行时配置指令：{type:"config", buzz:bool, fan:int, beep:bool, room:"..."}
   if (strcmp(type, "config") == 0) {
-    if (doc["buzz"].is<int>()) {
-      buzzLevel = constrain((int)doc["buzz"], 0, PERI_LEVELS - 1);
-      prefs.putInt("buzz", buzzLevel);
-      if (buzzLevel == 0) ledcWrite(BUZZ_PWM_CH, 0);
+    if (doc["buzz"].is<bool>()) {
+      buzzerOn = doc["buzz"];
+      prefs.putBool("buzz", buzzerOn);
+      if (!buzzerOn) ledcWrite(BUZZ_PWM_CH, 0);
     }
     if (doc["fan"].is<int>()) {
       int fanIdx = doc["fan"];

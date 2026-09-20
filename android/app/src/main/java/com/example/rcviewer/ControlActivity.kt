@@ -469,27 +469,22 @@ class ControlActivity : AppCompatActivity() {
         showBoxSettingsDialog()
     }
 
-    /** 实际弹窗（风扇/蜂鸣均 5 档百分比 + 测试按钮，点击即发一次蜂鸣） */
+    /** 实际弹窗（风扇 5 档调速 + 蜂鸣器开关 + 测试按钮，点击即发一次蜂鸣） */
     private fun showBoxSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_box_settings, null)
         val fanSeekBar = view.findViewById<android.widget.SeekBar>(R.id.fanSeekBar)
         val fanValueLabel = view.findViewById<TextView>(R.id.fanValueLabel)
-        val buzzSeekBar = view.findViewById<android.widget.SeekBar>(R.id.buzzSeekBar)
-        val buzzValueLabel = view.findViewById<TextView>(R.id.buzzValueLabel)
+        val buzzSwitch = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.buzzSwitch)
         val beepBtn = view.findViewById<Button>(R.id.beepBtn)
 
         val pctNames = listOf("停", "20%", "50%", "70%", "100%")
-        fun bind(bar: android.widget.SeekBar, label: TextView) {
-            bar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
-                    label.text = "当前：${pctNames[progress]}"
-                }
-                override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
-            })
-        }
-        bind(fanSeekBar, fanValueLabel)
-        bind(buzzSeekBar, buzzValueLabel)
+        fanSeekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                fanValueLabel.text = "当前：${pctNames[progress]}"
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
 
         val dlg = AlertDialog.Builder(this)
             .setTitle("盒子设置")
@@ -501,7 +496,7 @@ class ControlActivity : AppCompatActivity() {
         dlg.setOnShowListener {
             dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 sendConfig(
-                    buzz = buzzSeekBar.progress,
+                    buzz = buzzSwitch.isChecked,
                     fan = fanSeekBar.progress
                 )
                 Toast.makeText(this, "已下发设置", Toast.LENGTH_SHORT).show()
@@ -515,7 +510,7 @@ class ControlActivity : AppCompatActivity() {
     private var alertDlg: AlertDialog? = null
 
     /** 下发 config 指令到盒子（仅带参数项被发送，其余保持盒子当前值） */
-    private fun sendConfig(buzz: Int? = null,
+    private fun sendConfig(buzz: Boolean? = null,
                            fan: Int? = null,
                            beep: Boolean? = null, room: String? = null) {
         val msg = JSONObject().apply {
