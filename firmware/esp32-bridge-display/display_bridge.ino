@@ -22,7 +22,7 @@
  *   屏幕 GND → 板子 GND
  *   屏幕 SCL → 板子 D22 (GPIO22)
  *   屏幕 SDA → 板子 D21 (GPIO21)
- *   蜂鸣器(+/-) → GPIO33 / GND（无源蜂鸣器两极可反接；模块版 VCC→3V3、GND→GND、信号→GPIO33）
+ *   蜂鸣器(+/-) → GPIO33 / GND（有源注意正负极、反接不响不坏；无源两极可反接；模块版 VCC→3V3、GND→GND、信号→GPIO33）
  *   震动电机 → GPIO25（小电流电机可直接接；稍大用三极管/MOS 驱动）
  *   散热风扇 PWM → GPIO26（可用 MOS 模块调速，或接支持 PWM 的风扇）
  *
