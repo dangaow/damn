@@ -570,6 +570,32 @@ scene({ name: '病态', t0: lineAt(52.86).t, t1: lineAt(63.36).t,
 
 // ================================================================ 7 · 面具掉了（桥段）
 const L_HURT = lineAt(67.86), T_HURT = wordT(L_HURT, '伤');
+// 「伤害」被抽出去（全片唯一一次）：
+//   进场：从句子里的位置被拎起来，沿弧线飞到右边，放大约 5 倍、淡到 25%；
+//   停留：随军鼓轻轻呼吸；
+//   退场：句子结束前慢慢往上飘、变淡，碎成暖色灰尘散掉。
+const HURT_FLY = .75, HURT_OUT = L_HURT.end - .35, HURT_GONE = HURT_OUT + 1.5;
+function hurtWord(c, t) {
+  if (t < T_HURT || t > HURT_GONE) return;
+  const size = fit(c, L_HURT.text, W * .78, 64, 400, SERIF);
+  c.font = fnt(size, 400, SERIF);
+  const wp = c.measureText('可我们还要').width, wh = c.measureText('伤害').width, wq = c.measureText('彼此就像将士').width;
+  const x0 = W / 2 - (wp + wh + wq) / 2 + wp + wh / 2, y0 = H * .7, x1 = W * .73, y1 = H * .42, s1 = 520;
+  const k = ease((t - T_HURT) / HURT_FLY), e = clamp((t - HURT_OUT) / (HURT_GONE - HURT_OUT));
+  const breath = 1 + .03 * M.hit('snare', t, 4);
+  const x = lerp(x0, x1, k), y = lerp(y0, y1, k) - Math.sin(k * Math.PI) * 120 - easeOut(e) * 70;
+  const sz = lerp(size, s1, k) * breath, a = lerp(1, .25, k) * (1 - easeIn(e * 1.6));
+  if (a > .01) {
+    c.save(); c.globalAlpha = a; c.translate(x, y); c.rotate((1 - k) * k * .25);
+    c.shadowColor = `rgba(255,150,80,${.6 * (1 - k)})`; c.shadowBlur = 30 * (1 - k);
+    text(c, '伤害', 0, 0, sz, { w: k > .5 ? 900 : 400, fam: SERIF, fill: k < 1 ? '#f4ece2' : '#ffe9d6' }); c.restore();
+  }
+  if (e > 0) {                                                                      // 碎成暖色灰尘，往上飘散
+    const pts = textPoints('伤害', s1, { w: 900, fam: SERIF, step: 9 });
+    const P = pts.map((p, i) => { const d = Math.max(0, e - hash(i, 5) * .35); return [p[0] + (hash(i, 6) - .5) * 260 * d, p[1] - (60 + hash(i, 7) * 240) * d - d * d * 80]; });
+    drawPts(c, P, x1, y1 - easeOut(e) * 70, 3, '#ffd9b0', .32 * (1 - e) * clamp(e * 6));
+  }
+}
 const warmth = t => t < T_HURT ? 1 : lerp(1, .12, ease((t - T_HURT) / 4.5));
 const T_PRERAIN = lineAt(73.7).t - 1.1;
 scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
@@ -602,6 +628,7 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
       g.addColorStop(0, `rgba(255,248,235,${a})`); g.addColorStop(.14, `rgba(255,210,160,${.7 * a})`); g.addColorStop(1, 'rgba(255,150,80,0)');
       c.fillStyle = g; c.fillRect(x - R, cy - R, 2 * R, 2 * R);
     });
+    hurtWord(c, t);
     const { line } = M.lyric(t);
     if (!line) return;
     const size = fit(c, line.text, W * .78, 64, 400, SERIF), a = clamp((t - line.t) / .45) * clamp((line.end - t) / .35);
@@ -614,11 +641,6 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
       if (t >= T_HURT) { c.fillStyle = 'rgba(236,230,220,.35)'; c.fillRect(x + wp + 6, H * .7 + size * .55, wh - 12, 1.5); }
       else text(c, '伤害', x + wp, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: '#ece6dc' });
       text(c, post, x + wp + wh, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: '#ece6dc' });
-      if (t >= T_HURT) {
-        const k = t - T_HURT, s = 1 + .12 * Math.exp(-k * 8);
-        c.save(); c.globalAlpha = .25 * clamp(k / .12) * clamp((line.end + .4 - t) / .4); c.translate(W * .73, H * .42); c.scale(s, s);
-        text(c, '伤害', 0, 0, 520, { w: 900, fam: SERIF, fill: '#ffe9d6' }); c.restore();
-      }
     } else {
       c.save(); c.shadowColor = `rgba(255,160,80,${.55 * warmth(t)})`; c.shadowBlur = 26;              // 墨晕：暖色的一圈晕
       text(c, line.text, W / 2, H * .7, size, { w: 400, fam: SERIF, fill: '#ece6dc' }); c.restore();
