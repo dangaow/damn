@@ -7,7 +7,8 @@
 | 文件 | 用途 |
 | --- | --- |
 | `song.mp3` | 歌曲 |
-| `lyrics.lrc` | 歌词时间轴 |
+| `lyrics.lrc` | 歌词：每句的文字和开始时间 |
+| `lyrics_words.lrc` | 逐字时间轴（每个字什么时候唱到），标错的字会被自动插值修正 |
 | `analyze.py` | 分析歌曲和歌词 → `data.js`（BPM、拍点、重拍、能量曲线、段落、逐字歌词时间） |
 | `data.js` | 分析结果，`mv.html` 直接加载 |
 | `mv.html` | 播放器 + 画面源码，`render(t)` 画出第 t 秒的画面 |
