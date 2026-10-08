@@ -1,5 +1,3 @@
-# 歌曲本身不进仓库（未发布的作品），本地放一份 song.mp3 即可
-song.mp3
 # 生成物
 data.json
 shots/
