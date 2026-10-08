@@ -10,7 +10,7 @@ const FX0 = {
   zoom: 1, rot: 0, barrel: .03, shift: [0, 0], sq: [1, 1], ca: 1, split: 0, glitch: 0, gseed: 0, wave: 0, tear: 0,
   invert: 0, xerox: 0, grade: 'none', gradeMix: 0, bloom: .4, bloomThr: .62, flash: 0, flashCol: '#ffffff', dark: 0,
   grain: .08, scan: .14, vig: .75, lb: 0, hud: 0, tape: 'TAPE 01', hudMode: '▶ PLAY', tc: null,
-  bounce: 1, bounce808: false,                                                  // 背景跟着鼓点跳的幅度
+  bounce: 0, bounce808: false,                                                  // 背景跟着鼓点跳的幅度（只在最后鼓点回来那段打开）
 };
 const SCENES = [];
 const scene = o => (SCENES.push(o), o);
@@ -257,7 +257,7 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
   fx(t) {
     const fill = t > barT(11), k = M.last('kick', t), end = this.t1 - t;
     const strobe = t > L_JUESAI.t && k.t > L_JUESAI.t ? Math.exp(-k.since * 18) * .75 : 0;
-    return { ...cam(t, .35), zoom: (cam(t, .35).zoom ?? 1) + (t - this.t0) * .004, lb: lbIn(t - this.t0), grade: 'cold', bounce: .6, gradeMix: .7, ca: 1.2 + M.hit('kick', t, 10) * 2, bloom: .5, hud: .75,
+    return { ...cam(t, .35), zoom: (cam(t, .35).zoom ?? 1) + (t - this.t0) * .004, lb: lbIn(t - this.t0), grade: 'cold', gradeMix: .7, ca: 1.2 + M.hit('kick', t, 10) * 2, bloom: .5, hud: .75,
       glitch: fill ? .08 + M.hit('kick', t, 12) * .2 : 0, tear: fill ? .6 : 0, gseed: frameNo(t) >> 1, dark: M.gap(t) ? .45 : 0,
       flash: end < .45 ? (frameNo(t) % 2 ? .55 : 0) : strobe, flashCol: k.i % 2 ? '#ff1a3a' : '#ffffff' };
   },
