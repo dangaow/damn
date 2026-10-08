@@ -67,7 +67,7 @@ function POLY(t) {
   if (t >= 80.4) s.spike = Math.exp(-(t - 80.4) * 2.2);                          // 点题：冲顶
   if (t >= 88.38 && t < 95.8) { s.lie = .6; s.amp = 1.4; }
   if (t >= 95.8) s.amp = clamp(1 - (t - 95.8) / 8);
-  if (t >= 105.3) { s.amp = 0; s.a = .85 * clamp(1 - (t - 106.4) / .6); }      // 归零
+  if (t >= T_ZERO) { s.amp = 0; s.a = .85 * clamp(1 - (t - T_OFF) / .5); }      // 数到 0：归零、拉平
   return s;
 }
 
@@ -135,7 +135,7 @@ scene({ name: '融化', t0: T_MELT, t1: D.notes808.find(n => n.t > T_UP).t,
   fx(t) {
     const n = M.hit('note', t, 12);
     return { zoom: 1 + n * .1, barrel: .05 + n * .3, ca: 2 + n * 8, grade: 'silver', gradeMix: .5, bloom: .7, hud: .7,
-      flash: t > T_UP ? Math.exp(-(t - T_UP) * 10) * .8 : 0, glitch: n * .3, gseed: M.last('note', t).i };
+      flash: t > T_UP ? Math.exp(-(t - T_UP) * 10) * .8 : Math.exp(-(t - T_MELT) * 18) * .6, glitch: n * .3, gseed: M.last('note', t).i };
   },
 });
 
@@ -286,6 +286,10 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
       c.strokeStyle = 'rgba(230,238,255,.95)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * k); c.lineTo(W / 2, y); c.stroke();
       c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
     }
+    if (line && i > 0 && t - line.t < .3) {                                         // 上一句往上飘着淡出
+      const k = (t - line.t) / .3; c.save(); c.globalAlpha = 1 - k;
+      text(c, D.lyrics[i - 1].text, 150, H - 290 - k * 60, 76, { align: 'left', fill: C.white }); c.restore();
+    }
     if (line) {
       verseLine(c, t, line, i + 1);
       if (line === L_KONGBAI) {                                                   // "空白"被涂黑
@@ -419,13 +423,13 @@ function hookFx(R2) {
     const k = M.last('kick', t), { line } = M.lyric(t), ko = KO.find(x => t >= x && t < x + .5);
     const sick = R2 && line && line.text === '变病态';
     const inv = R2 ? (t > 56 && t < 61.5 ? blink(k.since, 2) : k.i % 2 ? blink(k.since) : 0) : (k.i % 2 ? blink(k.since) : 0);
-    const shatter = R2 && t >= T_SHATTER;
+    const shatter = R2 && t >= T_SHATTER, sk = shatter ? clamp((t - T_SHATTER) / (lineAt(63.36).t - T_SHATTER)) : 0;
     return { ...cam(gapHold(t), R2 ? 1.3 : 1.1), ca: (R2 ? 3 : 2.2) + M.hit('kick', t, 9) * 8, xerox: .18, bloom: .55,
-      grade: sick ? 'sick' : M.gap(t) ? 'silver' : 'red', gradeMix: sick ? 1 : M.gap(t) ? 1 : (R2 ? .25 : .35), wave: sick ? .6 + M.hit('kick', t, 6) : 0,
+      grade: shatter ? 'warm' : sick ? 'sick' : M.gap(t) ? 'silver' : 'red', gradeMix: shatter ? .6 * sk : sick ? 1 : M.gap(t) ? 1 : (R2 ? .25 : .35), wave: sick ? .6 + M.hit('kick', t, 6) : 0,
       invert: shatter ? 0 : inv, glitch: hash(k.i, 13) < (R2 ? .45 : .28) ? M.hit('kick', t, 12) * .5 : 0, gseed: k.i,
       flash: ko != null ? (t - ko < 3 / 30 ? 1 : 0) : M.hit('snare', t, 25) * (R2 ? .3 : .2),
       zoom: ko != null ? 1 - .14 * Math.exp(-(t - ko) * 6) : cam(gapHold(t)).zoom ?? 1, rot: ko != null ? .05 * Math.exp(-(t - ko) * 5) : cam(gapHold(t)).rot ?? 0,
-      sq: R2 ? [1, 1] : crt((t - (lineAt(41.22).t + .5)) / .16), hud: .5 };
+      sq: R2 ? [1, 1] : crt((t - (lineAt(41.22).t + .5)) / .16), hud: .5 * (1 - sk), lb: sk * .6 };
   };
 }
 scene({ name: '连击', t0: lineAt(32.44).t, t1: lineAt(41.88).t,
@@ -530,14 +534,17 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
 
 scene({ name: '病态', t0: lineAt(52.86).t, t1: lineAt(63.36).t,
   weather: t => t >= T_SHATTER ? null : ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),
-  bg: t => t >= T_SHATTER ? { mode: 'solid', a: '#000000' } : ({ mode: 'rays', a: '#040003', b: '#2a030a', c: '#ff2a50', amt: .9, speed: 1.6, pulse: M.hit('kick', t, 7), mirror: true }),
+  bg: t => t >= T_SHATTER ? { mode: 'leak', a: '#05060a', b: '#ff7418', c: '#ffd59a', amt: .5 * easeIn((t - T_SHATTER) / (lineAt(63.36).t - T_SHATTER)), speed: .5, seed: 3 }   // 转场：暖光从黑里渗出来
+    : ({ mode: 'rays', a: '#040003', b: '#2a030a', c: '#ff2a50', amt: .9, speed: 1.6, pulse: M.hit('kick', t, 7), mirror: true }),
   draw: (c, t, lt) => hookDraw(c, t, lt, true), fx: hookFx(true) });
 
 // ================================================================ 7 · 面具掉了（桥段）
 const L_HURT = lineAt(67.86), T_HURT = wordT(L_HURT, '伤');
 const warmth = t => t < T_HURT ? 1 : lerp(1, .12, ease((t - T_HURT) / 4.5));
+const T_PRERAIN = lineAt(73.7).t - 1.1;
 scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
-  bg: t => ({ mode: 'leak', a: '#05060a', b: '#ff7418', c: '#ffd59a', amt: warmth(t) * (.85 + M.hit('snare', t, 5) * .25), speed: .5, seed: 3 }),
+  weather: t => t < T_PRERAIN ? null : ({ rain: .3 * easeIn((t - T_PRERAIN) / 1.1), n: Math.round(lerp(40, 600, easeIn((t - T_PRERAIN) / 1.1))), len: 1.2 }),   // 转场：雨开始落进回忆里
+  bg: function (t) { return { mode: 'leak', a: '#05060a', b: '#ff7418', c: '#ffd59a', amt: warmth(t) * (.85 + M.hit('snare', t, 5) * .25) * lerp(.5, 1, ease((t - this.t0) / 1.2)), speed: .5, seed: 3 }; },
   draw(c, t, lt) {
     const sp = M.hit('snare', t, 4);
     if (lt < 1.6) {                                                                 // 转场：碎玻璃落下来，慢慢变成暖色的灰尘
@@ -588,7 +595,7 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
     }
     c.globalAlpha = 1;
   },
-  fx: function (t) { return { lb: lbIn(t - this.t0, .6), grade: 'warm', gradeMix: .6 * warmth(t), grain: .14, bloom: .65, bloomThr: .5, ca: .5, vig: .95, scan: .08,
+  fx: function (t) { return { lb: lerp(.6, 1, lbIn(t - this.t0, .6)), grade: 'warm', gradeMix: .6 * warmth(t), grain: .14, bloom: .65, bloomThr: .5, ca: .5, vig: .95, scan: .08,
     flash: t >= T_HURT && t < T_HURT + 2 / 30 ? .25 : 0, flashCol: '#ff3040', dark: M.gap(t) ? .15 : 0 }; },
 });
 
@@ -738,33 +745,35 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
 });
 
 // ================================================================ 11 · GAME OVER
+// CONTINUE? 倒数：严格一秒一个数，9 → 0，数字和 CONTINUE? 同时出现；鼓停时倒数跟着暗一下。
+// 数到 0 → 标题浮现 → 灯管闪几下熄灭 → 雪花 → 黑屏。
 const T_END0 = SCENES[SCENES.length - 1].t1;
-const CD = (() => { const ev = [...D.snares, ...D.hats].filter(x => x > T_END0 + .3).sort((a, b) => a - b); const out = [T_END0]; for (const x of ev) if (x - out[out.length - 1] > .42 && out.length < 10) out.push(x); return out; })();
-const T_ZERO = CD[CD.length - 1], T_TITLE = D.snares.find(s => s > T_ZERO + .3) ?? T_ZERO + .6;
-const T_DARK = Math.max(...D.hats, ...D.snares) + .12;                                // 最后一下鼓之后灯彻底灭
+const T_CD0 = T_END0 + .1, T_ZERO = T_CD0 + 9, T_TITLE = T_ZERO + .7;
+const T_OFF = D.duration - 1.0, T_STATIC = [T_OFF + .15, T_OFF + .55];             // 灯灭 → 一阵雪花 → 黑
 function lightOn(t) {
-  if (t < T_TITLE) return 0;
-  if (t > T_DARK) return 0;
-  const g = M.gap(t); if (g) return 0;
-  const near = D.gaps.find(gg => gg[0] > t && gg[0] - t < .18);                    // 熄灭前先抖几下
-  if (near && hash(frameNo(t), 6) < .5) return .15;
-  return clamp((t - T_TITLE) / .6);
+  if (t < T_TITLE || t > T_OFF) return 0;
+  const left = T_OFF - t;                                                          // 熄灭前越闪越频繁
+  if (left < 1.3 && hash(frameNo(t), 6) < lerp(.55, .1, left / 1.3)) return .12;
+  return clamp((t - T_TITLE) / .7);
 }
 scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
   weather: (t, lt) => ({ rain: .2 * clamp(1 - lt / 8), n: 160 }),
-  bg: t => t > T_DARK + .55 && t < T_DARK + 1.05 ? { mode: 'static', a: '#000000', amt: .8 } : ({ mode: 'smoke', a: '#010103', b: '#0a0f1e', amt: .5 * clamp(1 - (t - 100) / 6), speed: .4 }),
+  bg: t => t > T_STATIC[0] && t < T_STATIC[1] ? { mode: 'static', a: '#000000', amt: .8 } : ({ mode: 'smoke', a: '#010103', b: '#0a0f1e', amt: .5 * clamp(1 - (t - 100) / 6), speed: .4 }),
   draw(c, t, lt) {
     if (t < T_TITLE) {
-      const n = Math.max(0, 9 - (lastAt(CD, t))), k = t - CD[Math.max(0, lastAt(CD, t))];
-      const out = t > T_ZERO + .2 ? (frameNo(t) % 2 ? 1 : 0) : 1;
-      if (out) {
-        const typed = 'CONTINUE?'.slice(0, Math.floor(lt / .045));                // 转场：从 CRT 缩成的点开始打字
-        if (lt < .12) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
-        c.font = `700 96px "${PIX}", monospace`; const fw = c.measureText('CONTINUE?').width;
-        pixel(c, typed, W / 2 - fw / 2, H * .3, 96, { shadow: C.red, align: 'left' });
-        if (lt < .5) return;
-        c.save(); c.translate(W / 2, H * .58); const s = 1 + .25 * Math.exp(-k * 14); c.scale(s, s); pixel(c, String(n), 0, 0, 330, { fill: n === 0 ? C.red : C.white, shadow: n === 0 ? C.black : C.red }); c.restore();
-      }
+      const n = clamp(9 - Math.floor(t - T_CD0), 0, 9), k = t < T_ZERO ? mod(t - T_CD0, 1) : t - T_ZERO;
+      const near = D.gaps.find(g => g[0] > t && g[0] - t < .15);                      // 鼓停前抖一下、鼓停时暗下去
+      const dim = M.gap(t) ? .45 : near && hash(frameNo(t), 9) < .5 ? .6 : 1;
+      const out = t > T_ZERO + .35 ? (frameNo(t) % 2 ? 1 : 0) : 1;
+      if (!out) return;
+      c.globalAlpha = dim;
+      const typed = 'CONTINUE?'.slice(0, Math.floor(lt / .045));                    // 转场：从 CRT 缩成的点开始打字
+      if (lt < .12) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
+      c.font = `700 96px "${PIX}", monospace`; const fw = c.measureText('CONTINUE?').width;
+      pixel(c, typed, W / 2 - fw / 2, H * .3, 96, { shadow: C.red, align: 'left' });
+      if (t >= T_CD0) { c.save(); c.translate(W / 2, H * .58); const sc = 1 + .22 * Math.exp(-k * 12); c.scale(sc, sc);
+        pixel(c, String(n), 0, 0, 330, { fill: n === 0 ? C.red : C.white, shadow: n === 0 ? C.black : C.red }); c.restore(); }
+      c.globalAlpha = 1;
       return;
     }
     const a = lightOn(t);
@@ -775,5 +784,6 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
     text(c, '2026', W / 2, H / 2 + 240, 24, { w: 400, fam: MONO, fill: 'rgba(255,255,255,.6)' });
     c.globalAlpha = 1;
   },
-  fx: t => ({ grain: .1, scan: .18, ca: .8, bloom: .6, flash: t >= T_TITLE && t < T_TITLE + .06 ? .4 : 0, dark: t > T_DARK + 1.05 ? 1 : 0, glitch: t > T_DARK + .55 && t < T_DARK + 1.05 ? .6 : 0, gseed: frameNo(t) }),
+  fx: t => ({ grain: .1, scan: .18, ca: .8, bloom: .6, flash: t >= T_TITLE && t < T_TITLE + .06 ? .4 : 0, dark: t > T_STATIC[1] ? 1 : 0,
+    glitch: t > T_STATIC[0] && t < T_STATIC[1] ? .6 : 0, gseed: frameNo(t) }),
 });
