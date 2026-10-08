@@ -3,7 +3,7 @@
 //   node export.mjs                          整首导出 → mv.mp4
 //   node export.mjs --from 20 --to 35        只导出一段（试看用），音频也会截取对应部分
 //   node export.mjs --shots 5,22.5,45        只截几张图到 shots/，检查画面
-//   可选：--workers 4  --fps 30  --crf 18  --out 名字.mp4
+//   可选：--workers 4  --fps 30  --crf 18  --mb 3（运动模糊子帧数，1 = 关）  --out 名字.mp4
 //
 // 每个 worker 是一个无头 Chrome，页面以 ?export=1 打开，由脚本指定每一帧的精确时间（window.__frame(t)）。
 // 帧按顺序写给 ffmpeg，所以结果与 worker 数量、机器快慢无关。
@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2), args = {};
 for (let i = 0; i < argv.length; i++) if (argv[i].startsWith('--')) args[argv[i].slice(2)] = argv[i + 1]?.startsWith('--') ? true : argv[++i] ?? true;
-const FPS = +(args.fps || 30), CRF = +(args.crf || 18);
+const FPS = +(args.fps || 30), CRF = +(args.crf || 18), SAMPLES = +(args.mb || 3);   // --mb 子帧数（运动模糊），1 = 关
 const WORKERS = args.shots ? 1 : Math.max(1, +(args.workers || Math.min(4, Math.floor(availableParallelism() / 2))));
 const PAGE = resolve(here, args.page || 'mv.html');
 const AUDIO = resolve(here, 'song.mp3');
@@ -43,7 +43,8 @@ async function launch(id) {
   profiles.push(profile);
   const proc = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', '--remote-allow-origins=*', `--user-data-dir=${profile}`,
     '--window-size=1920,1080', '--hide-scrollbars', '--mute-audio', '--no-first-run', '--no-default-browser-check',
-    '--allow-file-access-from-files', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
+    '--allow-file-access-from-files', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--enable-webgl',
+    ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
   procs.push(proc);
   let port = 0, target;
   for (let i = 0; i < 120 && !port; i++) { try { port = +readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch {} if (!port) await sleep(250); }
@@ -74,7 +75,7 @@ async function launch(id) {
   if (!ready) throw new Error(`worker ${id}：页面没有加载完成`);
   return {
     evaluate,
-    frame: async t => { const url = await evaluate(`__frame(${t})`); return Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'); },
+    frame: async t => { const url = await evaluate(`__frame(${t}, ${SAMPLES})`); return Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'); },
   };
 }
 
