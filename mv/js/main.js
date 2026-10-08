@@ -62,7 +62,7 @@ const FONTS = [`400 20px "${SANS}"`, `900 20px "${SANS}"`, `400 20px "${SERIF}"`
 const fontsReady = Promise.all(FONTS.map(f => document.fonts.load(f, '谎A'))).then(() => document.fonts.ready).then(() => true);
 window.__ready = () => fontsReady;
 window.__info = () => ({ duration: D.duration, title: D.title });
-window.__frame = (t, samples = 3) => { render(t, samples); return OUT.toDataURL('image/jpeg', .92); };
+window.__frame = (t, samples = 3, png = false) => { render(t, samples); return png ? OUT.toDataURL('image/png') : OUT.toDataURL('image/jpeg', .92); };
 
 // ---------------------------------------------------------------- 播放器
 const au = document.getElementById('au'), pp = document.getElementById('pp'), seek = document.getElementById('seek'), tm = document.getElementById('time');

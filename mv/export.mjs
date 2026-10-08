@@ -4,6 +4,7 @@
 //   node export.mjs --from 20 --to 35        只导出一段（试看用），音频也会截取对应部分
 //   node export.mjs --shots 5,22.5,45        只截几张图到 shots/，检查画面
 //   可选：--workers 4  --fps 30  --crf 18  --mb 3（运动模糊子帧数，1 = 关）  --out 名字.mp4
+//   最高画质：--png --mb 6 --crf 14 --preset slow（慢很多）
 //
 // 每个 worker 是一个无头 Chrome，页面以 ?export=1 打开，由脚本指定每一帧的精确时间（window.__frame(t)）。
 // 帧按顺序写给 ffmpeg，所以结果与 worker 数量、机器快慢无关。
@@ -18,6 +19,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2), args = {};
 for (let i = 0; i < argv.length; i++) if (argv[i].startsWith('--')) args[argv[i].slice(2)] = argv[i + 1]?.startsWith('--') ? true : argv[++i] ?? true;
 const FPS = +(args.fps || 30), CRF = +(args.crf || 18), SAMPLES = +(args.mb || 3);   // --mb 子帧数（运动模糊），1 = 关
+const PNG = !!args.png, PRESET = args.preset || 'medium';                         // --png 无损传帧；--preset slow 等
 const WORKERS = args.shots ? 1 : Math.max(1, +(args.workers || Math.min(4, Math.floor(availableParallelism() / 2))));
 const PAGE = resolve(here, args.page || 'mv.html');
 const AUDIO = resolve(here, 'song.mp3');
@@ -75,7 +77,7 @@ async function launch(id) {
   if (!ready) throw new Error(`worker ${id}：页面没有加载完成`);
   return {
     evaluate,
-    frame: async t => { const url = await evaluate(`__frame(${t}, ${SAMPLES})`); return Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'); },
+    frame: async t => { const url = await evaluate(`__frame(${t}, ${SAMPLES}, ${PNG})`); return Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'); },
   };
 }
 
@@ -98,9 +100,10 @@ const N = Math.round((T1 - T0) * FPS);
 const workers = [first, ...await Promise.all(Array.from({ length: WORKERS - 1 }, (_, i) => launch(i + 1)))];
 console.log(`导出 ${T0}s–${T1.toFixed(2)}s，${N} 帧，${workers.length} 个 worker → ${OUT}`);
 
-const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
+const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', PNG ? 'png' : 'mjpeg', '-i', '-',
   '-ss', String(T0), '-t', String(T1 - T0), '-i', AUDIO,
-  '-map', '0:v', '-map', '1:a', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF), '-pix_fmt', 'yuv420p',
+  '-map', '0:v', '-map', '1:a', '-c:v', 'libx264', '-preset', PRESET, '-crf', String(CRF), '-pix_fmt', 'yuv420p', ...(PNG ? ['-tune', 'grain'] : []),
+  '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
   '-c:a', 'aac', '-b:a', '256k', '-shortest', '-movflags', '+faststart', OUT], { stdio: ['pipe', 'inherit', 'inherit'] });
 const ffDone = new Promise((res, rej) => ff.on('close', c => c === 0 ? res() : rej(new Error(`ffmpeg 退出码 ${c}`))));
 
