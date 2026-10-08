@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DEMO · MV</title>
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
-  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: system-ui, "Noto Sans SC", "WenQuanYi Zen Hei", sans-serif; overflow: hidden; }
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: system-ui, "Noto Sans SC", sans-serif; overflow: hidden; }
   #stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
   canvas { width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; background: #000; }
   #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 10px 16px;
@@ -32,42 +33,47 @@
 // ============================================================================
 // 约定：整支 MV 就是一个函数 render(t)——给定时间（秒）画出那一帧。
 // 播放时 t 来自音频进度；导出时 t 由 export.mjs 逐帧指定，所以导出结果和机器快慢无关。
-// 画面里不要用 Math.random() 和 Date.now()，随机数用 rand(seed)，保证同一时刻每次画得一样。
+// 画面里不要用 Math.random() 和 Date.now()，随机数用 rand(seed) / hash(i)，保证同一时刻每次画得一样。
+// 分镜说明见 STORYBOARD.md。
 // ============================================================================
 const D = window.MV_DATA;
 const W = 1920, H = 1080;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const EXPORT = new URLSearchParams(location.search).has('export');
 let DEBUG = !EXPORT && new URLSearchParams(location.search).has('debug');
-const FONT = '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "WenQuanYi Zen Hei", sans-serif';
+
+// 配色：黑 / 白 / 血红，忧郁段落用冷蓝
+const C = { black: '#050506', white: '#f2f0ec', red: '#e0112b', blood: '#8a0716', blue: '#7d93ff', night: '#060b1a' };
+const SANS = 'Noto Sans SC', SERIF = 'Noto Serif SC', GOTH = 'UnifrakturMaguntia', ANTON = 'Anton', MONO = 'Space Mono';
+const fnt = (size, w = 900, fam = SANS) => `${w} ${size}px "${fam}", "${SANS}", "WenQuanYi Zen Hei", sans-serif`;
 
 // ---------------------------------------------------------------- 工具
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const lerp = (a, b, k) => a + (b - a) * k;
-const ease = k => k * k * (3 - 2 * k);
+const ease = k => { k = clamp(k); return k * k * (3 - 2 * k); };
 const easeOut = k => 1 - Math.pow(1 - clamp(k), 3);
+const mod = (a, n) => ((a % n) + n) % n;
 function rand(seed) { let a = seed | 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-
-// 二分查找：arr 中最后一个 <= t 的下标（arr 按时间升序，key 取时间）
+const hash = (i, salt = 0) => rand(i * 9973 + salt * 7919 + 17)();
 function lastAt(arr, t, key = x => x) { let lo = 0, hi = arr.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (key(arr[m]) <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+const mk = (w = W, h = H) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 
 // ---------------------------------------------------------------- 音乐时间轴查询
+const BEAT = 60 / D.bpm;
+const DOWN = new Set(D.downbeats);
 const M = {
-  // 当前能量 / 低频（0..1），按帧插值
   energy(t) { return sample(D.energy, t); },
   bass(t) { return sample(D.bass, t); },
-  // 当前拍：index、距离上一拍的秒数、0..1 的拍内相位
   beat(t) {
     const i = lastAt(D.beats, t);
-    if (i < 0) return { i: -1, since: Infinity, phase: 0 };
-    const a = D.beats[i], b = D.beats[i + 1] ?? a + 60 / D.bpm;
-    return { i, since: t - a, phase: clamp((t - a) / (b - a)) };
+    if (i < 0) return { i: -1, since: Infinity, phase: 0, down: false };
+    const a = D.beats[i], b = D.beats[i + 1] ?? a + BEAT;
+    return { i, since: t - a, phase: clamp((t - a) / (b - a)), down: DOWN.has(a) };
   },
-  // 拍点冲击：拍子落下瞬间 = 1，之后指数衰减
+  down(t) { const i = lastAt(D.downbeats, t); return { i, since: i < 0 ? Infinity : t - D.downbeats[i] }; },
   pulse(t, decay = 6) { const s = M.beat(t).since; return isFinite(s) ? Math.exp(-s * decay) : 0; },
-  downPulse(t, decay = 4) { const i = lastAt(D.downbeats, t); return i < 0 ? 0 : Math.exp(-(t - D.downbeats[i]) * decay); },
+  downPulse(t, decay = 4) { const s = M.down(t).since; return isFinite(s) ? Math.exp(-s * decay) : 0; },
   section(t) { return D.sections[Math.max(0, lastAt(D.sections, t, s => s.t))]; },
-  // 当前歌词：line 为当前句（没有则 null），k 为句内进度 0..1
   lyric(t) {
     const i = lastAt(D.lyrics, t, l => l.t);
     const line = i >= 0 && t < D.lyrics[i].end ? D.lyrics[i] : null;
@@ -75,91 +81,517 @@ const M = {
   },
 };
 function sample(arr, t) { const x = t * D.fps, i = Math.floor(x); if (i < 0) return arr[0]; if (i >= arr.length - 1) return arr[arr.length - 1]; return lerp(arr[i], arr[i + 1], x - i); }
+const lineAt = t0 => D.lyrics.find(l => Math.abs(l.t - t0) < .03);
+// 某一拍以概率 prob 触发、持续 dur 秒的事件，返回 1→0 的强度
+function beatEvent(t, prob, dur, salt) { const b = M.beat(t); return b.i >= 0 && hash(b.i, salt) < prob && b.since < dur ? 1 - b.since / dur : 0; }
 
-// ---------------------------------------------------------------- 画面（目前是占位，之后在这里加分镜）
-function render(t) {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalAlpha = 1;
-  const e = M.energy(t), p = M.pulse(t), bp = M.bass(t);
+// ---------------------------------------------------------------- 画布与后期素材
+const LAY = mk(), lx = LAY.getContext('2d');          // 场景先画在这里
+const TR = mk(), trx = TR.getContext('2d');           // RGB 错位用
+const TC = mk(), tcx = TC.getContext('2d');
+const GL = mk(), glx = GL.getContext('2d');           // 画面撕裂用
+const WV = mk(W, 420), wvx = WV.getContext('2d');     // 文字扭曲用
+const GRAIN = Array.from({ length: 6 }, (_, k) => {
+  const c = mk(640, 360), x = c.getContext('2d'), im = x.createImageData(640, 360), r = rand(100 + k);
+  for (let i = 0; i < im.data.length; i += 4) { const v = r() * 255 | 0; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+  x.putImageData(im, 0, 0); return c;
+});
+const SCAN = (() => { const c = mk(1, 3), x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, 1, 1); return ctx.createPattern(c, 'repeat'); })();
+const VIG = (() => { const g = ctx.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, W * .62); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.85)'); return g; })();
 
-  // 背景：随能量变亮
-  const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * .7);
-  g.addColorStop(0, `hsl(250, 40%, ${8 + e * 14}%)`);
-  g.addColorStop(1, '#050508');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+// ---------------------------------------------------------------- 画面元素
+function bg(c, col) { c.fillStyle = col; c.fillRect(-100, -100, W + 200, H + 200); }
 
-  // 拍点圆环
-  ctx.strokeStyle = `rgba(255,255,255,${.15 + p * .5})`;
-  ctx.lineWidth = 2 + p * 6;
-  ctx.beginPath(); ctx.arc(W / 2, H / 2 - 80, 140 + bp * 60 + p * 30, 0, Math.PI * 2); ctx.stroke();
+function fit(c, str, maxW, maxS, w = 900, fam = SANS) { c.font = fnt(100, w, fam); return Math.min(maxS, 100 * maxW / Math.max(1, c.measureText(str).width)); }
 
-  drawLyrics(t);
-  drawTitle(t);
-  if (DEBUG) drawDebug(t);
+// 逐字卡拉 OK：未唱的字用 dim 色，唱到的字叠上 lit 色；pop 为字刚亮起时的放大
+function karaoke(c, line, t, x, y, size, o = {}) {
+  const w = o.w ?? 900, fam = o.fam ?? SANS, align = o.align ?? 'center', gap = o.gap ?? 0;
+  c.font = fnt(size, w, fam);
+  const ws = line.words.map(q => ({ ...q, wd: c.measureText(q.w).width + (/^[A-Za-z0-9']+$/.test(q.w) ? size * .2 : 0) + gap }));
+  let cx = align === 'center' ? x - ws.reduce((a, q) => a + q.wd, 0) / 2 : x;
+  c.textBaseline = 'middle'; c.textAlign = 'center';
+  const a0 = c.globalAlpha;
+  ws.forEach((q, k) => {
+    const lit = clamp((t - q.t) / (o.litDur ?? .08));
+    const pop = 1 + (o.pop ?? .15) * (t >= q.t ? Math.exp(-(t - q.t) * 10) : 0);
+    c.save(); c.translate(cx + q.wd / 2, y); c.scale(pop, pop);
+    if (o.charFx) o.charFx(c, q, k, lit);
+    c.globalAlpha = a0 * (o.fadeChars ? lit : 1);
+    if (!o.fadeChars) { c.fillStyle = o.dim ?? 'rgba(255,255,255,.3)'; c.fillText(q.w, 0, 0); c.globalAlpha = a0 * lit; }
+    c.fillStyle = typeof o.lit === 'function' ? o.lit(q, k) : (o.lit ?? C.white);
+    if (o.glow) { c.shadowColor = o.glow; c.shadowBlur = 30 * lit; }
+    c.fillText(q.w, 0, o.fadeChars ? (1 - lit) * 16 : 0);
+    c.restore();
+    cx += q.wd;
+  });
+  c.globalAlpha = a0;
 }
 
-// 卡拉 OK 式歌词：已唱的字亮起，未唱的字暗；当前字有轻微放大
-function drawLyrics(t) {
-  const { line, next } = M.lyric(t);
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  if (line) {
-    const size = 64, y = H - 220;
-    ctx.font = `600 ${size}px ${FONT}`;
-    const widths = line.words.map(w => ctx.measureText(w.w).width + (/^[A-Za-z0-9']+$/.test(w.w) ? size * .3 : 0));
-    let x = W / 2 - widths.reduce((a, b) => a + b, 0) / 2;
-    const fadeIn = easeOut((t - line.t) / .25), fadeOut = clamp((line.end - t) / .2);
-    line.words.forEach((w, k) => {
-      const lit = clamp((t - w.t) / .12);
-      const s = 1 + .12 * Math.exp(-Math.max(0, t - w.t) * 8) * (t >= w.t ? 1 : 0);
-      ctx.save();
-      ctx.globalAlpha = fadeIn * fadeOut;
-      ctx.translate(x + widths[k] / 2, y + (1 - fadeIn) * 20); ctx.scale(s, s);
-      ctx.fillStyle = `rgba(${lerp(120, 255, lit)},${lerp(120, 240, lit)},${lerp(140, 255, lit)},1)`;
-      ctx.shadowColor = `rgba(200,180,255,${lit * .8})`; ctx.shadowBlur = 24 * lit;
-      ctx.textAlign = 'center'; ctx.fillText(w.w, 0, 0);
-      ctx.restore();
-      x += widths[k];
+// 砸字：t0 时刻从放大状态砸下来，带衰减的抖动
+function slam(c, t, t0, seed, fn) {
+  const k = Math.max(0, t - t0), s = 1 + .4 * Math.exp(-k * 20), sh = 40 * Math.exp(-k * 12);
+  c.save(); c.translate(W / 2 + (hash(seed, 1) - .5) * sh, H / 2 + (hash(seed, 2) - .5) * sh); c.scale(s, s); fn(); c.restore();
+}
+
+function rain(c, t, o) {
+  const r = rand(o.seed ?? 1), span = H + 400;
+  c.save(); c.strokeStyle = o.col ?? 'rgb(170,190,255)'; c.lineCap = 'round';
+  for (let i = 0; i < o.n; i++) {
+    const x0 = r() * (W + 600) - 300, sp = o.spd * (.6 + r() * .7), len = o.len * (.5 + r()), ph = r(), a = o.alpha * (.3 + r() * .7), lw = .8 + r() * 1.8;
+    const y = mod(ph * span + t * sp, span) - 200, x = x0 - y * o.wind;
+    c.globalAlpha = a; c.lineWidth = lw; c.beginPath(); c.moveTo(x, y); c.lineTo(x - len * o.wind, y + len); c.stroke();
+  }
+  c.restore();
+}
+
+function bokeh(c, t, o) {
+  const r = rand(o.seed ?? 3);
+  for (let i = 0; i < o.n; i++) {
+    const x = r() * W + Math.sin(t * .15 + r() * 6) * 50, y = r() * H * .85, R = 30 + r() * 110, col = o.cols[r() * o.cols.length | 0], a = o.alpha * (.4 + r() * .6);
+    const g = c.createRadialGradient(x, y, 0, x, y, R);
+    g.addColorStop(0, `rgba(${col},${a})`); g.addColorStop(.75, `rgba(${col},${a * .5})`); g.addColorStop(1, `rgba(${col},0)`);
+    c.fillStyle = g; c.fillRect(x - R, y - R, 2 * R, 2 * R);
+  }
+}
+
+function dust(c, t, n, seed, a = .3) {
+  const r = rand(seed); c.save(); c.fillStyle = '#fff';
+  for (let i = 0; i < n; i++) {
+    const x = mod(r() * W + t * (r() - .5) * 30, W), y = mod(r() * H - t * (8 + r() * 14), H), s = .6 + r() * 2.2;
+    c.globalAlpha = a * (.3 + .7 * (.5 + .5 * Math.sin(t * (1 + r() * 2) + r() * 6))); c.fillRect(x, y, s, s);
+  }
+  c.restore();
+}
+
+// 背景里横向滚动的空心哥特字
+function bgRows(c, t, str, o) {
+  c.save(); c.font = fnt(o.size, 400, GOTH); c.strokeStyle = o.col; c.lineWidth = 2; c.textBaseline = 'middle'; c.textAlign = 'left';
+  const unit = c.measureText(str + '   ').width;
+  for (let row = 0; row < o.rows; row++) {
+    const y = (row + .5) * H / o.rows;
+    for (let x = -mod(t * o.spd * (row % 2 ? 1 : -1) + row * 137, unit); x < W; x += unit) c.strokeText(str, x, y);
+  }
+  c.restore();
+}
+
+// 警戒带式的滚动字条
+function tape(c, t, y, ang, text, spd, bgc, fgc) {
+  c.save(); c.translate(W / 2, y); c.rotate(ang);
+  c.fillStyle = bgc; c.fillRect(-W, -40, 2 * W, 80);
+  c.fillStyle = fgc; c.font = fnt(46, 400, ANTON); c.textBaseline = 'middle'; c.textAlign = 'left';
+  const u = c.measureText(text).width;
+  for (let x = -W - mod(t * spd, u); x < W; x += u) c.fillText(text, x, 3);
+  c.restore();
+}
+
+// 横向波浪扭曲：先把内容画到 WV，再一行行错开贴回来
+function wavy(c, cy, amp, t, fn) {
+  wvx.setTransform(1, 0, 0, 1, 0, 0); wvx.clearRect(0, 0, W, 420);
+  wvx.translate(W / 2, 210); fn(wvx); wvx.setTransform(1, 0, 0, 1, 0, 0);
+  for (let y = 0; y < 420; y += 4) c.drawImage(WV, 0, y, W, 4, Math.sin(y * .045 + t * 14) * amp + (hash(y + (t * 15 | 0), 9) - .5) * amp * .4, cy - 210 + y, W, 4);
+}
+
+function hud(c, t, o = {}) {
+  c.save(); c.font = fnt(28, 400, MONO); c.textBaseline = 'top'; c.fillStyle = C.white; c.globalAlpha = o.a ?? .8;
+  const m = o.m ?? 70, top = o.lb ? 56 : m - 20, bot = o.lb ? H - 84 : H - m - 10;     // 有黑边时放进黑边里
+  c.textAlign = 'left';
+  if (mod(t, 1) < .55) { c.fillStyle = C.red; c.beginPath(); c.arc(m + 14, top + 16, 12, 0, 7); c.fill(); }
+  c.fillStyle = C.white; c.fillText(o.label ?? 'REC', m + 40, top);
+  c.fillText(o.mode ?? 'SP ▶ PLAY', m, bot);
+  c.textAlign = 'right';
+  c.fillText('CH-03  ▮▮▮▯', W - m, top);
+  const f = Math.floor(t * 30), tc = [f / 108000 | 0, (f / 1800 | 0) % 60, (f / 30 | 0) % 60, f % 30].map(v => String(v).padStart(2, '0')).join(':');
+  c.fillText('TC ' + tc, W - m, bot);
+  c.restore();
+}
+
+function woah(c, t, t0, col) {
+  const k = t - t0, size = fit(c, 'woah', W * .62, 560, 400, GOTH);
+  c.save(); c.font = fnt(size, 400, GOTH); c.textAlign = 'center'; c.textBaseline = 'middle';
+  for (let j = 6; j >= 0; j--) {                                   // 拖影
+    c.save(); c.translate(W / 2 - j * 46 * clamp(k * 3), H / 2 + (hash(j + (t * 20 | 0), 4) - .5) * 10 * j); c.scale(1.45 + k * .08, 1);
+    c.globalAlpha = j ? .12 : 1; c.fillStyle = j ? C.red : col;
+    c.fillText('woah', 0, 0); c.restore();
+  }
+  c.restore();
+}
+
+// ---------------------------------------------------------------- 分镜
+// 每个场景：t0..t1（秒），draw(c, t, lt) 画画面，fx(t, lt) 返回后期参数
+const FX0 = { ca: 1, grain: .2, scan: .18, vig: .8, glitch: 0, flash: 0, flashCol: '255,255,255', invert: 0, dark: 0, lb: 0, hud: 0, shake: 0 };
+const SCENES = [];
+const scene = o => (SCENES.push(o), o);
+
+// 0 · 开机：录像带雪花，"DEMO" 闪现
+scene({ name: '开机', t0: 0, t1: D.downbeats[0],
+  draw(c, t, lt) {
+    bg(c, C.black);
+    c.font = fnt(30, 400, MONO); c.fillStyle = C.white; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.globalAlpha = mod(t, .5) < .3 ? .8 : 0; c.fillText('▶ PLAY', W / 2, H / 2); c.globalAlpha = 1;
+    if (lt > 1.2 && (t * 30 | 0) % 3 === 0) { c.font = fnt(300, 400, GOTH); c.fillText(D.title, W / 2, H / 2); }
+  },
+  fx: (t, lt) => ({ grain: .55 - lt * .15, scan: .4, ca: 3, hud: 1, glitch: lt > 1.2 ? .6 : 0 }),
+});
+
+// 1 · 频闪开场：每拍换一个词，正片/反色/红底交替
+const INTRO_WORDS = ['连击', '击倒', '失态', '空白', '病态', '救赎', '决赛', '谎话', '大雨', '期待'];
+scene({ name: '频闪开场', t0: D.downbeats[0], t1: 10.0,
+  draw(c, t, lt) {
+    const b = M.beat(t), n = b.i - lastAt(D.beats, this.t0 + .01);
+    const inv = n % 2 === 1, red = !b.down && hash(b.i, 3) < .25;
+    bg(c, red ? C.red : inv ? C.white : C.black);
+    const fg = inv && !red ? C.black : C.white;
+    // 几道横线
+    const r = rand(b.i * 31); c.fillStyle = fg;
+    for (let k = 0; k < 4; k++) { c.globalAlpha = .5; c.fillRect(0, r() * H, W, 1 + r() * 5); }
+    c.globalAlpha = 1;
+    const word = b.down ? D.title : INTRO_WORDS[mod(n, INTRO_WORDS.length)];
+    const fam = b.down ? GOTH : SANS, w = b.down ? 400 : 900;
+    const size = fit(c, word, W * (b.down ? .7 : .5), 480, w, fam);
+    slam(c, t, D.beats[b.i], b.i, () => { c.font = fnt(size, w, fam); c.fillStyle = fg; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(word, 0, 0); });
+    c.font = fnt(26, 400, MONO); c.textAlign = 'left'; c.fillStyle = fg;
+    c.fillText(`${String(n + 1).padStart(3, '0')} / BEAT`, 70, H - 80);
+  },
+  fx: t => { const b = M.beat(t); return { ca: 2 + M.pulse(t) * 9, grain: .25, scan: .25, glitch: beatEvent(t, .35, .12, 1), flash: b.down ? Math.exp(-b.since * 25) * .8 : 0, shake: M.pulse(t, 10) * 10 }; },
+});
+
+// 2 · 标题：哥特 DEMO + 红色警戒带 + 背景滚动空心字
+scene({ name: '标题', t0: 10.0, t1: 21.5,
+  draw(c, t, lt) {
+    bg(c, C.black);
+    const bp = M.bass(t), p = M.pulse(t);
+    const g = c.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * .55);
+    g.addColorStop(0, `rgba(140,8,24,${.25 + bp * .35})`); g.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    bgRows(c, t, D.title, { size: 150, rows: 6, spd: 60, col: 'rgba(255,255,255,.06)' });
+    tape(c, t, 150, -.06, `${D.title}  //  我试着不去猜  //  `, 220, C.red, C.black);
+    tape(c, t, H - 150, -.06, `别让我在你面前就失态  //  ${D.title}  //  `, -260, C.white, C.black);
+    const end = this.t1 - t;
+    if (end < .5) return;                                        // 最后半秒交给雪花
+    const vis = end > 1.3 || (t * 30 | 0) % 2 === 0;
+    if (vis) {
+      const s = 1 + p * .06 + bp * .03;
+      c.save(); c.translate(W / 2, H / 2 - 20); c.scale(s, s); c.font = fnt(340, 400, GOTH); c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = C.red; c.fillText(D.title, 10, 10); c.fillStyle = C.white; c.fillText(D.title, 0, 0); c.restore();
+      c.font = fnt(28, 400, MONO); c.fillStyle = C.white; c.textAlign = 'center'; c.globalAlpha = .75;
+      c.fillText(`NOW PLAYING  ·  ${D.title}${D.artist ? '  ·  ' + D.artist : ''}  ·  2026`, W / 2, H / 2 + 170); c.globalAlpha = 1;
+    }
+  },
+  fx(t, lt) {
+    const d = M.down(t), end = this.t1 - t;
+    return { ca: 3 + M.bass(t) * 6 + (end < 1.3 ? 10 : 0), grain: end < .5 ? .7 : .22, scan: .25, hud: 1,
+      glitch: Math.max(beatEvent(t, .25, .1, 2), end < 1.3 ? .8 : 0, lt < .4 ? 1 - lt / .4 : 0),
+      flash: Math.exp(-d.since * 14) * .5, shake: M.pulse(t, 10) * 6 };
+  },
+});
+
+// 3 · 主歌一：冷蓝雨夜，路灯光斑，字幕在左下
+scene({ name: '雨夜', t0: 21.5, t1: 32.4,
+  draw(c, t, lt) {
+    const z = 1 + lt * .006;
+    c.save(); c.translate(W / 2, H / 2); c.scale(z, z); c.translate(-W / 2, -H / 2);
+    const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#03060f'); g.addColorStop(1, '#0d1833'); c.fillStyle = g; c.fillRect(-100, -100, W + 200, H + 200);
+    bokeh(c, t, { n: 16, seed: 5, cols: ['90,124,255', '90,124,255', '120,150,255', '255,170,90'], alpha: .16 });
+    const { line } = M.lyric(t);
+    if (line) {                                                   // 右侧竖排大字（很淡）
+      c.font = fnt(170, 900, SERIF); c.fillStyle = 'rgba(160,180,255,.07)'; c.textAlign = 'center'; c.textBaseline = 'top';
+      [...line.text].forEach((ch, k) => c.fillText(ch, W - 260, 120 + k * 170));
+    }
+    rain(c, t, { n: 280, spd: 1500, len: 50, alpha: .28, wind: .2, seed: 1 });
+    c.restore();
+    if (line) {
+      const idx = D.lyrics.indexOf(line) + 1, a = easeOut((t - line.t) / .2);
+      c.globalAlpha = a;
+      c.font = fnt(26, 400, MONO); c.fillStyle = C.blue; c.textAlign = 'left'; c.textBaseline = 'middle';
+      c.fillText(`[${(line.t / 60 | 0).toString().padStart(2, '0')}:${(line.t % 60).toFixed(2).padStart(5, '0')}]  ${String(idx).padStart(2, '0')}/${D.lyrics.length}`, 150, H - 330);
+      karaoke(c, line, t, 150, H - 260, 80, { align: 'left', dim: 'rgba(200,210,255,.25)', glow: 'rgba(125,147,255,.9)' });
+      c.globalAlpha = 1;
+    }
+    if (lt < .5) { c.fillStyle = `rgba(0,0,0,${1 - lt / .5})`; c.fillRect(0, 0, W, H); }
+  },
+  fx(t, lt) {
+    const end = this.t1 - t, pre = end < .8 && (t * 15 | 0) % 2 === 0;           // 进副歌前的频闪
+    return { ca: 1.2 + M.pulse(t) * 2.5, grain: .22, scan: .18, lb: 1, hud: 1,
+      glitch: beatEvent(t, .08, .1, 4), dark: beatEvent(t, .12, .2, 5) && (t * 30 | 0) % 2 ? .7 : 0, flash: pre ? .55 : 0 };
+  },
+});
+
+// 4/7 · 副歌：整句砸在屏幕中央，重拍反色，红闪；第二遍更狠（倒影、扭曲、逐拍反色）
+function hookDraw(c, t, lt, intense) {
+  const b = M.beat(t), d = M.down(t);
+  const inv = intense ? (t > 56 && t < 61.5 ? b.i % 2 === 1 : d.i % 2 === 1 && d.since < BEAT) : d.i % 2 === 1 && d.since < BEAT;
+  const red = hash(b.i, 7) < (intense ? .3 : .18) && b.since < .12;
+  bg(c, red ? C.red : inv ? C.white : C.black);
+  const fg = inv && !red ? C.black : C.white;
+  bgRows(c, t, D.title, { size: 170, rows: 5, spd: intense ? 160 : 90, col: inv ? 'rgba(0,0,0,.08)' : 'rgba(255,255,255,.07)' });
+  const { line } = M.lyric(t);
+  if (!line) return;
+  if (line.text === 'woah') return woah(c, t, line.t, fg);
+  const size = fit(c, line.text, W * .82, 250);
+  const litCol = red ? C.white : C.red;
+  const draw = (cc, alpha = 1) => {
+    cc.globalAlpha = alpha;
+    if (line.text.includes('连击')) {                            // 连击：身后叠几层残影
+      for (let j = 3; j > 0; j--) { cc.save(); cc.translate(j * 22 * (b.since < .2 ? 1 : .4), -j * 14); cc.globalAlpha = alpha * .18; cc.font = fnt(size, 900); cc.fillStyle = litCol; cc.textAlign = 'center'; cc.textBaseline = 'middle'; cc.fillText(line.text, 0, 0); cc.restore(); }
+      cc.globalAlpha = alpha;
+    }
+    karaoke(cc, line, t, 0, 0, size, { dim: fg, lit: litCol, pop: .25 });
+    cc.globalAlpha = 1;
+  };
+  const knocked = line.text.includes('击倒') ? easeOut((t - line.words[line.words.length - 1].t) / .15) : 0;
+  if (line.text.includes('病态') && intense) {
+    wavy(c, H / 2, 30 + M.pulse(t) * 60, t, cc => draw(cc));
+  } else {
+    slam(c, t, line.t, D.lyrics.indexOf(line), () => { c.rotate(-.09 * knocked); c.translate(0, knocked * 30); draw(c); });
+  }
+  if (intense) {                                                  // 倒影
+    c.save(); c.translate(W / 2, H / 2 + size * 1.15); c.scale(1, -1); draw(c, .18); c.restore();
+  }
+}
+const hookFx = intense => (t, lt) => {
+  const b = M.beat(t), d = M.down(t), { line } = M.lyric(t);
+  const knock = line && line.text.includes('击倒') ? beatEvent(t, 1, .14, 0) : 0;
+  return { ca: (intense ? 4 : 2.5) + M.pulse(t) * 10 + M.bass(t) * 3, grain: .24, scan: .22,
+    glitch: Math.max(beatEvent(t, intense ? .45 : .25, .12, 8), knock),
+    flash: Math.max(Math.exp(-d.since * 18) * .7, b.since < .05 && intense ? .4 : 0, knock && (t * 30 | 0) % 2 ? 1 : 0),
+    shake: M.pulse(t, 9) * (intense ? 22 : 14) + M.bass(t) * 5 };
+};
+scene({ name: '副歌一', t0: 32.4, t1: 42.6, draw: (c, t, lt) => hookDraw(c, t, lt, false), fx: hookFx(false) });
+
+// 5 · 主歌二前半：聊天记录。你说的在左，我回的在右；bullshxt 打码闪烁
+const CHAT = [[42.86, 'L'], [43.50, 'L'], [44.92, 'R'], [46.06, 'R']].map(([t0, who]) => ({ line: lineAt(t0), who }));
+scene({ name: '聊天', t0: 42.6, t1: 47.2,
+  draw(c, t, lt) {
+    bg(c, '#08080b');
+    const px = W / 2 - 520, pw = 1040;
+    c.fillStyle = 'rgba(255,255,255,.04)'; c.fillRect(px, 0, pw, H);
+    c.font = fnt(34, 900); c.fillStyle = C.white; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('你', W / 2, 70);
+    const shown = CHAT.filter(m => m.line && t >= m.line.t);
+    const typing = CHAT.find((m, k) => m.line && t < m.line.t && t > m.line.t - .5 && (k === 0 || CHAT[k - 1].line.t < m.line.t - .5));
+    c.font = fnt(24, 400); c.fillStyle = 'rgba(255,255,255,.45)'; c.fillText(typing && typing.who === 'L' ? '对方正在输入…' : '在线', W / 2, 112);
+    c.fillStyle = 'rgba(255,255,255,.1)'; c.fillRect(px, 150, pw, 1);
+    const items = [...shown]; if (typing) items.push({ typing: true, who: typing.who, line: typing.line });
+    let y = H - 150;
+    for (let k = items.length - 1; k >= 0; k--) {
+      const m = items[k], txt = m.typing ? '· · ·' : m.line.text, size = 52;
+      c.font = fnt(size, 900); const tw = c.measureText(txt).width, bw = tw + 80, bh = 100;
+      const app = m.typing ? 1 : easeOut((t - m.line.t) / .18), s = .85 + .15 * app;
+      const bx = m.who === 'L' ? px + 50 : px + pw - 50 - bw;
+      c.save(); c.globalAlpha = app; c.translate(bx + bw / 2, y - bh / 2); c.scale(s, s);
+      c.fillStyle = m.who === 'L' ? '#2a2a31' : C.red;
+      c.beginPath(); c.roundRect(-bw / 2, -bh / 2, bw, bh, 30); c.fill();
+      c.fillStyle = C.white; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const bs = !m.typing && txt.includes('bullshxt');
+      c.save(); if (bs && (t * 12 | 0) % 4 === 0) c.translate((hash(t * 30 | 0, 3) - .5) * 30, 0); c.fillText(txt, 0, 2); c.restore();
+      if (bs && (t * 12 | 0) % 3 !== 0) {                        // 打码条盖住 "shxt"
+        const full = c.measureText(txt).width, cut = c.measureText(txt.replace('shxt', '')).width;
+        c.fillStyle = '#000'; c.fillRect(-full / 2 + cut, -size * .42, full - cut, size * .84);
+      }
+      c.restore();
+      if (!m.typing && m.who === 'R' && k === items.length - 1) { c.font = fnt(20, 400); c.fillStyle = 'rgba(255,255,255,.4)'; c.textAlign = 'right'; c.fillText('已读', bx - 14, y - 20); }
+      y -= bh + 34 * app + 0;
+    }
+  },
+  fx: t => ({ ca: .8 + M.pulse(t) * 1.5, grain: .24, scan: .2, glitch: beatEvent(t, .15, .1, 11), dark: beatEvent(t, .1, .15, 12) && (t * 30 | 0) % 2 ? .6 : 0 }),
+});
+
+// 6 · 主歌二后半：四句"……我"叠成一列，最后一个"我"永远是红的
+const STACK = [47.37, 48.63, 49.94, 51.15].map(lineAt);
+scene({ name: '都是我', t0: 47.2, t1: 52.8,
+  draw(c, t, lt) {
+    bg(c, C.black);
+    c.save(); c.translate(W - 420, H / 2 + 40); c.rotate(Math.sin(t * .5) * .05 + M.pulse(t) * .03);
+    c.font = fnt(900, 900, SERIF); c.strokeStyle = `rgba(224,17,43,${.18 + M.pulse(t) * .25 + lt * .03})`; c.lineWidth = 4; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.strokeText('我', 0, 0); c.restore();
+    const cur = STACK.filter(l => l && t >= l.t).length - 1;
+    STACK.forEach((l, k) => {
+      if (!l || t < l.t) return;
+      const x = 150 - 260 * (1 - easeOut((t - l.t) / .15)), y = 250 + k * 190;
+      c.globalAlpha = k === cur ? 1 : .32;
+      karaoke(c, l, t, x, y, 130, { align: 'left', dim: k === cur ? 'rgba(255,255,255,.3)' : C.white, lit: (q, j) => j === l.words.length - 1 ? C.red : C.white, pop: .3 });
+      c.globalAlpha = 1;
     });
+  },
+  fx(t, lt) {
+    const d = M.down(t), end = this.t1 - t;
+    return { ca: 2 + M.pulse(t) * 5, grain: .22, scan: .2, glitch: Math.max(beatEvent(t, .2, .1, 13), t > 51.15 ? .35 : 0),
+      flash: Math.exp(-d.since * 16) * .35, invert: end < .3 && (t * 30 | 0) % 2 ? 1 : 0, shake: M.pulse(t, 10) * 8 };
+  },
+});
+
+scene({ name: '副歌二', t0: 52.8, t1: 62.8, draw: (c, t, lt) => hookDraw(c, t, lt, true), fx: hookFx(true) });
+
+// 8 · 桥段：忧郁。两个光点（我们）靠近、相连，"伤害"时连线断开，越飘越远
+scene({ name: '曾经相识', t0: 62.8, t1: 74.0,
+  draw(c, t, lt) {
+    const g = c.createRadialGradient(W / 2, H * .45, 0, W / 2, H * .45, W * .6); g.addColorStop(0, '#141925'); g.addColorStop(1, '#020203');
+    c.fillStyle = g; c.fillRect(-100, -100, W + 200, H + 200);
+    dust(c, t, 140, 21, .35);
+    const hurt = 67.87, dist = t < hurt ? lerp(560, 150, ease((t - 62.8) / (hurt - 62.8))) : lerp(150, 1100, ease((t - hurt) / 6));
+    const cy = H * .38 + Math.sin(t * .6) * 10, ax = W / 2 - dist / 2, bx = W / 2 + dist / 2;
+    const broken = t >= hurt, flick = broken && t < hurt + .6 ? (t * 20 | 0) % 2 : 1;
+    if (!broken || t < hurt + .6) {
+      c.strokeStyle = `rgba(220,230,255,${.45 * flick})`; c.lineWidth = 1.5; c.beginPath(); c.moveTo(ax, cy); c.lineTo(bx, cy); c.stroke();
+    }
+    const fadeB = broken ? 1 - clamp((t - hurt) / 6) * .6 : 1;
+    [[ax, 1], [bx, fadeB]].forEach(([x, a]) => {
+      const rg = c.createRadialGradient(x, cy, 0, x, cy, 60); rg.addColorStop(0, `rgba(235,240,255,${a})`); rg.addColorStop(.12, `rgba(200,215,255,${.6 * a})`); rg.addColorStop(1, 'rgba(120,140,255,0)');
+      c.fillStyle = rg; c.fillRect(x - 60, cy - 60, 120, 120);
+    });
+    const { line } = M.lyric(t);
+    if (line) {
+      const size = fit(c, line.text, W * .78, 68, 400, SERIF), out = clamp((line.end - t) / .25);
+      c.globalAlpha = out;
+      karaoke(c, line, t, W / 2, H * .68, size, { w: 400, fam: SERIF, fadeChars: true, litDur: .35, pop: 0, lit: '#e6e9f2' });
+      c.globalAlpha = 1;
+    }
+  },
+  fx: t => ({ ca: .6, grain: .28, scan: .12, lb: 1, glitch: beatEvent(t, .04, .08, 14), dark: beatEvent(t, .1, .25, 15) && (t * 30 | 0) % 3 === 0 ? .55 : 0 }),
+});
+
+// 9 · 大雨：字像雨滴一样落下；"假"和"谎话"在闪；闪电
+const LIGHTNING = [74.22, 75.88, 78.39, 84.3];
+function lightning(t) {
+  let v = 0;
+  for (const l of LIGHTNING) { const k = t - l; if (k >= 0 && k < 1) v = Math.max(v, k < .05 ? 1 : k < .1 ? .15 : k < .17 ? .8 : Math.exp(-(k - .17) * 7) * .5); }
+  return v;
+}
+const FALL = lineAt(74.22);
+scene({ name: '大雨', t0: 74.0, t1: 87.3,
+  draw(c, t, lt) {
+    const L = lightning(t);
+    const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, `rgb(${4 + L * 40},${7 + L * 50},${16 + L * 70})`); g.addColorStop(1, '#0b1428'); c.fillStyle = g; c.fillRect(-100, -100, W + 200, H + 200);
+    bokeh(c, t, { n: 14, seed: 8, cols: ['90,124,255', '255,170,90'], alpha: .1 });
+    const heavy = t < 82.4 ? 1 : 1 - clamp((t - 82.4) / 5) * .6;
+    rain(c, t, { n: Math.round(620 * heavy), spd: 1900, len: 70, alpha: .34, wind: .25, seed: 2 });
+    // 玻璃上的水珠
+    const r = rand(44);
+    for (let i = 0; i < 40; i++) {
+      const x = r() * W, y0 = r() * H, sl = r() < .3 ? mod(t * (20 + r() * 60), H) : 0, rr = 3 + r() * 9, y = mod(y0 + sl, H);
+      const dg = c.createRadialGradient(x - rr * .3, y - rr * .3, 0, x, y, rr); dg.addColorStop(0, 'rgba(230,240,255,.5)'); dg.addColorStop(1, 'rgba(120,150,255,.05)');
+      c.fillStyle = dg; c.beginPath(); c.arc(x, y, rr, 0, 7); c.fill();
+    }
+    const { line } = M.lyric(t);
+    if (!line) return;
+    const out = clamp((line.end - t) / .3);
+    c.globalAlpha = out;
+    if (line === FALL) {                                          // 字从天上落下来
+      const size = 110; c.font = fnt(size, 900, SERIF);
+      const ws = line.words.map(q => c.measureText(q.w).width); let x = W / 2 - ws.reduce((a, b) => a + b, 0) / 2;
+      line.words.forEach((q, k) => {
+        const f = clamp((t - q.t + .25) / .45), y = lerp(-120, H * .55, f * f), sq = f >= 1 ? 1 + .25 * Math.exp(-(t - q.t - .2) * 12) : 1;
+        if (f > 0) { c.save(); c.translate(x + ws[k] / 2, y); c.scale(1 / sq, sq); c.fillStyle = C.white; c.textAlign = 'center'; c.textBaseline = 'alphabetic'; c.fillText(q.w, 0, 0); c.restore(); }
+        x += ws[k];
+      });
+    } else {
+      const size = fit(c, line.text, W * .8, 76, 400, SERIF);
+      karaoke(c, line, t, W / 2, H * .55, size, { w: 400, fam: SERIF, fadeChars: true, litDur: .3, pop: 0,
+        lit: q => q.w === '假' || q.w === '谎' || q.w === '话' && line.text.includes('谎话') ? C.red : C.white,
+        charFx: (cc, q) => { if ((q.w === '假' || (line.text.includes('谎话') && (q.w === '谎' || q.w === '话'))) && (t * 15 | 0) % 3 === 0) cc.translate((hash(t * 30 | 0, q.w.charCodeAt(0)) - .5) * 24, 0); } });
+    }
+    c.globalAlpha = 1;
+  },
+  fx: (t, lt) => { const L = lightning(t); return { ca: 1 + L * 4, grain: .25, scan: .15, lb: 1, hud: t > 82.4 ? 1 : 0, flash: L * .7, flashCol: '205,220,255' }; },
+});
+
+// 10 · 闪回：每拍切一个前面出现过的画面，倒带 HUD
+const MEMORY = [2.4, 12.6, 25.0, 33.9, 36.2, 44.95, 49.95, 54.4, 57.9, 66.5, 74.9, 76.2, 13.8, 38.7];
+scene({ name: '闪回', t0: 87.3, t1: 94.2,
+  draw(c, t, lt) {
+    const b = M.beat(t), k = b.i - lastAt(D.beats, this.t0 + .01), mt = MEMORY[mod(k, MEMORY.length)] + b.since;
+    const s = sceneAt(mt);
+    c.save(); s.draw(c, mt, mt - s.t0); c.restore();
+    c.strokeStyle = C.red; c.lineWidth = 6; c.strokeRect(40, 40, W - 80, H - 80);
+  },
+  fx: t => { const b = M.beat(t); return { ca: 6 + M.pulse(t) * 8, grain: .3, scan: .3, glitch: .35 + M.pulse(t) * .6, flash: Math.exp(-b.since * 30) * .9, hud: 1, hudMode: '◀◀ REW', shake: M.pulse(t, 10) * 12 }; },
+});
+
+// 11 · 片尾：雨停，DEMO 慢慢浮现，像坏掉的灯管一样闪几下后熄灭
+scene({ name: '片尾', t0: 94.2, t1: D.duration + 1,
+  draw(c, t, lt) {
+    bg(c, C.black);
+    rain(c, t, { n: 160, spd: 1500, len: 50, alpha: .22 * (1 - clamp(lt / 9)), wind: .2, seed: 3 });
+    const a = clamp((t - 95.5) / 1.5) * (t < 100 ? 1 : (hash(t * 30 | 0, 5) < lerp(.9, .2, clamp((t - 100) / 4)) ? 1 : .1)) * (t < 104.5 ? 1 : 0);
+    if (a > 0) {
+      c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.font = fnt(170, 400, GOTH); c.fillStyle = C.white; c.fillText(D.title, W / 2, H / 2 - 30);
+      c.font = fnt(26, 400, MONO); c.fillStyle = 'rgba(255,255,255,.6)'; c.fillText(D.artist ? `${D.artist}  ·  2026` : '2026', W / 2, H / 2 + 90);
+      c.globalAlpha = 1;
+    }
+  },
+  fx: t => ({ ca: .8, grain: t > 105.8 && t < 106.6 ? .8 : .28, scan: .25, glitch: t > 105.8 && t < 106.6 ? 1 : 0 }),
+});
+
+function sceneAt(t) { for (let i = SCENES.length - 1; i >= 0; i--) if (t >= SCENES[i].t0) return SCENES[i]; return SCENES[0]; }
+
+// ---------------------------------------------------------------- 后期：RGB 错位、撕裂、闪光、颗粒、扫描线、暗角、黑边、HUD
+function chroma(px) {
+  if (px < .4) { ctx.drawImage(LAY, 0, 0); return; }
+  for (const [x, col] of [[trx, '#f00'], [tcx, '#0ff']]) {
+    x.globalCompositeOperation = 'source-over'; x.drawImage(LAY, 0, 0);
+    x.globalCompositeOperation = 'multiply'; x.fillStyle = col; x.fillRect(0, 0, W, H);
   }
-  // 下一句预告（小字、暗）
-  if (next && next.t - t < 3 && (!line || next.t > line.t)) {
-    ctx.globalAlpha = clamp((3 - (next.t - t)) / 1) * .45;
-    ctx.font = `400 34px ${FONT}`; ctx.fillStyle = '#aaa'; ctx.textAlign = 'center';
-    ctx.fillText(next.text, W / 2, H - 140);
-    ctx.globalAlpha = 1;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(TR, px, 0); ctx.drawImage(TC, -px, 0);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function glitch(t, amt) {
+  glx.drawImage(cv, 0, 0);
+  const r = rand((t * 15 | 0) * 131), n = 3 + (r() * 9 * amt | 0);
+  for (let i = 0; i < n; i++) {
+    const y = r() * H, h = 4 + r() * 90 * amt, dx = (r() - .5) * 220 * amt;
+    ctx.drawImage(GL, 0, y, W, h, dx, y, W, h);
   }
 }
 
-// 片头标题：第一句歌词之前显示
-function drawTitle(t) {
-  const first = D.lyrics.length ? D.lyrics[0].t : 5;
-  const a = clamp(t / 1.5) * clamp((first - 1 - t) / 1.5);
-  if (a <= 0) return;
-  ctx.globalAlpha = a; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
-  ctx.font = `700 120px ${FONT}`; ctx.fillText(D.title, W / 2, H / 2 - 80);
-  if (D.artist) { ctx.font = `400 40px ${FONT}`; ctx.fillStyle = '#bbb'; ctx.fillText(D.artist, W / 2, H / 2 + 40); }
-  ctx.globalAlpha = 1;
+function render(t) {
+  const s = sceneAt(t), lt = t - s.t0;
+  const fx = { ...FX0, ...(s.fx ? s.fx.call(s, t, lt) : {}) };
+  // 场景（带镜头抖动）
+  lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.shadowBlur = 0;
+  if (fx.shake) { const k = t * 30 | 0; lx.translate((hash(k, 21) - .5) * fx.shake, (hash(k, 22) - .5) * fx.shake); }
+  s.draw.call(s, lx, t, lt);
+  lx.setTransform(1, 0, 0, 1, 0, 0);
+  // 合成
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  chroma(fx.ca);
+  if (fx.glitch > .02) glitch(t, fx.glitch);
+  if (fx.invert) { ctx.globalCompositeOperation = 'difference'; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.globalCompositeOperation = 'source-over'; }
+  if (fx.flash > .01) { ctx.fillStyle = `rgba(${fx.flashCol},${clamp(fx.flash)})`; ctx.fillRect(0, 0, W, H); }
+  if (fx.dark) { ctx.fillStyle = `rgba(0,0,0,${fx.dark})`; ctx.fillRect(0, 0, W, H); }
+  if (fx.grain) {
+    const f = t * 24 | 0;
+    ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = fx.grain;
+    ctx.drawImage(GRAIN[f % 6], -hash(f, 31) * 200, -hash(f, 32) * 120, W + 200, H + 120);
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  }
+  if (fx.scan) { ctx.globalAlpha = fx.scan; ctx.fillStyle = SCAN; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  if (fx.vig) { ctx.globalAlpha = fx.vig; ctx.fillStyle = VIG; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  if (fx.lb) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, 140 * fx.lb); ctx.fillRect(0, H - 140 * fx.lb, W, 140 * fx.lb); }
+  if (fx.hud) hud(ctx, t, { lb: fx.lb, mode: fx.hudMode, a: .75 * fx.hud });
+  if (DEBUG) drawDebug(t, s);
 }
 
-function drawDebug(t) {
-  const b = M.beat(t), s = M.section(t), { line } = M.lyric(t);
+function drawDebug(t, s) {
+  const b = M.beat(t), sec = M.section(t), { line } = M.lyric(t);
   ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(20, 20, 520, 190);
+  ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(20, 20, 560, 224);
   ctx.font = '22px monospace'; ctx.fillStyle = '#9f9'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  [`t ${t.toFixed(2)}s   BPM ${D.bpm}`, `拍 #${b.i}  相位 ${b.phase.toFixed(2)}`, `段落 ${s.t.toFixed(1)}–${s.end.toFixed(1)}s  能量 ${s.energy}`,
-   `能量 ${M.energy(t).toFixed(2)}  低频 ${M.bass(t).toFixed(2)}`, `歌词 ${line ? line.t.toFixed(2) + 's ' + line.text : '—'}`]
+  [`t ${t.toFixed(2)}s   BPM ${D.bpm}`, `分镜 ${s.name}  (${s.t0.toFixed(1)}–${Math.min(s.t1, D.duration).toFixed(1)}s)`, `拍 #${b.i}${b.down ? ' 重拍' : ''}  相位 ${b.phase.toFixed(2)}`,
+   `段落 ${sec.t.toFixed(1)}–${sec.end.toFixed(1)}s`, `能量 ${M.energy(t).toFixed(2)}  低频 ${M.bass(t).toFixed(2)}`, `歌词 ${line ? line.t.toFixed(2) + 's ' + line.text : '—'}`]
     .forEach((s2, i) => ctx.fillText(s2, 36, 34 + i * 34));
-  // 底部时间线：段落 / 拍子 / 歌词
-  const y0 = H - 40, sx = x => x / D.duration * W;
-  D.sections.forEach((s2, i) => { ctx.fillStyle = `hsla(${i * 50},60%,50%,.5)`; ctx.fillRect(sx(s2.t), y0, sx(s2.end) - sx(s2.t), 12); });
-  ctx.fillStyle = '#fff'; D.beats.forEach(bt => ctx.fillRect(sx(bt), y0 + 14, 1, 6));
-  ctx.fillStyle = '#fc6'; D.lyrics.forEach(l => ctx.fillRect(sx(l.t), y0 + 22, Math.max(2, sx(l.end) - sx(l.t) - 2), 6));
-  ctx.fillStyle = '#f44'; ctx.fillRect(sx(t) - 1, y0 - 6, 3, 40);
+  const y0 = H - 46, sx = x => x / D.duration * W;
+  SCENES.forEach((s2, i) => { ctx.fillStyle = `hsla(${i * 47},60%,50%,.6)`; ctx.fillRect(sx(s2.t0), y0, sx(Math.min(s2.t1, D.duration)) - sx(s2.t0) - 1, 12); });
+  ctx.fillStyle = '#fff'; D.beats.forEach(bt => ctx.fillRect(sx(bt), y0 + 14, 1, DOWN.has(bt) ? 10 : 5));
+  ctx.fillStyle = '#fc6'; D.lyrics.forEach(l => ctx.fillRect(sx(l.t), y0 + 26, Math.max(2, sx(l.end) - sx(l.t) - 2), 6));
+  ctx.fillStyle = '#f44'; ctx.fillRect(sx(t) - 1, y0 - 6, 3, 44);
   ctx.restore();
 }
 
 // ---------------------------------------------------------------- 导出接口（export.mjs 调用）
-const fontsReady = document.fonts.ready.then(() => true);
+const fontsReady = Promise.all([`400 20px "${SANS}"`, `900 20px "${SANS}"`, `400 20px "${SERIF}"`, `900 20px "${SERIF}"`, `20px "${GOTH}"`, `20px "${ANTON}"`, `20px "${MONO}"`]
+  .map(f => document.fonts.load(f, '我A'))).then(() => document.fonts.ready).then(() => true);
 window.__ready = () => fontsReady;
 window.__info = () => ({ duration: D.duration, title: D.title });
 window.__frame = (t) => { render(t); return cv.toDataURL('image/jpeg', .92); };
@@ -167,7 +599,7 @@ window.__frame = (t) => { render(t); return cv.toDataURL('image/jpeg', .92); };
 // ---------------------------------------------------------------- 播放器
 const au = document.getElementById('au'), pp = document.getElementById('pp'), seek = document.getElementById('seek'), tm = document.getElementById('time');
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
-if (EXPORT) { document.body.classList.add('export'); render(0); }
+if (EXPORT) document.body.classList.add('export');
 else {
   const loop = () => {
     const t = au.currentTime;

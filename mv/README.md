@@ -11,6 +11,8 @@
 | `analyze.py` | 分析歌曲和歌词 → `data.js`（BPM、拍点、重拍、能量曲线、段落、逐字歌词时间） |
 | `data.js` | 分析结果，`mv.html` 直接加载 |
 | `mv.html` | 播放器 + 画面源码，`render(t)` 画出第 t 秒的画面 |
+| `STORYBOARD.md` | 分镜说明 |
+| `fonts.py`、`fonts/` | 从 Google Fonts 下载用到的字（子集），导出时不需要联网 |
 | `export.mjs` | 逐帧导出 MP4 / 截图检查 |
 
 ## 使用
@@ -20,6 +22,7 @@
 ```bash
 pip install -r requirements.txt
 python analyze.py                       # 改了歌曲或歌词后重新跑
+python fonts.py                         # 改了歌词或画面里的文字后重新跑（需要联网）
 # 浏览器打开 mv.html 预览：空格 播放/暂停，← → 快退/快进 5 秒，D 显示调试信息（拍点、段落、歌词时间线）
 node export.mjs --shots 5,22.5,45       # 截几帧到 shots/ 检查画面
 node export.mjs --from 20 --to 35       # 导出一小段试看
