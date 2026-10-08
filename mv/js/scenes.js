@@ -23,6 +23,17 @@ function cam(t, s = 1) {
   const p = j.act === 'punch' ? Math.exp(-j.since * 13) : j.act === 'cut' ? Math.exp(-j.since * 22) * .35 : 0;
   return { zoom: 1 + .1 * p * s, barrel: .03 + .28 * p * s, rot: (hash(j.i, 4) - .5) * .05 * p * s, shift: [(hash(j.i, 5) - .5) * .012 * p * s, (hash(j.i, 6) - .5) * .012 * p * s] };
 }
+// ---------------------------------------------------------------- 世界：整支 MV 是同一个下雨的夜晚
+// 同一场雨（同一个种子、同样的速度和角度，切镜时雨滴位置是连续的），同一条街（路灯光斑位置固定）。
+// 每个场景用 weather(t, lt) 决定这场雨此刻的样子：{ rain 透明度, col 颜色, len 长度倍数, n 雨滴数, rt 雨的时间（冻住时传固定值）, wind, street 路灯透明度 }
+const STREET_COLS = ['90,124,255', '90,124,255', '130,160,255', '255,170,90'];
+function street(c, t, a) { if (a > .005) bokeh(c, t, { n: 16, seed: 5, cols: STREET_COLS, alpha: a }); }
+function worldRain(c, t, w) {
+  if (!w || !(w.rain > .005)) return;
+  rain(c, w.rt ?? t, { n: w.n ?? 260, spd: 1700, len: 60 * (w.len ?? 1), alpha: w.rain, wind: w.wind ?? .22, seed: 1, col: `rgb(${w.col ?? '170,190,255'})`, lw: w.lw ?? 1 });
+}
+function drawWorld(c, t, w) { if (!w) return; street(c, t, w.street ?? 0); worldRain(c, t, w); }
+
 // 黑边从上下滑进来
 const lbIn = (lt, d = .35) => easeOut(lt / d);
 // 文字特效：乱码解码（证词像被解密一样，从乱码跳成真字）
@@ -76,6 +87,7 @@ scene({ name: '开机', t0: 0, t1: D.bar0,
 const T_MELT = D.notes808.find(n => n.t > 8.5 && n.midi > 36.5).t;                  // 第一次加花：808 连砸 D
 const T_UP = D.notes808.find(n => n.t > T_MELT && n.midi > 43).t;                    // 跳高八度
 scene({ name: '谎话', t0: D.bar0, t1: T_MELT,
+  weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
   bg: t => ({ mode: 'tunnel', a: '#020309', b: '#2c3f96', c: '#0d1638', amt: .9, speed: 1 + M.low(t) * 1.4, pulse: M.hit('kick', t, 8) }),
   draw(c, t, lt) {
     if (M.gap(t)) return;
@@ -106,6 +118,7 @@ scene({ name: '谎话', t0: D.bar0, t1: T_MELT,
 });
 
 scene({ name: '融化', t0: T_MELT, t1: D.notes808.find(n => n.t > T_UP).t,
+  weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
   bg: t => ({ mode: 'tunnel', a: '#020309', b: '#4a62d8', c: '#16204a', amt: 1, speed: 2.2 + M.hit('note', t, 4) * 3, pulse: M.hit('note', t, 7) }),
   draw(c, t, lt) {
     // 先把铬金属字画到 SNAP，再按列往下拖（融化）
@@ -144,6 +157,7 @@ function wordShot(c, t, k, word, v, o = {}) {
   c.restore();
 }
 scene({ name: '词语', t0: D.notes808.find(n => n.t > T_UP).t, t1: T_STACK,
+  weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
   bg: t => { const k = M.last('kick', t); return { mode: 'smoke', a: '#03050b', b: hash(k.i, 8) < .3 ? '#4a0812' : '#16244d', c: '#7d93ff', amt: .9, speed: 1.5, pulse: M.hit('kick', t, 8) }; },
   draw(c, t, lt) {
     if (M.gap(t)) return;
@@ -167,6 +181,7 @@ scene({ name: '词语', t0: D.notes808.find(n => n.t > T_UP).t, t1: T_STACK,
 // 堆叠频闪：每个踩镲换一个词，叠在一起；最后 TAPE 01 + CRT 关机
 const T_CRT1 = D.lyrics[0].t - .24;
 scene({ name: '堆叠', t0: T_STACK, t1: D.lyrics[0].t,
+  weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
   bg: t => ({ mode: 'smoke', a: '#020205', b: '#1a0a14', amt: .8, speed: 2, pulse: M.hit('hat', t, 12) }),
   draw(c, t, lt) {
     const h = M.last('hat', t);
@@ -204,10 +219,11 @@ function verseLine(c, t, line, idx) {
   if (a < 1) { c.fillStyle = 'rgba(200,220,255,.8)'; c.fillRect(0, y - 260 + 260 * a + 118, W * .6, 2); }
 }
 scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
+  weather: (t, lt) => { const t12 = Math.floor(t * 12) / 12;
+    return { rain: .26 * clamp((lt - .2) / .6), rt: rainTime(t12), street: .14, wind: .22 + (t > barT(11) ? (t - barT(11)) * .12 : 0) }; },
   bg: t => ({ mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: .9, speed: 1, pulse: M.hit('kick', t, 10) * .4 }),
   draw(c, t, lt) {
     const t12 = Math.floor(t * 12) / 12, rf = rainTime(t12);
-    bokeh(c, t12, { n: 16, seed: 5, cols: ['90,124,255', '90,124,255', '130,160,255', '255,170,90'], alpha: .14 });
     const { line, i } = M.lyric(t);
     if (line) { c.save(); c.globalAlpha = .06; vtext(c, line.text, W - 300, 80 - (t - line.t) * 30, 150, { fam: SERIF, fill: '#c8d4ff' }); c.restore(); }
     // 手机屏幕亮了一下（"我试着不去等待"）
@@ -223,9 +239,6 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
       c.strokeStyle = 'rgba(230,238,255,.95)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * k); c.lineTo(W / 2, y); c.stroke();
       c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
     }
-    c.save(); c.globalAlpha = clamp((lt - .2) / .6);
-    rain(c, rf, { n: 260, spd: 1500, len: 50, alpha: .26, wind: .2 + (t > barT(11) ? (t - barT(11)) * .12 : 0), seed: 1 });
-    c.restore();
     if (line) {
       verseLine(c, t, line, i + 1);
       if (line === L_KONGBAI) {                                                   // "空白"被涂黑
@@ -369,6 +382,7 @@ function hookFx(R2) {
   };
 }
 scene({ name: '连击', t0: lineAt(32.44).t, t1: lineAt(41.88).t,
+  weather: t => ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),
   bg: t => ({ mode: 'rays', a: '#050003', b: '#2c0309', c: '#ff2040', amt: .8, speed: 1, pulse: M.hit('kick', t, 8) }),
   draw: (c, t, lt) => hookDraw(c, t, lt, false), fx: hookFx(false) });
 
@@ -378,6 +392,7 @@ const CHAT = [{ l: lineAt(41.88), who: 'L', t: lineAt(41.88).t }, { l: lineAt(43
 const DEL = D.hats.filter(h => h > 46.45).slice(0, 4);                               // 一条一条删除
 const PHONE = { x: (W - 720) / 2, y: 30, w: 720, h: 1020 };
 scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
+  weather: t => ({ rain: .16, street: .1, rt: M.gap(t)?.[0] ?? t }),
   bg: t => ({ mode: 'smoke', a: '#04060b', b: '#121a2c', c: '#3a4a7a', amt: .7, speed: .6, pulse: M.hit('kick', t, 6) }),
   draw(c, t, lt) {
     scrollRows(c, t * .5, '你总说', { size: 220, rows: 4, spd: 40, col: 'rgba(255,255,255,.04)', fam: SERIF });
@@ -431,6 +446,7 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
 const STACK = [47.4, 48.52, 49.82, 51.1].map(lineAt);
 const T_FILL3 = barT(19), T_UP3 = D.notes808.find(n => n.t > T_FILL3 && n.midi > 43).t;
 scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
+  weather: t => ({ rain: M.gap(t) ? 0 : .08, col: '255,80,100', len: 1.6 }),
   bg: t => ({ mode: 'halftone', a: '#040106', b: '#3a0a16', amt: .9, speed: 1.2, pulse: M.hit('kick', t, 8) }),
   draw(c, t, lt) {
     if (M.gap(t)) return;
@@ -466,6 +482,7 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
 });
 
 scene({ name: '病态', t0: lineAt(52.86).t, t1: lineAt(63.36).t,
+  weather: t => t >= T_SHATTER ? null : ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),
   bg: t => t >= T_SHATTER ? { mode: 'solid', a: '#000000' } : ({ mode: 'rays', a: '#040003', b: '#2a030a', c: '#ff2a50', amt: .9, speed: 1.6, pulse: M.hit('kick', t, 7), mirror: true }),
   draw: (c, t, lt) => hookDraw(c, t, lt, true), fx: hookFx(true) });
 
@@ -538,11 +555,8 @@ function lightning(t) {
   return v;
 }
 const T_WASH = L_LAST.end;
-function rainScene(c, t, rf, o = {}) {
-  bokeh(c, t, { n: 14, seed: 8, cols: ['90,124,255', '255,170,90'], alpha: .1 });
-  rain(c, rf, { n: o.n ?? 560, spd: 1900, len: 70, alpha: .34, wind: .25, seed: 2 });
-}
 scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
+  weather: (t, lt) => ({ rain: .34, n: Math.round(600 * (t < T_WASH ? 1 : 1 - clamp((t - T_WASH) / 1.5) * .5) * clamp(.3 + lt / .6)), len: 1.2, rt: M.gap(t)?.[0] ?? t, street: .12 }),
   bg: t => ({ mode: 'night', a: '#010309', b: '#0a1430', c: '#5f7dff', amt: .9, speed: .8, pulse: lightning(t) * 1.5 }),
   draw(c, t, lt) {
     const g = M.gap(t), rf = g ? g[0] : t, heavy = t < T_WASH ? 1 : 1 - clamp((t - T_WASH) / 1.5) * .5;
@@ -552,7 +566,6 @@ scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
       const gg = c.createRadialGradient(x, y, 0, x, y, R); gg.addColorStop(0, `rgba(${col},${.9 * (1 - k * .6)})`); gg.addColorStop(1, `rgba(${col},0)`);
       c.fillStyle = gg; c.fillRect(x - R, y - R, 2 * R, 2 * R);
     }
-    rainScene(c, t, rf, { n: Math.round(560 * heavy * clamp(.25 + lt / .6)) });
     const { line } = M.lyric(t);
     const wash = t > T_WASH ? easeIn((t - T_WASH) / .7) : 0;
     if (line === L_RAIN) {                                                          // 字从天上掉下来
@@ -606,12 +619,12 @@ function tvContent(t, staticOn) {
   tvx.setTransform(1, 0, 0, 1, 0, 0);
   const g = tvx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0a1430'); g.addColorStop(1, '#22356e'); tvx.fillStyle = g; tvx.fillRect(0, 0, W, H);
   if (staticOn) { tvx.imageSmoothingEnabled = false; tvx.drawImage(NOISE[frameNo(t) % 4], 0, 0, W, H); tvx.imageSmoothingEnabled = true; return TVC; }
-  bokeh(tvx, t, { n: 10, seed: 8, cols: ['140,170,255', '255,190,120'], alpha: .35, r: 1.4 });
+  street(tvx, t, .3);
   if (t < T_TV + 2.2) {                                                            // 转场：上一幕的铬金属「谎话」还在电视里往下沉
     tvx.save(); tvx.globalAlpha = clamp(1 - (t - T_TV) / 2.2);
     chrome(tvx, '谎话', W / 2 + 150, H * .52 + 160 + (t - T_TV) * 140, 105, {}); tvx.restore();
   }
-  rain(tvx, t, { n: 320, spd: 1900, len: 80, alpha: .6, wind: .25, seed: 2, col: 'rgb(200,215,255)', lw: 1.6 });
+  worldRain(tvx, t, { rain: .6, n: 360, len: 1.3, col: '200,215,255', lw: 1.6, rt: M.gap(t)?.[0] ?? t });
   return TVC;
 }
 function drawTV(c, t, s, o = {}) {
@@ -662,6 +675,7 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
     }
     const m = memAt(t), s = sceneAt(m.mt);
     c.save(); if (m.how === 'flip') { c.translate(W, 0); c.scale(-1, 1); }
+    if (s.weather) drawWorld(c, m.mt, s.weather.call(s, m.mt, m.mt - s.t0));
     s.draw.call(s, c, m.mt, m.mt - s.t0); c.restore();
     c.strokeStyle = C.red; c.lineWidth = 8; c.strokeRect(36, 36, W - 72, H - 72);
   },
@@ -688,9 +702,9 @@ function lightOn(t) {
   return clamp((t - T_TITLE) / .6);
 }
 scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
+  weather: (t, lt) => ({ rain: .2 * clamp(1 - lt / 8), n: 160 }),
   bg: t => t > T_DARK + .55 && t < T_DARK + 1.05 ? { mode: 'static', a: '#000000', amt: .8 } : ({ mode: 'smoke', a: '#010103', b: '#0a0f1e', amt: .5 * clamp(1 - (t - 100) / 6), speed: .4 }),
   draw(c, t, lt) {
-    rain(c, t, { n: 140, spd: 1500, len: 50, alpha: .2 * clamp(1 - lt / 8), wind: .2, seed: 3 });
     if (t < T_TITLE) {
       const n = Math.max(0, 9 - (lastAt(CD, t))), k = t - CD[Math.max(0, lastAt(CD, t))];
       const out = t > T_ZERO + .2 ? (frameNo(t) % 2 ? 1 : 0) : 1;

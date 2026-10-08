@@ -12,11 +12,15 @@ function drawLayer(t) {
   const s = sceneAt(t), lt = t - s.t0;
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.shadowBlur = 0;
   lx.clearRect(0, 0, W, H);
+  if (s.weather) drawWorld(lx, t, s.weather.call(s, t, lt));                   // 同一场雨、同一条街
   s.draw.call(s, lx, t, lt);
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1;
   polygraph(lx, t, POLY);
   const fx = { ...FX0, ...(s.fx ? s.fx.call(s, t, lt) : {}) };
   for (const k of ['zoom', 'rot', 'barrel']) if (!Number.isFinite(fx[k])) fx[k] = FX0[k];
+  // 镜头一直在呼吸：很轻很慢的整体漂移，像手持摄像机，切镜时画面不会"归零"
+  fx.shift = [(fx.shift?.[0] ?? 0) + Math.sin(t * .21) * .003, (fx.shift?.[1] ?? 0) + Math.cos(t * .17) * .0025];
+  fx.rot = fx.rot + Math.sin(t * .09) * .004;
   return { s, fx, bg: s.bg ? s.bg.call(s, t, lt) : { mode: 'solid' } };
 }
 
