@@ -57,6 +57,7 @@ const blink = (since, n = 2) => since >= 0 && since < n / 30 ? 1 : 0;
 const crt = k => k <= 0 ? [1, 1] : [lerp(1, .002, ease((k - .55) / .45)), lerp(1, .004, ease(k / .55))];
 
 // ---------------------------------------------------------------- 测谎仪状态
+const WOAH_T = D.lyrics.filter(l => l.text === 'woah').map(l => l.t);
 function POLY(t) {
   if (t < .6) return { a: 0, amp: 0, lie: 0, spike: 0 };
   const s = { a: .85, amp: 1, lie: 0, spike: 0 };
@@ -65,6 +66,7 @@ function POLY(t) {
   if (t >= 62.9 && t < 73.6) s.a = .85 * clamp(1 - (t - 62.9) / .4) + .85 * clamp((t - 73.2) / .4);   // 回忆里没有测谎仪
   if (t >= 80.0 && t < 80.4) s.amp = 0;                                          // 鼓停，针也停
   if (t >= 80.4) s.spike = Math.exp(-(t - 80.4) * 2.2);                          // 点题：冲顶
+  for (const w of WOAH_T) if (t >= w && t < w + .8) { s.spike = Math.max(s.spike, .8 * Math.exp(-(t - w) * 2.5)); s.lie = .6; }   // woah：针冲上去写字
   if (t >= 88.38 && t < 95.8) { s.lie = .6; s.amp = 1.4; }
   if (t >= 95.8) s.amp = clamp(1 - (t - 95.8) / 8);
   if (t >= T_ZERO) { s.amp = 0; s.a = .85 * clamp(1 - (t - T_OFF) / .5); }      // 数到 0：归零、拉平
@@ -279,7 +281,15 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
       const a = clamp(ph / .08) * clamp((1.25 - ph) / .1) * (frameNo(t) % 7 ? 1 : .6);
       const g = c.createRadialGradient(1560, 700, 0, 1560, 700, 300); g.addColorStop(0, `rgba(180,200,255,${.35 * a})`); g.addColorStop(1, 'rgba(180,200,255,0)');
       c.fillStyle = g; c.fillRect(1260, 400, 600, 600);
-      c.fillStyle = `rgba(220,230,255,${.85 * a})`; c.fillRect(1500, 590, 120, 220);
+      c.save(); c.globalAlpha = a;                                                   // 手机锁屏：时间 + 一条"你"发来的消息
+      c.fillStyle = '#0a0d18'; c.beginPath(); c.roundRect(1470, 540, 180, 330, 26); c.fill();
+      const sg = c.createLinearGradient(0, 552, 0, 858); sg.addColorStop(0, '#2c3d78'); sg.addColorStop(1, '#0e1530');
+      c.fillStyle = sg; c.beginPath(); c.roundRect(1478, 552, 164, 306, 20); c.fill();
+      text(c, '23:47', 1560, 620, 40, { w: 400, fam: MONO, fill: 'rgba(235,240,255,.95)' });
+      const nk = easeOut((ph - .25) / .2);
+      if (nk > 0) { c.globalAlpha = a * nk; c.fillStyle = 'rgba(235,240,255,.9)'; c.beginPath(); c.roundRect(1488, 700 - (1 - nk) * 20, 144, 54, 12); c.fill();
+        text(c, '你', 1506, 727 - (1 - nk) * 20, 20, { align: 'left', fill: '#111' }); text(c, '新消息', 1532, 727 - (1 - nk) * 20, 17, { w: 400, align: 'left', fill: '#444' }); }
+      c.restore();
     }
     if (lt < .7) {                                                                  // 转场：CRT 关机缩成的那个点，变成第一滴雨落下
       const k = lt / .7, y = lerp(H / 2, H + 100, easeIn(k));
@@ -368,14 +378,32 @@ function hookLine(c, t, line, R2) {
   });
   if (R2) { c.save(); c.translate(W / 2, H / 2 + size * 1.15); c.scale(1, -1); shadowed(c, .16); c.restore(); }   // 倒影
 }
-function woahShot(c, t, t0) {
-  const k = t - t0, size = fit(c, 'woah', W * .5, 520, 400, GOTH);
-  c.save();
-  for (let j = 7; j >= 1; j--) { c.save(); c.translate(W / 2 - j * 50 * clamp(k * 3), H / 2 + (hash(j + frameNo(t), 4) - .5) * 8 * j); c.scale(1.5, 1); c.globalAlpha = .12;
-    text(c, 'woah', 0, 0, size, { w: 400, fam: GOTH, fill: C.red }); c.restore(); }
-  c.translate(W / 2 + lerp(-200, 120, easeOut(k * 1.5)), H / 2); c.scale(1.5, 1);
-  chrome(c, 'woah', 0, 0, size, { fam: GOTH, w: 400, sweep: k * 1.6 });
-  c.restore();
+// woah：测谎仪的针从右下角冲上来，像一支笔，用红色霓虹灯管一笔一笔"写"出哥特体 woah；
+// 写完后灯管跟着人声抖、闪。ROUND 2 的 woah 更长：中间的 o 跟着拖长音不断复制（woah → wooooah）。
+const NEON = mk(W, H), nx = NEON.getContext('2d');
+function woahShot(c, t, t0, R2 = false) {
+  const k = t - t0, draw = clamp(k / (R2 ? .42 : .3)), v = M.vocal(t);
+  const n = R2 ? Math.min(9, Math.floor(Math.max(0, k - .45) / .1)) : 0;
+  const word = 'wo' + 'o'.repeat(n) + 'ah', size = fit(c, word, W * .86, 430, 400, GOTH);
+  const head = [W - 170, H - 92];                                                  // 测谎仪的针头
+  // 灯管：先画到 NEON（描边 + 虚线偏移 = 一笔一笔写出来），再叠上发光
+  nx.setTransform(1, 0, 0, 1, 0, 0); nx.clearRect(0, 0, W, H);
+  nx.font = fnt(size, 400, GOTH); nx.textAlign = 'center'; nx.textBaseline = 'middle'; nx.lineJoin = 'round'; nx.lineCap = 'round';
+  const L = 2600; nx.setLineDash([L, L]); nx.lineDashOffset = L * (1 - draw);
+  const jx = (hash(frameNo(t), 3) - .5) * 14 * v * draw, jy = (hash(frameNo(t), 4) - .5) * 10 * v * draw;
+  nx.strokeStyle = '#ff1f3d'; nx.lineWidth = 9; nx.shadowColor = '#ff1f3d'; nx.shadowBlur = 34; nx.strokeText(word, W / 2 + jx, H / 2 + jy);
+  nx.shadowBlur = 0; nx.strokeStyle = '#ffd6dc'; nx.lineWidth = 2.6; nx.strokeText(word, W / 2 + jx, H / 2 + jy);
+  nx.setLineDash([]);
+  const flick = draw < 1 ? 1 : hash(frameNo(t), 8) < .12 ? .25 : .85 + .15 * v;   // 写完后像接触不良的霓虹招牌
+  c.save(); c.globalAlpha = flick; c.drawImage(NEON, 0, 0); c.globalCompositeOperation = 'lighter'; c.globalAlpha = .35 * flick; c.drawImage(NEON, 0, 0); c.restore();
+  // 针：从测谎仪的针头冲上来，连到正在写的那一笔
+  if (draw < 1) {
+    c.font = fnt(size, 400, GOTH); const w = c.measureText(word).width;
+    const px = W / 2 - w / 2 + w * draw, py = H / 2 + size * .25 * Math.sin(draw * 25);
+    c.save(); c.strokeStyle = 'rgba(255,60,80,.9)'; c.lineWidth = 2; c.shadowColor = '#ff1f3d'; c.shadowBlur = 12;
+    c.beginPath(); c.moveTo(head[0], head[1]); c.lineTo(px, py); c.stroke();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(px, py, 6, 0, 7); c.fill(); c.restore();
+  }
 }
 function hookDraw(c, t, lt, R2) {
   if (!R2 && lt < .4) {                                                             // 转场：雨丝变红、拉长，汇聚成放射线
@@ -393,10 +421,10 @@ function hookDraw(c, t, lt, R2) {
   if (!line) return;
   if (line.text === 'woah') {
     if (R2 && t >= T_SHATTER) {                                                     // 整个画面像玻璃一样碎掉
-      snx.setTransform(1, 0, 0, 1, 0, 0); snx.clearRect(0, 0, W, H); woahShot(snx, T_SHATTER - .01, line.t);
+      snx.setTransform(1, 0, 0, 1, 0, 0); snx.clearRect(0, 0, W, H); woahShot(snx, T_SHATTER - .01, line.t, true);
       shatter(c, SNAP, t - T_SHATTER, 7); return;
     }
-    woahShot(c, t, line.t); return;
+    woahShot(c, t, line.t, R2); return;
   }
   if (!R2 && COLS.includes(line)) {                                                 // 三栏分屏
     const cw = W / 3, tones = [[C.black, C.white], [C.silver, C.black], ['#9a0718', C.black]];
@@ -441,7 +469,7 @@ scene({ name: '连击', t0: lineAt(32.44).t, t1: lineAt(41.88).t,
 const CHAT = [{ l: lineAt(41.88), who: 'L', t: lineAt(41.88).t }, { l: lineAt(43.46), who: 'L', t: lineAt(43.46).t },
   { l: lineAt(44.9), who: 'R', t: D.kicks.find(k => k > 44.5 && k < 45) }, { l: lineAt(45.96), who: 'R', t: M.gap(46)?.[1] ?? 46.17 }];
 const DEL = D.hats.filter(h => h > 46.45).slice(0, 4);                               // 一条一条删除
-const PHONE = { x: (W - 720) / 2, y: 30, w: 720, h: 1020 };
+const PHONE = { x: (W - 720) / 2, y: 26, w: 720, h: 900 };
 scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
   weather: t => ({ rain: .16, street: .1, rt: M.gap(t)?.[0] ?? t }),
   bg: t => ({ mode: 'smoke', a: '#04060b', b: '#121a2c', c: '#3a4a7a', amt: .7, speed: .6, pulse: M.hit('kick', t, 6) }),
@@ -463,6 +491,8 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
     c.fillStyle = 'rgba(255,255,255,.08)'; c.fillRect(P.x, P.y + 160, P.w, 2);
     const items = CHAT.filter(m => t >= m.t).map((m, k) => ({ ...m, k }));
     if (typing) items.push({ typing: true, who: 'L', t: 43.0, k: 9 });
+    c.fillStyle = 'rgba(255,255,255,.08)'; c.beginPath(); c.roundRect(W / 2 - 80, P.y + 196, 160, 36, 18); c.fill();   // 时间分隔
+    text(c, '昨天 23:47', W / 2, P.y + 214, 18, { w: 400, fill: 'rgba(255,255,255,.45)' });
     let y = P.y + P.h - 70;
     for (let n = items.length - 1; n >= 0; n--) {
       const m = items[n], del = m.typing ? -1 : DEL[m.k] ?? 1e9, gone = clamp((t - del) / .25);
@@ -498,12 +528,12 @@ const STACK = [47.4, 48.52, 49.82, 51.1].map(lineAt);
 const T_FILL3 = barT(19), T_UP3 = D.notes808.find(n => n.t > T_FILL3 && n.midi > 43).t;
 scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
   weather: t => ({ rain: M.gap(t) ? 0 : .08, col: '255,80,100', len: 1.6 }),
-  bg: t => ({ mode: 'halftone', a: '#040106', b: '#3a0a16', amt: .9, speed: 1.2, pulse: M.hit('kick', t, 8) }),
+  bg: t => ({ mode: 'halftone', a: '#040106', b: '#6a1222', amt: 1.15, speed: 1.2, pulse: M.hit('kick', t, 8) }),
   draw(c, t, lt) {
     if (M.gap(t)) return;
     const kc = M.count('kick', this.t0 - .01, t), step = kc * .21 + easeOut(clamp(M.last('kick', t).since / .1)) * .0;
     c.save(); c.translate(W - 430, H / 2 + 30); c.rotate(step);
-    text(c, '我', 0, 0, 900, { fam: SERIF, fill: null, stroke: `rgba(224,17,43,${.3 + M.hit('kick', t, 6) * .4})`, lw: 4 }); c.restore();
+    text(c, '我', 0, 0, 900, { fam: SERIF, fill: null, stroke: `rgba(224,17,43,${.5 + M.hit('kick', t, 6) * .4})`, lw: 5 }); c.restore();
     const collapse = t > T_UP3 ? easeIn((t - T_UP3) / .22) : 0, smear = t > T_FILL3 ? clamp((t - T_FILL3) / 2.1) : 0;
     const cur = STACK.filter(l => t >= l.t).length - 1, pop = 1 + .35 * M.hit('kick', t, 9);
     STACK.forEach((l, k) => {
