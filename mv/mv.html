@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEMO · MV</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: system-ui, "Noto Sans SC", "WenQuanYi Zen Hei", sans-serif; overflow: hidden; }
+  #stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; background: #000; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 10px 16px;
+         background: linear-gradient(transparent, rgba(0,0,0,.8)); opacity: 0; transition: opacity .3s; }
+  body:hover #bar, body.paused #bar { opacity: 1; }
+  #bar button { background: none; border: 1px solid #666; color: #ddd; border-radius: 4px; padding: 4px 12px; cursor: pointer; font: inherit; }
+  #seek { flex: 1; }
+  #time { font-variant-numeric: tabular-nums; min-width: 110px; text-align: right; }
+  body.export #bar { display: none; }
+</style>
+</head>
+<body class="paused">
+<div id="stage"><canvas id="cv" width="1920" height="1080"></canvas></div>
+<div id="bar">
+  <button id="pp">▶</button>
+  <input id="seek" type="range" min="0" max="1000" value="0">
+  <span id="time">0:00.0 / 0:00</span>
+  <button id="dbg" title="快捷键 D">调试</button>
+</div>
+<audio id="au" src="song.mp3" preload="auto"></audio>
+<script src="data.js"></script>
+<script>
+'use strict';
+// ============================================================================
+// 约定：整支 MV 就是一个函数 render(t)——给定时间（秒）画出那一帧。
+// 播放时 t 来自音频进度；导出时 t 由 export.mjs 逐帧指定，所以导出结果和机器快慢无关。
+// 画面里不要用 Math.random() 和 Date.now()，随机数用 rand(seed)，保证同一时刻每次画得一样。
+// ============================================================================
+const D = window.MV_DATA;
+const W = 1920, H = 1080;
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const EXPORT = new URLSearchParams(location.search).has('export');
+let DEBUG = !EXPORT && new URLSearchParams(location.search).has('debug');
+const FONT = '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "WenQuanYi Zen Hei", sans-serif';
+
+// ---------------------------------------------------------------- 工具
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = k => k * k * (3 - 2 * k);
+const easeOut = k => 1 - Math.pow(1 - clamp(k), 3);
+function rand(seed) { let a = seed | 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// 二分查找：arr 中最后一个 <= t 的下标（arr 按时间升序，key 取时间）
+function lastAt(arr, t, key = x => x) { let lo = 0, hi = arr.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (key(arr[m]) <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+
+// ---------------------------------------------------------------- 音乐时间轴查询
+const M = {
+  // 当前能量 / 低频（0..1），按帧插值
+  energy(t) { return sample(D.energy, t); },
+  bass(t) { return sample(D.bass, t); },
+  // 当前拍：index、距离上一拍的秒数、0..1 的拍内相位
+  beat(t) {
+    const i = lastAt(D.beats, t);
+    if (i < 0) return { i: -1, since: Infinity, phase: 0 };
+    const a = D.beats[i], b = D.beats[i + 1] ?? a + 60 / D.bpm;
+    return { i, since: t - a, phase: clamp((t - a) / (b - a)) };
+  },
+  // 拍点冲击：拍子落下瞬间 = 1，之后指数衰减
+  pulse(t, decay = 6) { const s = M.beat(t).since; return isFinite(s) ? Math.exp(-s * decay) : 0; },
+  downPulse(t, decay = 4) { const i = lastAt(D.downbeats, t); return i < 0 ? 0 : Math.exp(-(t - D.downbeats[i]) * decay); },
+  section(t) { return D.sections[Math.max(0, lastAt(D.sections, t, s => s.t))]; },
+  // 当前歌词：line 为当前句（没有则 null），k 为句内进度 0..1
+  lyric(t) {
+    const i = lastAt(D.lyrics, t, l => l.t);
+    const line = i >= 0 && t < D.lyrics[i].end ? D.lyrics[i] : null;
+    return { i, line, k: line ? clamp((t - line.t) / (line.end - line.t)) : 0, next: D.lyrics[i + 1] || null };
+  },
+};
+function sample(arr, t) { const x = t * D.fps, i = Math.floor(x); if (i < 0) return arr[0]; if (i >= arr.length - 1) return arr[arr.length - 1]; return lerp(arr[i], arr[i + 1], x - i); }
+
+// ---------------------------------------------------------------- 画面（目前是占位，之后在这里加分镜）
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  const e = M.energy(t), p = M.pulse(t), bp = M.bass(t);
+
+  // 背景：随能量变亮
+  const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * .7);
+  g.addColorStop(0, `hsl(250, 40%, ${8 + e * 14}%)`);
+  g.addColorStop(1, '#050508');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  // 拍点圆环
+  ctx.strokeStyle = `rgba(255,255,255,${.15 + p * .5})`;
+  ctx.lineWidth = 2 + p * 6;
+  ctx.beginPath(); ctx.arc(W / 2, H / 2 - 80, 140 + bp * 60 + p * 30, 0, Math.PI * 2); ctx.stroke();
+
+  drawLyrics(t);
+  drawTitle(t);
+  if (DEBUG) drawDebug(t);
+}
+
+// 卡拉 OK 式歌词：已唱的字亮起，未唱的字暗；当前字有轻微放大
+function drawLyrics(t) {
+  const { line, next } = M.lyric(t);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  if (line) {
+    const size = 64, y = H - 220;
+    ctx.font = `600 ${size}px ${FONT}`;
+    const widths = line.words.map(w => ctx.measureText(w.w).width + (/^[A-Za-z0-9']+$/.test(w.w) ? size * .3 : 0));
+    let x = W / 2 - widths.reduce((a, b) => a + b, 0) / 2;
+    const fadeIn = easeOut((t - line.t) / .25), fadeOut = clamp((line.end - t) / .2);
+    line.words.forEach((w, k) => {
+      const lit = clamp((t - w.t) / .12);
+      const s = 1 + .12 * Math.exp(-Math.max(0, t - w.t) * 8) * (t >= w.t ? 1 : 0);
+      ctx.save();
+      ctx.globalAlpha = fadeIn * fadeOut;
+      ctx.translate(x + widths[k] / 2, y + (1 - fadeIn) * 20); ctx.scale(s, s);
+      ctx.fillStyle = `rgba(${lerp(120, 255, lit)},${lerp(120, 240, lit)},${lerp(140, 255, lit)},1)`;
+      ctx.shadowColor = `rgba(200,180,255,${lit * .8})`; ctx.shadowBlur = 24 * lit;
+      ctx.textAlign = 'center'; ctx.fillText(w.w, 0, 0);
+      ctx.restore();
+      x += widths[k];
+    });
+  }
+  // 下一句预告（小字、暗）
+  if (next && next.t - t < 3 && (!line || next.t > line.t)) {
+    ctx.globalAlpha = clamp((3 - (next.t - t)) / 1) * .45;
+    ctx.font = `400 34px ${FONT}`; ctx.fillStyle = '#aaa'; ctx.textAlign = 'center';
+    ctx.fillText(next.text, W / 2, H - 140);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// 片头标题：第一句歌词之前显示
+function drawTitle(t) {
+  const first = D.lyrics.length ? D.lyrics[0].t : 5;
+  const a = clamp(t / 1.5) * clamp((first - 1 - t) / 1.5);
+  if (a <= 0) return;
+  ctx.globalAlpha = a; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  ctx.font = `700 120px ${FONT}`; ctx.fillText(D.title, W / 2, H / 2 - 80);
+  if (D.artist) { ctx.font = `400 40px ${FONT}`; ctx.fillStyle = '#bbb'; ctx.fillText(D.artist, W / 2, H / 2 + 40); }
+  ctx.globalAlpha = 1;
+}
+
+function drawDebug(t) {
+  const b = M.beat(t), s = M.section(t), { line } = M.lyric(t);
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(20, 20, 520, 190);
+  ctx.font = '22px monospace'; ctx.fillStyle = '#9f9'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  [`t ${t.toFixed(2)}s   BPM ${D.bpm}`, `拍 #${b.i}  相位 ${b.phase.toFixed(2)}`, `段落 ${s.t.toFixed(1)}–${s.end.toFixed(1)}s  能量 ${s.energy}`,
+   `能量 ${M.energy(t).toFixed(2)}  低频 ${M.bass(t).toFixed(2)}`, `歌词 ${line ? line.t.toFixed(2) + 's ' + line.text : '—'}`]
+    .forEach((s2, i) => ctx.fillText(s2, 36, 34 + i * 34));
+  // 底部时间线：段落 / 拍子 / 歌词
+  const y0 = H - 40, sx = x => x / D.duration * W;
+  D.sections.forEach((s2, i) => { ctx.fillStyle = `hsla(${i * 50},60%,50%,.5)`; ctx.fillRect(sx(s2.t), y0, sx(s2.end) - sx(s2.t), 12); });
+  ctx.fillStyle = '#fff'; D.beats.forEach(bt => ctx.fillRect(sx(bt), y0 + 14, 1, 6));
+  ctx.fillStyle = '#fc6'; D.lyrics.forEach(l => ctx.fillRect(sx(l.t), y0 + 22, Math.max(2, sx(l.end) - sx(l.t) - 2), 6));
+  ctx.fillStyle = '#f44'; ctx.fillRect(sx(t) - 1, y0 - 6, 3, 40);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- 导出接口（export.mjs 调用）
+const fontsReady = document.fonts.ready.then(() => true);
+window.__ready = () => fontsReady;
+window.__info = () => ({ duration: D.duration, title: D.title });
+window.__frame = (t) => { render(t); return cv.toDataURL('image/jpeg', .92); };
+
+// ---------------------------------------------------------------- 播放器
+const au = document.getElementById('au'), pp = document.getElementById('pp'), seek = document.getElementById('seek'), tm = document.getElementById('time');
+const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+if (EXPORT) { document.body.classList.add('export'); render(0); }
+else {
+  const loop = () => {
+    const t = au.currentTime;
+    render(t);
+    seek.value = t / D.duration * 1000;
+    tm.textContent = `${fmt(t)} / ${fmt(D.duration).slice(0, -2)}`;
+    if (!au.paused) requestAnimationFrame(loop);
+  };
+  const toggle = () => au.paused ? au.play() : au.pause();
+  au.onplay = () => { document.body.classList.remove('paused'); pp.textContent = '❚❚'; requestAnimationFrame(loop); };
+  au.onpause = () => { document.body.classList.add('paused'); pp.textContent = '▶'; };
+  pp.onclick = toggle; cv.onclick = toggle;
+  seek.oninput = () => { au.currentTime = seek.value / 1000 * D.duration; loop(); };
+  document.getElementById('dbg').onclick = () => { DEBUG = !DEBUG; loop(); };
+  addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); toggle(); }
+    else if (e.key === 'd' || e.key === 'D') { DEBUG = !DEBUG; loop(); }
+    else if (e.key === 'ArrowLeft') { au.currentTime = Math.max(0, au.currentTime - 5); loop(); }
+    else if (e.key === 'ArrowRight') { au.currentTime = Math.min(D.duration, au.currentTime + 5); loop(); }
+  });
+  fontsReady.then(loop);
+}
+</script>
+</body>
+</html>
