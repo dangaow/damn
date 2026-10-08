@@ -740,12 +740,36 @@ const MEM = [[3.0, 'invert'], [25.3, 'flip'], [33.95, 'red'], [36.0, 'sick'], [4
 const T_LAST = D.kicks.filter(k => k < 96).pop(), T_CRT2 = T_LAST + 1.25;
 const MEV = [...D.kicks, ...D.snares, ...D.notes808.map(n => n.t)].filter(x => x >= T_SLAM && x < T_LAST - .02).sort((a, b) => a - b)
   .filter((x, i, a) => i === 0 || x - a[i - 1] > .09);
-function memAt(t) { const i = lastAt(MEV, t); if (i < 0) return null; const [mt, how] = MEM[i % MEM.length]; return { mt: mt + (t - MEV[i]), how, i, since: t - MEV[i] }; }
+// 闪回倒着放：每个镜头从它的时间点以 1.5 倍速往回走（雨往天上飞、字往回弹、碎片往回收）
+function memAt(t) {
+  const i = lastAt(MEV, t); if (i < 0) return null;
+  const [m0, how] = MEM[i % MEM.length], s = sceneAt(m0);
+  return { mt: Math.max(s.t0 + .01, m0 - (t - MEV[i]) * 1.5), s, how, i, since: t - MEV[i] };
+}
+// 录像带倒带的画面毛病：往上扫的跟踪噪声带、底部的磁头噪声、大大的 ◀◀
+function rewindFX(c, t) {
+  const f = frameNo(t);
+  for (let k = 0; k < 3; k++) {
+    const h = 22 + hash(k, 41) * 34, y = mod(H - (t * 1150 + k * 430), H + 140) - 70;
+    c.fillStyle = 'rgba(255,255,255,.07)'; c.fillRect(0, y, W, h);
+    const r = rand(f * 7 + k * 131);
+    for (let j = 0; j < 46; j++) { c.fillStyle = `rgba(255,255,255,${.35 + r() * .6})`; c.fillRect(r() * W, y + r() * h, 20 + r() * 150, 1.5 + r() * 2); }
+  }
+  const r = rand(f * 13 + 7);                                                      // 底部磁头噪声：一条被横向撕扯的带子
+  c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, H - 54, W, 44);
+  for (let j = 0; j < 9; j++) { c.fillStyle = `rgba(230,235,255,${.15 + r() * .35})`; c.fillRect(r() * 300 - 150, H - 52 + j * 5, W, 1.5); }
+  if (f % 10 < 6) {                                                                 // ◀◀
+    c.save(); c.translate(150, 170);
+    for (const [col, dx] of [[C.red, 6], ['#fff', 0]]) { c.fillStyle = col;
+      for (const ox of [0, 62]) { c.beginPath(); c.moveTo(ox + dx, 6); c.lineTo(ox + 58 + dx, -34 + 6); c.lineTo(ox + 58 + dx, 34 + 6); c.closePath(); c.fill(); } }
+    c.restore();
+  }
+}
 scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
   bg(t) {
     if (t < T_SLAM || M.gap(t)) return { mode: M.gap(t) && t > T_SLAM ? 'static' : 'solid', a: '#000000', amt: 1 };
     if (t >= T_LAST) return { mode: 'tunnel', a: '#000000', b: '#8a96b0', c: '#1a1f2c', amt: .8, speed: 3, pulse: M.hit('note', t, 3) };
-    const m = memAt(t); const s = sceneAt(m.mt); return s.bg(m.mt, m.mt - s.t0);
+    const m = memAt(t), s = m.s; return s.bg.call(s, m.mt, m.mt - s.t0);
   },
   draw(c, t, lt) {
     if (t < T_SLAM) return;
@@ -757,12 +781,14 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
       flare(c, W / 2 + 120, H / 2, Math.exp(-k * 1.2) * 1.1, 1400);
       return;
     }
-    const m = memAt(t), s = sceneAt(m.mt);
+    const m = memAt(t), s = m.s;
     const kb = Math.max(M.hit('kick', t, 9), M.hit('note', t, 9)), sc = 1 + .045 * kb;
-    c.save(); c.translate(W / 2, H / 2 + kb * 14); c.scale(sc, sc); c.translate(-W / 2, -H / 2);   // 闪回的画面整体跟着鼓点弹
+    const roll = (hash(frameNo(t) >> 1, 61) - .5) * 18 - mod(t * 90, 24);           // 倒带时画面上下滚动、抖
+    c.save(); c.translate(W / 2, H / 2 + kb * 14 + roll); c.scale(sc, sc); c.translate(-W / 2, -H / 2);   // 闪回的画面整体跟着鼓点弹
     if (m.how === 'flip') { c.translate(W, 0); c.scale(-1, 1); }
     if (s.weather) drawWorld(c, m.mt, s.weather.call(s, m.mt, m.mt - s.t0));
     s.draw.call(s, c, m.mt, m.mt - s.t0); c.restore();
+    rewindFX(c, t);
     const lw = 8 + kb * 22; c.strokeStyle = C.red; c.lineWidth = lw; c.strokeRect(36 + lw / 2 - 4, 36 + lw / 2 - 4, W - 72 - lw + 8, H - 72 - lw + 8);   // 红框随鼓点脉动
   },
   fx(t) {
@@ -770,7 +796,7 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
     return { ca: 5 + h * 9, glitch: m ? .25 + h * .5 : 0, gseed: m ? m.i : 0, flash: m ? (m.since < 2 / 30 ? .8 : 0) : (t >= T_LAST && t < T_LAST + .07 ? 1 : 0),
       invert: m && m.how === 'invert' ? 1 : 0, grade: m && (m.how === 'red' || m.how === 'sick') ? m.how : 'silver', gradeMix: m ? (m.how === 'red' || m.how === 'sick' ? 1 : 0) : .6,
       zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : .5, hud: .8, tape: 'TAPE 02', hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
-      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true };
+      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true, tear: m ? .9 : 0, wave: m ? .1 : 0 };
   },
 });
 
