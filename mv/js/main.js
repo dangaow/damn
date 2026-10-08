@@ -12,11 +12,18 @@ function drawLayer(t) {
   const s = sceneAt(t), lt = t - s.t0;
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.shadowBlur = 0;
   lx.clearRect(0, 0, W, H);
-  if (s.weather) drawWorld(lx, t, s.weather.call(s, t, lt));                   // 同一场雨、同一条街
+  const fx = { ...FX0, ...(s.fx ? s.fx.call(s, t, lt) : {}) };
+  // 背景跟着鼓点微微跳：底鼓放大再弹回、往下沉一点，踩镲细抖；字不跳。bounce 越大跳得越狠（808 也算时 bounce808 = 1）
+  const kb = Math.max(M.hit('kick', t, 9), fx.bounce808 ? M.hit('note', t, 9) : 0), hb = M.hit('hat', t, 28);
+  fx.bz = 1 + fx.bounce * (.025 * kb + .005 * hb);
+  fx.boff = [0, fx.bounce * .006 * kb];
+  if (s.weather) {                                                                 // 同一场雨、同一条街（属于背景，也一起跳）
+    lx.save(); lx.translate(W / 2, H / 2 + fx.boff[1] * H); lx.scale(fx.bz, fx.bz); lx.translate(-W / 2, -H / 2);
+    drawWorld(lx, t, s.weather.call(s, t, lt)); lx.restore();
+  }
   s.draw.call(s, lx, t, lt);
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1;
   polygraph(lx, t, POLY);
-  const fx = { ...FX0, ...(s.fx ? s.fx.call(s, t, lt) : {}) };
   for (const k of ['zoom', 'rot', 'barrel']) if (!Number.isFinite(fx[k])) fx[k] = FX0[k];
   // 镜头一直在呼吸：很轻很慢的整体漂移，像手持摄像机，切镜时画面不会"归零"
   fx.shift = [(fx.shift?.[0] ?? 0) + Math.sin(t * .21) * .003, (fx.shift?.[1] ?? 0) + Math.cos(t * .17) * .0025];

@@ -10,6 +10,7 @@ const FX0 = {
   zoom: 1, rot: 0, barrel: .03, shift: [0, 0], sq: [1, 1], ca: 1, split: 0, glitch: 0, gseed: 0, wave: 0, tear: 0,
   invert: 0, xerox: 0, grade: 'none', gradeMix: 0, bloom: .4, bloomThr: .62, flash: 0, flashCol: '#ffffff', dark: 0,
   grain: .08, scan: .14, vig: .75, lb: 0, hud: 0, tape: 'TAPE 01', hudMode: '▶ PLAY', tc: null,
+  bounce: 1, bounce808: false,                                                  // 背景跟着鼓点跳的幅度
 };
 const SCENES = [];
 const scene = o => (SCENES.push(o), o);
@@ -256,7 +257,7 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
   fx(t) {
     const fill = t > barT(11), k = M.last('kick', t), end = this.t1 - t;
     const strobe = t > L_JUESAI.t && k.t > L_JUESAI.t ? Math.exp(-k.since * 18) * .75 : 0;
-    return { ...cam(t, .35), zoom: (cam(t, .35).zoom ?? 1) + (t - this.t0) * .004, lb: lbIn(t - this.t0), grade: 'cold', gradeMix: .7, ca: 1.2 + M.hit('kick', t, 10) * 2, bloom: .5, hud: .75,
+    return { ...cam(t, .35), zoom: (cam(t, .35).zoom ?? 1) + (t - this.t0) * .004, lb: lbIn(t - this.t0), grade: 'cold', bounce: .6, gradeMix: .7, ca: 1.2 + M.hit('kick', t, 10) * 2, bloom: .5, hud: .75,
       glitch: fill ? .08 + M.hit('kick', t, 12) * .2 : 0, tear: fill ? .6 : 0, gseed: frameNo(t) >> 1, dark: M.gap(t) ? .45 : 0,
       flash: end < .45 ? (frameNo(t) % 2 ? .55 : 0) : strobe, flashCol: k.i % 2 ? '#ff1a3a' : '#ffffff' };
   },
@@ -674,17 +675,19 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
       return;
     }
     const m = memAt(t), s = sceneAt(m.mt);
-    c.save(); if (m.how === 'flip') { c.translate(W, 0); c.scale(-1, 1); }
+    const kb = Math.max(M.hit('kick', t, 9), M.hit('note', t, 9)), sc = 1 + .045 * kb;
+    c.save(); c.translate(W / 2, H / 2 + kb * 14); c.scale(sc, sc); c.translate(-W / 2, -H / 2);   // 闪回的画面整体跟着鼓点弹
+    if (m.how === 'flip') { c.translate(W, 0); c.scale(-1, 1); }
     if (s.weather) drawWorld(c, m.mt, s.weather.call(s, m.mt, m.mt - s.t0));
     s.draw.call(s, c, m.mt, m.mt - s.t0); c.restore();
-    c.strokeStyle = C.red; c.lineWidth = 8; c.strokeRect(36, 36, W - 72, H - 72);
+    const lw = 8 + kb * 22; c.strokeStyle = C.red; c.lineWidth = lw; c.strokeRect(36 + lw / 2 - 4, 36 + lw / 2 - 4, W - 72 - lw + 8, H - 72 - lw + 8);   // 红框随鼓点脉动
   },
   fx(t) {
     const m = t >= T_SLAM && t < T_LAST ? memAt(t) : null, h = m ? Math.exp(-m.since * 14) : 0;
     return { ca: 5 + h * 9, glitch: m ? .25 + h * .5 : 0, gseed: m ? m.i : 0, flash: m ? (m.since < 2 / 30 ? .8 : 0) : (t >= T_LAST && t < T_LAST + .07 ? 1 : 0),
       invert: m && m.how === 'invert' ? 1 : 0, grade: m && (m.how === 'red' || m.how === 'sick') ? m.how : 'silver', gradeMix: m ? (m.how === 'red' || m.how === 'sick' ? 1 : 0) : .6,
       zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : .5, hud: .8, tape: 'TAPE 02', hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
-      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3) };
+      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true };
   },
 });
 

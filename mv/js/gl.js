@@ -29,7 +29,7 @@ const GLX = (() => {
 
   // ---- 1. 背景 + 合成 2D 层
   const FS_SCENE = LIB + `
-  uniform sampler2D layer; uniform int mode; uniform vec3 cA, cB, cC; uniform float amt, speed, pulse, seed, mirror;
+  uniform sampler2D layer; uniform int mode; uniform vec3 cA, cB, cC; uniform float amt, speed, pulse, seed, mirror, bz; uniform vec2 boff;
   vec3 bg(vec2 p){
     float asp = res.x / res.y; vec2 q = (p - .5) * vec2(asp, 1.); float T = time * speed;
     if (mode == 1) {                                   // 烟雾
@@ -79,7 +79,7 @@ const GLX = (() => {
     return cA;
   }
   void main(){
-    vec2 p = uv; if (mirror > .5) p.x = .5 - abs(p.x - .5);
+    vec2 p = (uv - .5) / bz + .5 + boff; if (mirror > .5) p.x = .5 - abs(p.x - .5);   // bz / boff：背景跟着鼓点微微跳
     vec4 L = texture(layer, uv);
     o = vec4(bg(p) * (1. - L.a) + L.rgb, 1.);
   }`;
@@ -198,7 +198,8 @@ const GLX = (() => {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, layer);
     const common = { res: [W, H], time };
     pass(P.scene, F.scene, { ...common, mode: MODES[bg.mode] ?? 0, cA: hex(bg.a ?? '#000000'), cB: hex(bg.b ?? '#101830'), cC: hex(bg.c ?? '#000000'),
-      amt: bg.amt ?? 1, speed: bg.speed ?? 1, pulse: bg.pulse ?? 0, seed: bg.seed ?? 0, mirror: bg.mirror ? 1 : 0 }, { layer: layerTex });
+      amt: bg.amt ?? 1, speed: bg.speed ?? 1, pulse: bg.pulse ?? 0, seed: bg.seed ?? 0, mirror: bg.mirror ? 1 : 0,
+      bz: fx.bz ?? 1, boff: fx.boff ?? [0, 0] }, { layer: layerTex });
     pass(P.lens, F.lens, { ...common, zoom: fx.zoom, rotA: fx.rot, barrel: fx.barrel, ca: fx.ca, split: fx.split, glitch: fx.glitch, gseed: fx.gseed,
       wave: fx.wave, invert: fx.invert, sq: fx.sq, xerox: fx.xerox, gradeMix: fx.gradeMix, tear: fx.tear, shift: fx.shift, grade: GRADES[fx.grade] ?? 0 }, { src: F.scene.t });
     pass(P.bright, F.b1, { ...common, thr: fx.bloomThr }, { src: F.lens.t });
