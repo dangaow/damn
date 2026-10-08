@@ -139,64 +139,110 @@ scene({ name: '融化', t0: T_MELT, t1: D.notes808.find(n => n.t > T_UP).t,
   },
 });
 
-// 词语快切：每个底鼓一个词，版式每次不同；每小节第一下切回「谎话」
-const WORDS = ['连击', '击倒', '失态', '空白', '病态', '救赎', '决赛', '躲', '等待', '质疑', '拯救', '将士'];
+// 银色的心：前奏后半段不再出现字，换成一颗银色线框的 3D 心（这段关系）。
+// 底鼓 3-3-2 推 / 转 / 冻；14.10 808 滑音时从中间裂开、往下垮，之后一直带着裂痕；最后被踩镲复制成残影，收成一个点。
 const T_STACK = barT(7);
 const GLIDE1 = D.notes808.find(n => n.glide && n.t < 20);
-function wordShot(c, t, k, word, v, o = {}) {
-  const fg = o.fg ?? C.white;
-  c.save();
-  if (v === 0) { text(c, word, W / 2, H / 2, 1100, { fill: null, stroke: 'rgba(255,255,255,.12)', lw: 3 }); text(c, word, W / 2, H / 2, fit(c, word, W * .55, 440), { fill: fg }); }
-  else if (v === 1) { text(c, word, -30, H / 2 + 30, 560, { align: 'left', fill: C.red }); text(c, `[${String(k.i).padStart(3, '0')}] ${word}`, W - 90, H - 200, 26, { w: 400, fam: MONO, align: 'right', fill: fg }); }
-  else if (v === 2) { vtext(c, word, W - 330, 60, Math.min(380, 960 / [...word].length), { fill: fg }); text(c, word, 200, H / 2, 40, { w: 400, fam: SERIF, align: 'left', fill: 'rgba(255,255,255,.5)' }); }
-  else if (v === 3) { c.translate(W / 2, H / 2); c.rotate(-.21); chrome(c, word, 0, 0, fit(c, word, W * .6, 420)); }
-  else if (v === 4) {                                                              // 镂空字：白色色块上的字被挖空，透出后面的动态背景
-    c.fillStyle = C.white; c.fillRect(0, H / 2 - 170, W, 340);
-    c.globalCompositeOperation = 'destination-out'; text(c, word, W / 2, H / 2, 300, { fill: '#000' }); c.globalCompositeOperation = 'source-over';
+const T_CRT1 = D.lyrics[0].t - .24;
+const HEART = (() => {
+  const P = (u, v) => { const s = Math.sqrt(1 - v * v);
+    return [16 * Math.pow(Math.sin(u), 3) * s, -(13 * Math.cos(u) - 5 * Math.cos(2 * u) - 2 * Math.cos(3 * u) - Math.cos(4 * u)) * s + 2.5, v * 7]; };
+  const lines = [], NU = 72, NV = 9;
+  for (let j = 0; j < NV; j++) {                                                    // 横截面：一圈圈心形
+    const v = -.92 + 1.84 * j / (NV - 1), ring = [];
+    for (let i = 0; i <= NU; i++) ring.push(P(i / NU * 6.2832, v));
+    lines.push(ring);
   }
-  else { text(c, word, W / 2 + 14, H / 2 + 14, 420, { fill: C.red }); text(c, word, W / 2, H / 2, 420, { fill: null, stroke: fg, lw: 6 }); }
+  for (let i = 0; i < 12; i++) {                                                     // 经线
+    const u = i / 12 * 6.2832 + .13, mer = [];
+    for (let j = 0; j <= 16; j++) mer.push(P(u, -.96 + 1.92 * j / 16));
+    lines.push(mer);
+  }
+  return lines;
+})();
+// 画一颗心：cx, cy 屏幕中心；s 大小；a 绕 Y 轴转角；crack 0..1 裂开程度；droop 往下垮的像素
+function heart(c, cx, cy, s, a, o = {}) {
+  const crack = o.crack ?? 0, droop = o.droop ?? 0, tilt = o.tilt ?? .18, f = 1100, ca = Math.cos(a), sa = Math.sin(a), ct = Math.cos(tilt), st = Math.sin(tilt);
+  const proj = p => {
+    const side = p[0] < 0 ? -1 : 1;
+    const x0 = p[0] + side * crack * 2.2, y0 = p[1] + crack * (side < 0 ? 1.2 : 2.2);
+    let x = x0 * ca + p[2] * sa, z = -x0 * sa + p[2] * ca, y = y0 * ct - z * st; z = y0 * st + z * ct;
+    const k = f / (f + z * s);
+    return [cx + x * s * k, cy + y * s * k + droop * (side < 0 ? .7 : 1), z, side];
+  };
+  c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const line of HEART) {
+    const q = line.map(proj);
+    for (let i = 1; i < q.length; i++) {
+      if (crack > .02 && q[i][3] !== q[i - 1][3]) continue;                          // 裂开后，跨过中线的线段断掉
+      const depth = clamp(.5 - (q[i][2] + q[i - 1][2]) / 28);
+      c.strokeStyle = o.col ?? `rgba(${lerp(120, 245, depth) | 0},${lerp(130, 248, depth) | 0},${lerp(150, 255, depth) | 0},${(o.a ?? 1) * lerp(.25, 1, depth)})`;
+      c.lineWidth = (o.lw ?? 2.8) * lerp(.6, 1.2, depth);
+      c.beginPath(); c.moveTo(q[i - 1][0], q[i - 1][1]); c.lineTo(q[i][0], q[i][1]); c.stroke();
+    }
+  }
+  if (crack > .02) {                                                                // 中间那道红色裂痕
+    const r = rand(17), top = proj([0, -5, 0]), bot = proj([0, 17, 0]);
+    c.strokeStyle = `rgba(230,20,45,${(o.a ?? 1) * (.6 + .4 * hash(frameNo(o.t ?? 0), 5))})`; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(top[0], top[1]);
+    for (let i = 1; i < 12; i++) c.lineTo(lerp(top[0], bot[0], i / 12) + (r() - .5) * 26 * s / 14, lerp(top[1], bot[1], i / 12));
+    c.lineTo(bot[0], bot[1]); c.stroke();
+  }
   c.restore();
 }
-scene({ name: '词语', t0: D.notes808.find(n => n.t > T_UP).t, t1: T_STACK,
+// 心的姿态：底鼓猛推 = 放大（心跳），硬切 = 猛转 45°，卡帧 = 冻住
+function heartPose(t, t0) {
+  const te = frozen(t), j = jerk(te), n = cuts(te, t0);
+  const snap = j.act === 'cut' ? easeOut(j.since / .09) : 1;
+  const a = te * .55 + (n - 1 + snap) * Math.PI / 4;
+  const beat = t > barT(6) ? .26 : .16;
+  const pulse = j.act === 'punch' || t > barT(6) ? Math.exp(-j.since * 11) : 0;
+  const crack = GLIDE1 && te > GLIDE1.t ? easeOut((te - GLIDE1.t) / .25) : 0;
+  const droop = GLIDE1 && te > GLIDE1.t ? 240 * easeIn(clamp((te - GLIDE1.t) / .5)) * (1 - .75 * easeOut(clamp((te - GLIDE1.t - .5) / .8))) : 0;
+  return { te, a, s: 19 * (1 + beat * pulse), crack, droop, jit: M.hit('hat', t, 30) };
+}
+function heartGlow(c, cx, cy, k, a = 1) {                                           // 心里面一团暗红的光，跟着底鼓亮
+  const g = c.createRadialGradient(cx, cy, 0, cx, cy, 300);
+  g.addColorStop(0, `rgba(224,17,43,${(.18 + .35 * k) * a})`); g.addColorStop(1, 'rgba(224,17,43,0)');
+  c.fillStyle = g; c.fillRect(cx - 300, cy - 300, 600, 600);
+}
+scene({ name: '银色的心', t0: D.notes808.find(n => n.t > T_UP).t, t1: T_STACK,
   weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
-  bg: t => { const k = M.last('kick', t); return { mode: 'smoke', a: '#03050b', b: hash(k.i, 8) < .3 ? '#4a0812' : '#16244d', c: '#7d93ff', amt: .9, speed: 1.5, pulse: M.hit('kick', t, 8) }; },
+  bg: t => ({ mode: 'tunnel', a: '#020309', b: '#2c3f96', c: '#0d1638', amt: .9, speed: 1 + M.low(t) * 1.4, pulse: M.hit('kick', t, 8) }),
   draw(c, t, lt) {
     if (M.gap(t)) return;
-    const te = frozen(t), k = M.last('kick', te), first = BARS.some(b => Math.abs(b - k.t) < STEP * .6);
-    const word = first ? D.title : WORDS[mod(k.i, WORDS.length)], v = Math.floor(hash(k.i, 9) * 6);
-    const mode = hash(k.i, 11);
-    if (mode < .18) { c.fillStyle = C.red; c.fillRect(0, 0, W, H); } else if (mode < .3) { c.fillStyle = C.white; c.fillRect(0, 0, W, H); }
-    const fg = mode >= .18 && mode < .3 ? C.black : C.white;
-    // 808 往下滑音：字跟着往下垮
-    let droop = 0;
-    if (GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .55) droop = easeIn((t - GLIDE1.t) / .5);
-    const drop = lt < .18 ? (1 - easeOut(lt / .18)) * -H * .7 : 0;                 // 转场：接住"往上冲"，第一个词从上面砸下来
-    c.save(); c.translate(0, droop * 260 + drop); c.transform(1, droop * .25, 0, 1, 0, 0);
-    slam(c, te, k.t, k.i, () => { c.translate(-W / 2, -H / 2); first ? chrome(c, D.title, W / 2, H / 2, 560, { sweep: (te - k.t) * 2 }) : wordShot(c, te, k, word, v, { fg }); }, { amt: .3 });
-    c.restore();
+    const p = heartPose(t, this.t0), drop = lt < .2 ? (1 - easeOut(lt / .2)) * -H * .8 : 0;   // 转场：接住"往上冲"，心从上面落下来
+    const cy = H / 2 + drop + p.droop;
+    heartGlow(c, W / 2, cy, M.hit('kick', t, 7));
+    heart(c, W / 2 + (hash(frameNo(t), 3) - .5) * 8 * p.jit, cy, p.s, p.a, { crack: p.crack, t });
+    if (GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .12) bars(c, 5, 77, '#e0112b', .5);                // 裂开那一下：红色扫描条
   },
-  fx: t => ({ ...cam(frozen(t)), ca: 2 + M.hit('kick', t, 9) * 7, split: M.hit('hat', t, 25) * 3, xerox: .3, bloom: .45,
-    glitch: hash(M.last('kick', t).i, 12) < .3 ? M.hit('kick', t, 14) * .5 : 0, gseed: M.last('kick', t).i, dark: M.gap(t) ? .95 : 0, hud: .7 }),
+  fx: t => ({ ...cam(frozen(t)), ca: 2 + M.hit('kick', t, 9) * 6, split: M.hit('hat', t, 25) * 2, bloom: .7, bloomThr: .5, grade: 'silver', gradeMix: .3,
+    glitch: GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .2 ? .5 : 0, gseed: frameNo(t), dark: M.gap(t) ? .95 : 0, hud: .7,
+    flash: GLIDE1 && t >= GLIDE1.t && t < GLIDE1.t + 2 / 30 ? .5 : 0, flashCol: '#e0112b' }),
 });
 
-// 堆叠频闪：每个踩镲换一个词，叠在一起；最后 TAPE 01 + CRT 关机
-const T_CRT1 = D.lyrics[0].t - .24;
-scene({ name: '堆叠', t0: T_STACK, t1: D.lyrics[0].t,
+// 心跳残影：踩镲滚奏把心复制成好几个残影，频闪、反色；最后全部收成一个点 → TAPE 01 → CRT 关机（这个点变成雨夜的第一滴雨）
+scene({ name: '心跳残影', t0: T_STACK, t1: D.lyrics[0].t,
   weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
-  bg: t => ({ mode: 'smoke', a: '#020205', b: '#1a0a14', amt: .8, speed: 2, pulse: M.hit('hat', t, 12) }),
+  bg: t => ({ mode: 'tunnel', a: '#020206', b: '#3a2050', c: '#1a0a14', amt: .8, speed: 2.2, pulse: M.hit('hat', t, 12) }),
   draw(c, t, lt) {
-    const h = M.last('hat', t);
-    for (let j = 6; j >= 0; j--) {
-      const i = h.i - j; if (i < 0) continue;
-      const w = WORDS[mod(i * 7, WORDS.length)], x = W * (.15 + hash(i, 1) * .7), y = H * (.2 + hash(i, 2) * .6), s = 120 + hash(i, 3) * 320;
-      c.globalAlpha = j ? .12 + .5 / (j + 1) : 1;
-      text(c, w, x, y, s, { fill: j ? 'rgba(255,255,255,.6)' : (i % 2 ? C.red : C.white) });
+    const p = heartPose(t, SCENES.find(s => s.name === '银色的心').t0), h = M.last('hat', t);
+    const shrink = 1 - easeIn((t - (T_CRT1 - .5)) / .5);
+    if (shrink <= 0) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
+    else {
+      for (let j = 5; j >= 1; j--) {                                                // 残影：最近几个踩镲各留一颗
+        const i = h.i - j; if (i < 0) continue;
+        const x = W * (.2 + hash(i, 1) * .6), y = H * (.25 + hash(i, 2) * .5), s = p.s * (.35 + hash(i, 3) * .5) * shrink;
+        heart(c, lerp(x, W / 2, 1 - shrink), lerp(y, H / 2, 1 - shrink), s, p.a + i * .7, { crack: 1, a: .25 + .35 / j, col: i % 2 ? 'rgba(224,17,43,.7)' : null, lw: 1.6, t });
+      }
+      heartGlow(c, W / 2, H / 2, M.hit('kick', t, 7), shrink);
+      heart(c, W / 2, H / 2, p.s * shrink, p.a, { crack: 1, t });
     }
-    c.globalAlpha = 1;
-    if (t > T_CRT1 - .55 && frameNo(t) % 3) pixel(c, 'TAPE 01', W / 2, H / 2, 150, { shadow: C.red });
+    if (t > T_CRT1 - .55 && frameNo(t) % 3) pixel(c, 'TAPE 01', W / 2, H / 2 + 230, 110, { shadow: C.red });
   },
-  fx: t => { const h = M.last('hat', t); return { ca: 4, invert: h.i % 2 && h.since < .05 ? 1 : 0, flash: M.hit('snare', t, 20) * .5, glitch: .25, gseed: h.i, xerox: .3,
-    sq: crt((t - T_CRT1) / .24), hud: .7 }; },
+  fx: t => { const h = M.last('hat', t); return { ca: 4, invert: h.i % 2 && h.since < .05 ? 1 : 0, flash: M.hit('snare', t, 20) * .5, glitch: .2, gseed: h.i,
+    bloom: .7, bloomThr: .5, grade: 'silver', gradeMix: .3, sq: crt((t - T_CRT1) / .24), hud: .7 }; },
 });
 
 // ================================================================ 2 · 雨夜（主歌一）
