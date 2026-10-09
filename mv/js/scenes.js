@@ -753,7 +753,7 @@ scene({ name: '余震', t0: T_TV, t1: T_BACK,
     dust(c, t, 60, 9, .18, '#9fb4ff');
     drawTV(c, t, s, { static: !!M.gap(t), jump: M.hit('kick', t, 9) });
   },
-  fx: t => ({ grade: 'cold', gradeMix: .5, grain: .12, vig: 1, hud: .8, tape: 'TAPE 02', hudMode: '◀◀ REW', tc: T_TV - (t - T_TV) * 3, ca: 1 + M.hit('kick', t, 8) * 5 }),
+  fx: t => ({ grade: 'cold', gradeMix: .5, grain: .12, vig: 1, hud: .8, hudMode: '◀◀ REW', tc: T_TV - (t - T_TV) * 3, ca: 1 + M.hit('kick', t, 8) * 5 }),
 });
 
 // ================================================================ 10 · 回放：底鼓砸进电视，每个鼓点闪回一个镜头
@@ -817,7 +817,7 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
     const m = t >= T_SLAM && t < T_LAST ? memAt(t) : null, h = m ? Math.exp(-m.since * 14) : 0;
     return { ca: 5 + h * 9, glitch: m ? .25 + h * .5 : 0, gseed: m ? m.i : 0, flash: m ? (m.since < 2 / 30 ? .8 : 0) : (t >= T_LAST && t < T_LAST + .07 ? 1 : 0),
       invert: m && m.how === 'invert' ? 1 : 0, grade: m && (m.how === 'red' || m.how === 'sick') ? m.how : 'silver', gradeMix: m ? (m.how === 'red' || m.how === 'sick' ? 1 : 0) : .6,
-      zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : .5, hud: .8, tape: 'TAPE 02', hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
+      zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : .5, hud: .8, hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
       dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true, tear: m ? .9 : 0, wave: m ? .1 : 0 };
   },
 });
@@ -826,22 +826,21 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
 // CONTINUE? 倒数：严格一秒一个数，9 → 0，数字和 CONTINUE? 同时出现；鼓停时倒数跟着暗一下。
 // 数到 0 → 标题浮现 → 灯管闪几下熄灭 → 雪花 → 黑屏。
 const T_END0 = SCENES[SCENES.length - 1].t1;
-const T_CD0 = T_END0 + .1, T_ZERO = T_CD0 + 9, T_TITLE = T_ZERO + .7;
-const T_OFF = D.duration - 1.0, T_STATIC = [T_OFF + .15, T_OFF + .55];             // 灯灭 → 一阵雪花 → 黑
-// 倒数的闪烁：每两个数字闪一次（8、6、4、2、0），在那一秒里随机的时刻熄灭，
-// 熄灭时长在"超短"（2 帧）和"短"（6 帧）之间随机；熄灭时 CONTINUE? 和数字一起灭
-function countdownBlink(t) {
-  if (t < T_CD0 || t >= T_ZERO + .35) return false;
-  const i = Math.floor(t - T_CD0), n = 9 - i;                                      // 当前显示的数字
-  if (n % 2) return false;
-  const start = T_CD0 + i + .2 + hash(i, 71) * .5, dur = (2 + Math.floor(hash(i, 72) * 5)) / 30;
-  return t >= start && t < start + dur;
+const T_CD0 = T_END0 + .1, T_ZERO = T_CD0 + 9, T_TITLE = T_ZERO + .4;
+const T_OFF = D.duration - .8, T_STATIC = [T_OFF + .1, T_OFF + .45];             // 灯灭 → 一阵雪花 → 黑
+// 霓虹灯闪烁：大部分时间亮着，随机冒出一串很快的闪（每 1–2 帧切换，有时全灭、有时只暗一下）。
+// CONTINUE? 和数字像两根不同的灯管，各闪各的；rate 越大闪得越频繁
+function neonOn(t, seed, rate) {
+  const slot = Math.floor(t * 6), f = frameNo(t);                                   // 每 1/6 秒决定一次这一小段要不要闪
+  if (hash(slot, seed) > rate) return 1;
+  const r = hash(f >> (hash(slot, seed + 2) < .5 ? 0 : 1), seed + 1);               // 有的段每帧切换，有的段每 2 帧切换
+  return r < .4 ? 0 : r < .6 ? .3 : 1;
 }
 function lightOn(t) {
   if (t < T_TITLE || t > T_OFF) return 0;
   const left = T_OFF - t;                                                          // 熄灭前越闪越频繁
-  if (left < 1.3 && hash(frameNo(t), 6) < lerp(.55, .1, left / 1.3)) return .12;
-  return clamp((t - T_TITLE) / .7);
+  if (left < .9 && hash(frameNo(t), 6) < lerp(.6, .1, left / .9)) return .12;
+  return clamp((t - T_TITLE) / .35);
 }
 scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
   weather: (t, lt) => ({ rain: .2 * clamp(1 - lt / 8), n: 160 }),
@@ -850,12 +849,14 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
     if (t < T_TITLE) {
       const n = clamp(9 - Math.floor(t - T_CD0), 0, 9), k = t < T_ZERO ? mod(t - T_CD0, 1) : t - T_ZERO;
       const out = t > T_ZERO + .35 ? (frameNo(t) % 2 ? 1 : 0) : 1;
-      if (!out || countdownBlink(t)) return;
+      if (!out) return;
+      const signA = neonOn(t, 81, .42), numA = neonOn(t, 83, .28);
       const typed = 'CONTINUE?'.slice(0, Math.floor(lt / .045));                    // 转场：从 CRT 缩成的点开始打字
       if (lt < .12) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
       c.font = `700 96px "${PIX}", monospace`; const fw = c.measureText('CONTINUE?').width;
-      pixel(c, typed, W / 2 - fw / 2, H * .3, 96, { shadow: C.red, align: 'left' });
-      if (t >= T_CD0) { c.save(); c.translate(W / 2, H * .58);
+      c.save(); c.globalAlpha = signA; c.shadowColor = 'rgba(255,40,70,.9)'; c.shadowBlur = 26 * signA;   // 霓虹：一圈红色辉光
+      pixel(c, typed, W / 2 - fw / 2, H * .3, 96, { shadow: C.red, align: 'left' }); c.restore();
+      if (t >= T_CD0) { c.save(); c.globalAlpha = numA; c.translate(W / 2, H * .58);
         pixel(c, String(n), 0, 0, 330, { fill: n === 0 ? C.red : C.white, shadow: n === 0 ? C.black : C.red }); c.restore(); }
       c.globalAlpha = 1;
       return;
