@@ -197,11 +197,11 @@ function coverC(c) {
 // ================================================================ 第二轮：MV 里的版式
 // 录像带角标（MV 的 HUD）：左上 ● REC TAPE 01，右上 谎话 / dangao_w，左下 ▶ PLAY，右下时间码
 function tapeHud(c, o = {}) {
-  const m = 64 * S, top = o.top ?? 62 * S, bot = o.bot ?? H - 62 * S, col = o.col ?? C.white;
-  c.save(); c.font = fnt(22 * S, 400, MONO); c.textBaseline = 'middle'; c.globalAlpha = o.a ?? .85; c.fillStyle = col;
+  const fs = o.fs ?? 22 * S, m = 64 * S, top = o.top ?? 62 * S, bot = o.bot ?? H - 62 * S, col = o.col ?? C.white;
+  c.save(); c.font = fnt(fs, 400, MONO); c.textBaseline = 'middle'; c.globalAlpha = o.a ?? .85; c.fillStyle = col;
   c.textAlign = 'left';
-  c.save(); c.fillStyle = o.dot ?? C.red; c.globalAlpha = 1; c.beginPath(); c.arc(m + 10 * S, top, 9 * S, 0, 7); c.fill(); c.restore();
-  c.fillText('REC', m + 30 * S, top); c.fillText('TAPE 01', m + 128 * S, top);
+  c.save(); c.fillStyle = o.dot ?? C.red; c.globalAlpha = 1; c.beginPath(); c.arc(m + fs * .42, top, fs * .4, 0, 7); c.fill(); c.restore();
+  const recX = m + fs * 1.35; c.fillText('REC', recX, top); c.fillText('TAPE 01', recX + c.measureText('REC').width + fs * 2.4, top);
   c.fillText('▶ PLAY', m, bot);
   c.textAlign = 'right'; c.fillText('谎话 / dangao_w', W - m, top); c.fillText(o.tc ?? 'TC 00:00:06:00', W - m, bot);
   c.restore();
@@ -252,12 +252,12 @@ function coverE(c) {
   c.save(); c.beginPath(); c.rect(0, mid, W, H - mid); c.clip();
   misText(c, '就别再想着', 90 * S, mid + 150 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
   misText(c, '再跟我说谎话', 90 * S, mid + 320 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
-  c.font = `${64 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 90 * S, H - 150 * S);
+  c.font = `${82 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 76 * S, H - 160 * S);
   c.restore();
   c.fillStyle = 'rgba(0,0,0,.85)'; c.fillRect(0, mid - 3 * S, W, 6 * S);
-  tapeHud(c, { col: '#0a0b10', dot: '#0a0b10', a: .8, tc: 'TC 00:01:00:00' });
-  c.save(); c.font = fnt(24 * S, 400, MONO); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#0a0b10'; c.globalAlpha = .9;
-  c.fillText('makestudio.cn', W / 2, H - 62 * S); c.restore();   // 官网
+  tapeHud(c, { col: '#0a0b10', dot: '#0a0b10', a: .85, fs: 31 * S, top: 72 * S, bot: H - 72 * S, tc: 'TC 00:01:00:00' });
+  c.save(); c.font = fnt(34 * S, 400, MONO); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#0a0b10'; c.globalAlpha = .92;
+  c.fillText('makestudio.cn', W / 2, H - 72 * S); c.restore();   // 官网
   return { ...FLAT, ca: 0, vig: .7 };   // 整张不做色差（边缘会出彩边），错位只留在字上
 }
 
