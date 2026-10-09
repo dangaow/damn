@@ -828,6 +828,15 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
 const T_END0 = SCENES[SCENES.length - 1].t1;
 const T_CD0 = T_END0 + .1, T_ZERO = T_CD0 + 9, T_TITLE = T_ZERO + .7;
 const T_OFF = D.duration - 1.0, T_STATIC = [T_OFF + .15, T_OFF + .55];             // 灯灭 → 一阵雪花 → 黑
+// 倒数的闪烁：每两个数字闪一次（8、6、4、2、0），在那一秒里随机的时刻熄灭，
+// 熄灭时长在"超短"（2 帧）和"短"（6 帧）之间随机；熄灭时 CONTINUE? 和数字一起灭
+function countdownBlink(t) {
+  if (t < T_CD0 || t >= T_ZERO + .35) return false;
+  const i = Math.floor(t - T_CD0), n = 9 - i;                                      // 当前显示的数字
+  if (n % 2) return false;
+  const start = T_CD0 + i + .2 + hash(i, 71) * .5, dur = (2 + Math.floor(hash(i, 72) * 5)) / 30;
+  return t >= start && t < start + dur;
+}
 function lightOn(t) {
   if (t < T_TITLE || t > T_OFF) return 0;
   const left = T_OFF - t;                                                          // 熄灭前越闪越频繁
@@ -840,11 +849,8 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
   draw(c, t, lt) {
     if (t < T_TITLE) {
       const n = clamp(9 - Math.floor(t - T_CD0), 0, 9), k = t < T_ZERO ? mod(t - T_CD0, 1) : t - T_ZERO;
-      const near = D.gaps.find(g => g[0] > t && g[0] - t < .15);                      // 鼓停前抖一下、鼓停时暗下去
-      const dim = M.gap(t) ? .45 : near && hash(frameNo(t), 9) < .5 ? .6 : 1;
       const out = t > T_ZERO + .35 ? (frameNo(t) % 2 ? 1 : 0) : 1;
-      if (!out) return;
-      c.globalAlpha = dim;
+      if (!out || countdownBlink(t)) return;
       const typed = 'CONTINUE?'.slice(0, Math.floor(lt / .045));                    // 转场：从 CRT 缩成的点开始打字
       if (lt < .12) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
       c.font = `700 96px "${PIX}", monospace`; const fw = c.measureText('CONTINUE?').width;
