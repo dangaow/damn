@@ -605,6 +605,8 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
         text(c, txt, 0, 2, size);
         if (txt.includes('bullshxt')) { const full = c.measureText(txt).width, cut = c.measureText(txt.replace('shxt', '')).width; mosaic(c, -full / 2 + cut, -size * .45, full - cut, size * .9, t, { cell: 11 }); }
         if (m.who === 'R' && n === items.length - 1) { c.globalAlpha = .45 * app; text(c, '已读', -bw / 2 - 40, bh / 2 - 14, 18, { w: 400 }); }
+        const ts = `[${String(m.l.t / 60 | 0).padStart(2, '0')}:${(m.l.t % 60).toFixed(2).padStart(5, '0')}]`;   // 和雨夜的证词同一个格式：聊天记录像呈堂证据
+        c.globalAlpha = .8 * app; text(c, ts, m.who === 'L' ? -bw / 2 + 6 : bw / 2 - 6, bh / 2 + 16, 16, { w: 400, fam: MONO, align: m.who === 'L' ? 'left' : 'right', fill: C.blue });
       }
       c.restore();
       y -= (bh + 30) * (1 - gone);
@@ -680,6 +682,10 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
   draw(c, t, lt) {
     const sp = M.hit('snare', t, 4);
     embers(c, t);                                                                   // 转场：霓虹灭掉时的火星继续飘落，变成暖色灰尘
+    if (lt < 2.2) {                                                                 // 呼应开头意识流里那张面具（右眼一道红色泪痕）：它在两团光中间，掉下去了
+      const f = Math.max(0, lt - .7), y = H * .4 + 700 * f * f, a = clamp(lt / .5) * clamp(1 - f / 1.5) * .6;
+      drawObj(c, 'mask', t, 2, { x: W / 2 + f * 40, y, s: .95, r: f * f * .35, a, ink: '#ffe6c8', acc: C.red, glow: 'rgba(255,170,90,.5)' });
+    }
     dust(c, t, 140, 21, (.3 + sp * .25) * clamp(lt / 1.2), '#ffe6c8');
     const dist = t < T_HURT ? lerp(900, 160, ease((t - this.t0) / (T_HURT - .6 - this.t0))) : lerp(160, 1250, ease((t - T_HURT) / 4.6));
     const cy = H * .37 + Math.sin(t * .6) * 10, ax = W / 2 - dist / 2, bx = W / 2 + dist / 2;
@@ -812,6 +818,10 @@ const T_TV = T_WASH + .8, T_BACK = M.gap(88.5)?.[0] ?? 88.38, T_SLAM = D.kicks.f
 function tvRect(s) { const w = W * s, h = H * s; return { x: (W - w) / 2, y: (H - h) / 2 - 40 * (1 - s) / .58, w, h }; }
 // 余震里两下孤立的底鼓（心跳回来）：电视里闪过 0.22 秒的回忆——先是聊天记录，再是那两团光（给后面的「回放」埋伏笔）
 const TV_MEM = D.kicks.filter(k => k > T_TV && k < T_BACK).map((k, i) => ({ k, mt: [46.4, 66.0][i % 2], bg: [['#04060b', '#121a2c'], ['#1a0904', '#5a2a10']][i % 2] }));
+function tvOSD(t) {                                                                 // 录像机屏显：左上频道，右下 23:47（冒号一秒闪一次）
+  pixel(tvx, 'CH 03', 110, 110, 64, { align: 'left', fill: 'rgba(220,255,225,.85)', shadow: 'rgba(0,0,0,.7)' });
+  pixel(tvx, mod(t, 1) < .5 ? '23:47' : '23 47', W - 110, H - 110, 64, { align: 'right', fill: 'rgba(220,255,225,.85)', shadow: 'rgba(0,0,0,.7)' });
+}
 function tvContent(t, staticOn) {
   tvx.setTransform(1, 0, 0, 1, 0, 0);
   const mem = TV_MEM.find(m => t >= m.k && t < m.k + .22);
@@ -820,17 +830,17 @@ function tvContent(t, staticOn) {
     const g = tvx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * .7); g.addColorStop(0, mem.bg[1]); g.addColorStop(1, mem.bg[0]);
     tvx.fillStyle = g; tvx.fillRect(0, 0, W, H);
     tvx.save(); s.draw.call(s, tvx, mt, mt - s.t0); tvx.restore();
-    return TVC;
+    tvOSD(t); return TVC;
   }
   const g = tvx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0a1430'); g.addColorStop(1, '#22356e'); tvx.fillStyle = g; tvx.fillRect(0, 0, W, H);
-  if (staticOn) { tvx.imageSmoothingEnabled = false; tvx.drawImage(NOISE[frameNo(t) % 4], 0, 0, W, H); tvx.imageSmoothingEnabled = true; return TVC; }
+  if (staticOn) { tvx.imageSmoothingEnabled = false; tvx.drawImage(NOISE[frameNo(t) % 4], 0, 0, W, H); tvx.imageSmoothingEnabled = true; tvOSD(t); return TVC; }
   street(tvx, t, .3);
   if (t < T_TV + 2.2) {                                                            // 转场：上一幕的铬金属「谎话」还在电视里往下沉
     tvx.save(); tvx.globalAlpha = clamp(1 - (t - T_TV) / 2.2);
     chrome(tvx, '谎话', W / 2 + 150, H * .52 + 160 + (t - T_TV) * 140, 105, {}); tvx.restore();
   }
   worldRain(tvx, t, { rain: .6, n: 360, len: 1.3, col: '200,215,255', lw: 1.6, rt: M.gap(t)?.[0] ?? t });
-  return TVC;
+  tvOSD(t); return TVC;
 }
 function drawTV(c, t, s, o = {}) {
   const r = tvRect(s), jump = o.jump ?? 0;
@@ -940,6 +950,7 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
 const T_END0 = SCENES[SCENES.length - 1].t1;
 const T_CD0 = T_END0 + .1, T_ZERO = T_CD0 + 9, T_TITLE = T_ZERO + .4;
 const T_OFF = D.duration - .8, T_STATIC = [T_OFF + .1, T_OFF + .45];             // 灯灭 → 一阵雪花 → 黑
+const T_LASTDROP = T_STATIC[1] + .06;                                               // 黑屏里最后落下一滴雨
 // 霓虹灯闪烁：大部分时间亮着，随机冒出一串很快的闪（每 1–2 帧切换，有时全灭、有时只暗一下）。
 // CONTINUE? 和数字像两根不同的灯管，各闪各的；rate 越大闪得越频繁
 function neonOn(t, seed, rate) {
@@ -973,6 +984,13 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
       c.globalAlpha = 1;
       return;
     }
+    if (t >= T_LASTDROP) {                                                          // 最后一滴雨：从画面中间落下去（呼应开头）
+      const k = (t - T_LASTDROP) / (D.duration - .03 - T_LASTDROP), y = lerp(H / 2, H + 140, easeIn(k));
+      c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+      c.strokeStyle = 'rgba(230,238,255,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * Math.min(1, k * 2)); c.lineTo(W / 2, y); c.stroke();
+      c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
+      return;
+    }
     const a = lightOn(t);
     if (a <= 0) return;
     c.globalAlpha = a;
@@ -981,6 +999,6 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
     text(c, '2026', W / 2, H / 2 + 240, 24, { w: 400, fam: MONO, fill: 'rgba(255,255,255,.6)' });
     c.globalAlpha = 1;
   },
-  fx: t => ({ grain: .1, scan: .18, ca: .8, bloom: .6, flash: t >= T_TITLE && t < T_TITLE + .06 ? .4 : 0, dark: t > T_STATIC[1] ? 1 : 0,
+  fx: t => ({ grain: .1, scan: .18, ca: .8, bloom: .6, flash: t >= T_TITLE && t < T_TITLE + .06 ? .4 : 0, dark: t > T_STATIC[1] && t < T_LASTDROP ? 1 : 0,
     glitch: t > T_STATIC[0] && t < T_STATIC[1] ? .6 : 0, gseed: frameNo(t) }),
 });
