@@ -5,6 +5,7 @@
 //   node export.mjs --shots 5,22.5,45        只截几张图到 shots/，检查画面
 //   可选：--workers 4  --fps 30  --crf 18  --mb 3（运动模糊子帧数，1 = 关）  --out 名字.mp4
 //   最高画质：--png --mb 6 --crf 14 --preset slow（慢很多）
+//   竖屏预告：--page teaser.html --audio output/teaser_audio.wav --out output/谎话预告.mp4
 //
 // 每个 worker 是一个无头 Chrome，页面以 ?export=1 打开，由脚本指定每一帧的精确时间（window.__frame(t)）。
 // 帧按顺序写给 ffmpeg，所以结果与 worker 数量、机器快慢无关。
@@ -22,7 +23,7 @@ const FPS = +(args.fps || 30), CRF = +(args.crf || 18), SAMPLES = +(args.mb || 3
 const PNG = !!args.png, PRESET = args.preset || 'medium';                         // --png 无损传帧；--preset slow 等
 const WORKERS = args.shots ? 1 : Math.max(1, +(args.workers || Math.min(4, Math.floor(availableParallelism() / 2))));
 const PAGE = resolve(here, args.page || 'mv.html');
-const AUDIO = resolve(here, 'song.mp3');
+const AUDIO = resolve(here, args.audio || 'song.mp3');                            // --audio 换音轨（预告用 output/teaser_audio.wav）
 const OUT = resolve(here, args.out || 'mv.mp4');
 const CHROME = [process.env.CHROME,
   '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',

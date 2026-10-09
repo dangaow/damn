@@ -4,7 +4,7 @@
 // 约定：整支 MV 是一个函数 render(t)，只依赖 t；随机数一律用 rand(seed) / hash(i)，保证同一时刻每次画得一样。
 // ============================================================================
 const D = window.MV_DATA;
-const W = 1920, H = 1080;
+const W = window.MV_W || 1920, H = window.MV_H || 1080;                          // 竖屏预告（teaser.html）会改成 1080×1920
 const STEP = D.step, BEAT = STEP * 4, BAR = STEP * 16;
 
 // 配色：黑 / 银 / 血红，忧郁段落用冷蓝，桥段一处暖橙

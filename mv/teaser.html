@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>谎话 · 预告（竖屏 15 秒）</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: system-ui, "Noto Sans SC", sans-serif; overflow: hidden; }
+  #stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { height: 100vh; width: 56.25vh; max-width: 100vw; max-height: 177.78vw; background: #000; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 10px 16px;
+         background: linear-gradient(transparent, rgba(0,0,0,.8)); }
+  #bar button { background: none; border: 1px solid #666; color: #ddd; border-radius: 4px; padding: 4px 12px; cursor: pointer; font: inherit; }
+  #seek { flex: 1; }
+  body.export #bar { display: none; }
+</style>
+</head>
+<body>
+<!-- 快捷键：空格 播放/暂停，, . 逐帧。音轨用 output/teaser_audio.wav（python3 teaser/audio.py 生成） -->
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="bar"><button id="pp">▶</button><input id="seek" type="range" min="0" max="1000" value="0"><span id="time">0.00</span></div>
+<audio id="au" src="output/teaser_audio.wav" preload="auto"></audio>
+<script>window.MV_W = 1080; window.MV_H = 1920;</script>
+<script src="data.js"></script>
+<script src="js/core.js"></script>
+<script src="js/gl.js"></script>
+<script src="js/draw.js"></script>
+<script src="js/teaser.js"></script>
+</body>
+</html>
