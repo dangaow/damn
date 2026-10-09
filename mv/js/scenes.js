@@ -578,7 +578,11 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
     const kc = M.count('kick', this.t0 - .01, t), step = kc * .21 + easeOut(clamp(M.last('kick', t).since / .1)) * .0;
     c.save(); c.translate(W - 430, H / 2 + 30); c.rotate(step);
     text(c, '我', 0, 0, 900, { fam: SERIF, fill: null, stroke: `rgba(224,17,43,${.5 + M.hit('kick', t, 6) * .4})`, lw: 5 }); c.restore();
-    if (t >= T_UP3) { cutIn(c, t, T_UP3, 3, () => text(c, '我', 0, 0, 640, { fill: C.red })); return; }   // 跳八度：硬切成一个巨大的红"我"
+    if (t >= T_UP3) {                                                               // 跳八度：硬切成一个巨大的红"我"，之后按十六分音符红黑互换
+      const alt = t > T_UP3 + .12 && Math.floor((t - T_UP3) / STEP) % 2;
+      if (alt) { c.fillStyle = C.red; c.fillRect(0, 0, W, H); }
+      cutIn(c, t, T_UP3, 3, () => text(c, '我', 0, 0, 640, { fill: alt ? '#050003' : C.red })); return;
+    }
     const collapse = 0, smear = t > T_FILL3 ? clamp((t - T_FILL3) / 2.1) : 0;
     const cur = STACK.filter(l => t >= l.t).length - 1, pop = 1 + .35 * M.hit('kick', t, 9);
     STACK.forEach((l, k) => {
@@ -597,12 +601,11 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
     });
   },
   fx(t) {
-    const end = this.t1 - t;
     return { ...cam(t), xerox: .35, grade: 'red', gradeMix: .4, ca: 2 + M.hit('kick', t, 9) * 5, bloom: .5, flashCol: '#e0112b',
       flash: t - this.t0 < 2 / 30 ? .9 : 0,
       glitch: hash(M.last('kick', t).i, 14) < .3 ? M.hit('kick', t, 12) * .4 : 0, gseed: M.last('kick', t).i,
       zoom: 1 + M.hit('note', t, 10) * (t > T_FILL3 ? .1 : 0) + (cam(t).zoom ?? 1) - 1,
-      dark: M.gap(t) ? .9 : 0, invert: t > T_UP3 + .12 && end > 0 ? frameNo(t) % 2 : 0, hud: .5 };
+      dark: M.gap(t) ? .9 : 0, hud: .5 };
   },
 });
 
@@ -641,7 +644,7 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
     });
     const { line } = M.lyric(t);
     if (!line) return;
-    const size = fit(c, line.text, W * .78, 64, 400, SERIF), a = clamp((t - line.t) / .45) * clamp((line.end - t) / .35);
+    const size = fit(c, line.text, W * .78, 84, 400, SERIF), a = clamp((t - line.t) / .45) * clamp((line.end - t) / .35);
     c.globalAlpha = a;
     if (line === L_HURT) {                                                          // 「伤害」唱到时变红，跟着鼓点亮
       c.font = fnt(size, 400, SERIF);
@@ -754,8 +757,18 @@ const NOISE = Array.from({ length: 4 }, (_, k) => { const c = mk(320, 180), x = 
   for (let i = 0; i < im.data.length; i += 4) { const v = r() * 255 | 0; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; } x.putImageData(im, 0, 0); return c; });
 const T_TV = T_WASH + .8, T_BACK = M.gap(88.5)?.[0] ?? 88.38, T_SLAM = D.kicks.find(k => k > 88.4);
 function tvRect(s) { const w = W * s, h = H * s; return { x: (W - w) / 2, y: (H - h) / 2 - 40 * (1 - s) / .58, w, h }; }
+// 余震里两下孤立的底鼓（心跳回来）：电视里闪过 0.22 秒的回忆——先是聊天记录，再是那两团光（给后面的「回放」埋伏笔）
+const TV_MEM = D.kicks.filter(k => k > T_TV && k < T_BACK).map((k, i) => ({ k, mt: [46.4, 66.0][i % 2], bg: [['#04060b', '#121a2c'], ['#1a0904', '#5a2a10']][i % 2] }));
 function tvContent(t, staticOn) {
   tvx.setTransform(1, 0, 0, 1, 0, 0);
+  const mem = TV_MEM.find(m => t >= m.k && t < m.k + .22);
+  if (mem) {
+    const s = sceneAt(mem.mt), mt = mem.mt - (t - mem.k) * 1.5;
+    const g = tvx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * .7); g.addColorStop(0, mem.bg[1]); g.addColorStop(1, mem.bg[0]);
+    tvx.fillStyle = g; tvx.fillRect(0, 0, W, H);
+    tvx.save(); s.draw.call(s, tvx, mt, mt - s.t0); tvx.restore();
+    return TVC;
+  }
   const g = tvx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0a1430'); g.addColorStop(1, '#22356e'); tvx.fillStyle = g; tvx.fillRect(0, 0, W, H);
   if (staticOn) { tvx.imageSmoothingEnabled = false; tvx.drawImage(NOISE[frameNo(t) % 4], 0, 0, W, H); tvx.imageSmoothingEnabled = true; return TVC; }
   street(tvx, t, .3);
@@ -790,7 +803,9 @@ scene({ name: '余震', t0: T_TV, t1: T_BACK,
 });
 
 // ================================================================ 10 · 回放：底鼓砸进电视，每个鼓点闪回一个镜头
-const MEM = [[3.0, 'invert'], [25.3, 'flip'], [33.95, 'red'], [36.0, 'sick'], [44.95, 'invert'], [50.2, 'flip'], [57.0, 'none'], [62.9, 'invert'],
+// 第 3 格最长（看得见的约 1 秒）：放「对质」里发消息的聊天画面——1 倍速倒放，删掉的消息一条条飞回来，停在发出去的两条红色消息上
+// （1 倍速是为了躲开原片 45.85–46.17 那段鼓停黑屏）
+const MEM = [[3.0, 'invert'], [25.3, 'flip'], [47.25, 'none', 1], [36.0, 'sick'], [33.95, 'red'], [50.2, 'flip'], [57.0, 'none'], [62.9, 'invert'],
   [66.5, 'red'], [74.8, 'flip'], [12.3, 'sick'], [38.0, 'invert'], [30.9, 'flip'], [48.0, 'red'], [68.9, 'flip'], [5.5, 'sick']];
 const T_LAST = D.kicks.filter(k => k < 96).pop(), T_CRT2 = T_LAST + 1.25;
 const MEV = [...D.kicks, ...D.snares, ...D.notes808.map(n => n.t)].filter(x => x >= T_SLAM && x < T_LAST - .02).sort((a, b) => a - b)
@@ -798,8 +813,8 @@ const MEV = [...D.kicks, ...D.snares, ...D.notes808.map(n => n.t)].filter(x => x
 // 闪回倒着放：每个镜头从它的时间点以 1.5 倍速往回走（雨往天上飞、字往回弹、碎片往回收）
 function memAt(t) {
   const i = lastAt(MEV, t); if (i < 0) return null;
-  const [m0, how] = MEM[i % MEM.length], s = sceneAt(m0);
-  return { mt: Math.max(s.t0 + .01, m0 - (t - MEV[i]) * 1.5), s, how, i, since: t - MEV[i] };
+  const [m0, how, spd = 1.5] = MEM[i % MEM.length], s = sceneAt(m0);
+  return { mt: Math.max(s.t0 + .01, m0 - (t - MEV[i]) * spd), s, how, i, since: t - MEV[i] };
 }
 // 录像带倒带的画面毛病：往上扫的跟踪噪声带、底部的磁头噪声、大大的 ◀◀
 function rewindFX(c, t) {
@@ -851,7 +866,7 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
     return { ca: 5 + h * 9, glitch: m ? .25 + h * .5 : 0, gseed: m ? m.i : 0, flash: m ? (m.since < 2 / 30 ? .8 : 0) : (t >= T_LAST && t < T_LAST + .07 ? 1 : 0),
       invert: m && m.how === 'invert' ? 1 : 0, grade: m && (m.how === 'red' || m.how === 'sick') ? m.how : 'silver', gradeMix: m ? (m.how === 'red' || m.how === 'sick' ? 1 : 0) : .6,
       zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : .5, hud: .8, hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
-      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true, tear: m ? .9 : 0, wave: m ? .1 : 0 };
+      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true, tear: m ? (m.s.name === '对质' ? .35 : .9) : 0, wave: m ? .1 : 0 };
   },
 });
 
