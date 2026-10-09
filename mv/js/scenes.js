@@ -652,15 +652,35 @@ scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
     }
     const { line } = M.lyric(t);
     const wash = t > T_WASH ? easeIn((t - T_WASH) / .7) : 0;
-    if (line === L_RAIN) {                                                          // 字从天上掉下来
-      const size = 112; c.font = fnt(size, 900, SERIF);
+    if (line === L_RAIN) {                                                          // 字像雨痕一样出现在窗玻璃上
+      const tf = M.gap(t)?.[0] ?? t;                                                // 鼓停时字和雨一起冻住
+      const size = 96, y0 = H * .52; c.font = fnt(size, 400, SERIF);
       const ws = line.words.map(q => c.measureText(q.w).width); let x = W / 2 - ws.reduce((a, b) => a + b, 0) / 2;
-      const out = clamp((line.end - t) / .3);
+      const out = clamp((line.end - tf) / .45), wash = 1 - out;                      // 退场：往下拉长、淡掉，像被雨冲掉
       line.words.forEach((q, k) => {
-        const f = clamp((t - q.t + .25) / .45), y = lerp(-140, H * .52, f * f), land = t - (q.t + .2);
-        if (f > 0) { c.globalAlpha = out; text(c, q.w, x + ws[k] / 2, y, size, { w: 900, fam: SERIF, base: 'alphabetic' }); c.globalAlpha = 1; }
-        if (land > 0 && land < .5) drawPts(c, burst(Array.from({ length: 14 }, (_, i) => [Math.cos(i) * 10, 0]), land, k + 40, { power: 500, gravity: 1800 }), x + ws[k] / 2, H * .52, 3, C.ice, 1 - land * 2);
-        x += ws[k];
+        const dt = tf - q.t + .06, cx = x + ws[k] / 2; x += ws[k];
+        if (dt <= 0) return;
+        const settle = easeOut(dt / .22), streak = 1 - settle;
+        c.save(); c.translate(cx, y0 + wash * 50);
+        for (let j = 6; j >= 1; j--) {                                              // 出现：一道竖向拉长、带残影的雨丝，收拢成字
+          const a = streak * .22 * (1 - j / 7) + wash * .12 * (1 - j / 7);
+          if (a < .01) continue;
+          c.save(); c.globalAlpha = a * out; c.translate(0, -j * (30 * streak) + j * 18 * wash); c.scale(1, 1 + .5 * streak + .4 * wash);
+          text(c, q.w, 0, 0, size, { w: 400, fam: SERIF, fill: '#cfdcff' }); c.restore();
+        }
+        c.globalAlpha = settle * out; c.scale(1, 1 + .5 * streak + .35 * wash);
+        c.shadowColor = 'rgba(160,190,255,.55)'; c.shadowBlur = 14;
+        text(c, q.w, 0, -38 * streak, size, { w: 400, fam: SERIF, fill: '#e9efff' });
+        c.restore();
+        const r = rand(k * 37 + 5), nd = 1 + (r() < .5 ? 1 : 0);                     // 停留：底部慢慢淌下一两道细水痕
+        for (let d = 0; d < nd; d++) {
+          const dx = (r() - .5) * ws[k] * .7, len = easeOut((dt - .3 - r() * .4) / 2.6) * (30 + r() * 90), top = y0 + size * .32;
+          if (len <= 1) continue;
+          const g = c.createLinearGradient(0, top, 0, top + len);
+          g.addColorStop(0, `rgba(210,225,255,${.45 * out})`); g.addColorStop(1, 'rgba(210,225,255,0)');
+          c.fillStyle = g; c.fillRect(cx + dx - 1, top, 2, len);
+          c.fillStyle = `rgba(225,235,255,${.55 * out})`; c.beginPath(); c.arc(cx + dx, top + len, 2.6, 0, 7); c.fill();
+        }
       });
     } else if (line === L_TRUE) {
       const size = 82; c.font = fnt(size, 400, SERIF); const a = clamp((t - line.t) / .35) * clamp((line.end - t) / .3);
