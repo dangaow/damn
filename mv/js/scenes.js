@@ -76,8 +76,9 @@ function POLY(t) {
 scene({ name: '开机', t0: 0, t1: D.bar0,
   bg: (t, lt) => ({ mode: 'static', a: '#000000', amt: lt > 1.08 ? .55 : 0 }),
   draw(c, t, lt) {
-    if (lt < 1.08) {
-      const w = W * (.15 + .85 * easeOut(lt / .35)), h = 2 + hash(frameNo(t), 3) * 2;
+    if (lt < 1.08) {                                                                // 片尾最后那滴雨落在画面正中 → 溅开成开机的这条横线（首尾接上）
+      const w = Math.max(10, W * easeOut(lt / .35)), h = 2 + hash(frameNo(t), 3) * 2;
+      if (lt < .12) { c.fillStyle = `rgba(255,255,255,${1 - lt / .12})`; c.beginPath(); c.arc(W / 2, H / 2, 4 + lt * 40, 0, 7); c.fill(); }
       c.fillStyle = `rgba(255,255,255,${.6 + .4 * hash(frameNo(t), 4)})`; c.fillRect((W - w) / 2, H / 2 - h / 2, w, h);
       if (lt > .3 && frameNo(t) % 5) text(c, `TAPE 01  ·  ${D.artist}`, W / 2, H / 2 - 40, 24, { w: 400, fam: MONO, fill: 'rgba(255,255,255,.7)' });
     }
@@ -1061,10 +1062,10 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration,
 // 最后那滴雨落出画面后，雨又下起来，回到开头的雨夜；"证词"的位置上写的是做这首歌的人。
 // 音乐：伴奏第 24–33 小节降 2 个半音（变调也变速，见 credits_audio.py），一小节 2.866 秒，每条字幕停一小节。
 const T_CRED = D.duration, CRED_SLOW = 110 / 98, CRED_BAR = BAR * CRED_SLOW, CRED_LEN = CRED_BAR * 9;
-const MV_END = T_CRED + CRED_LEN + .6;                                              // 片尾音乐结束后黑屏 0.6 秒
+const T_FINDROP = T_CRED + CRED_LEN + .3, MV_END = T_FINDROP + .7;                // 音乐结束、黑 0.3 秒后，最后一滴雨从上面落到画面正中，落下的那一刻全片结束（开头就从这一点溅开）
 const credAt = s => T_CRED + (s - barT(24)) * CRED_SLOW;                            // 伴奏原来的时间 → 片尾里的时间
 const CRED_GAP = M.gap(80.2).map(credAt);                                           // 原曲点题前那 0.4 秒鼓停：雨冻住、画面压暗
-const CREDITS = [['作词', 'dangao_w'], ['作曲', 'dangao_w'], ['编曲', 'luvsak111'], ['混音', 'YuKIluv7'], ['视觉', '【来自我】']]
+const CREDITS = [['作词', 'dangao_w'], ['作曲', 'dangao_w'], ['编曲', 'luvsak111'], ['混音', 'YuKIluv7'], ['视觉', 'dangao_w']]
   .map(([role, text], i) => ({ role, text, t: T_CRED + (i + 1) * CRED_BAR }));
 const CRED_OUT = T_CRED + 6 * CRED_BAR, CRED_SIGN = T_CRED + 7 * CRED_BAR;        // 最后一条飘走；鼓回来那一下出落款，同时开始渐出
 const credRain = t => t >= CRED_GAP[0] && t < CRED_GAP[1] ? CRED_GAP[0] : t;
@@ -1081,6 +1082,13 @@ scene({ name: '片尾', t0: T_CRED, t1: MV_END + 1,
   weather: (t, lt) => ({ rain: .26 * credRainK(t, lt), rt: credRain(Math.floor(t * 12) / 12), street: .14 * clamp(lt / 2.5), wind: .22 }),
   bg: () => ({ mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: .9, speed: 1, pulse: 0 }),
   draw(c, t, lt) {
+    if (t >= T_FINDROP) {                                                          // 最后一滴雨：和雨夜开头那滴一样，只是从上往下落进画面正中
+      const k = clamp((t - T_FINDROP) / (MV_END - .1 - T_FINDROP)), y = lerp(-60, H / 2, k * k);   // 自由落体
+      c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+      c.strokeStyle = 'rgba(230,238,255,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * (1 - k * .9)); c.lineTo(W / 2, y); c.stroke();
+      c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
+      return;
+    }
     let i = -1; CREDITS.forEach((cr, j) => { if (t >= cr.t) i = j; });
     const cr = CREDITS[i];
     if (cr && i > 0 && t - cr.t < .3) {                                             // 上一条往上飘着淡出
@@ -1097,6 +1105,7 @@ scene({ name: '片尾', t0: T_CRED, t1: MV_END + 1,
     if (lt > 1) glass(c, t, cr && t < CRED_OUT ? cr : null, clamp((lt - 1) / 1.5));   // 最前面：玻璃上的雨滴，每条字幕先对焦在玻璃上再拉到字上
   },
   fx(t) {
+    if (t >= T_FINDROP) return { grain: .25, scan: .3, hud: 0 };                    // 和开机一样的底子，首尾接得上
     const lt = t - this.t0, gap = t >= CRED_GAP[0] && t < CRED_GAP[1];
     const fade = ease((t - CRED_SIGN - 1.4) / (T_CRED + CRED_LEN - CRED_SIGN - 1.4));   // 落款亮一会儿后，画面跟着音乐一起暗下去
     return { zoom: 1 + lt * .004, lb: lbIn(lt, .8), grade: 'cold', gradeMix: .7, ca: 1.2, bloom: .5, hud: 0,

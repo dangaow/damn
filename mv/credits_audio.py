@@ -54,7 +54,7 @@ cred *= ((g * g * (3 - 2 * g)) * 10 ** (GAIN_DB / 20))[:, None]
 
 tmp = os.path.join(HERE, 'output', '_credits_raw.wav'); os.makedirs(os.path.dirname(tmp), exist_ok=True)
 out = os.path.join(HERE, 'output', '谎话_完整音轨.wav')
-full = np.concatenate([song, cred, np.zeros((int(.6 * SR), 2))])   # 片尾后黑屏留 0.6 秒
+full = np.concatenate([song, cred, np.zeros((int(1.0 * SR), 2))])  # 片尾音乐后还有 1 秒：黑 0.3 秒 + 最后一滴雨落下（js/scenes.js 的 T_FINDROP / MV_END）
 pcm = (np.clip(full, -1, 1) * 32767).astype('<i2')
 subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 's16le', '-ar', str(SR), '-ac', '2', '-i', '-', tmp], input=pcm.tobytes(), check=True)
 # 只给片尾那段收高频（原曲部分原样）
@@ -62,5 +62,5 @@ c0 = len(song) / SR
 subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', tmp, '-af', f"highshelf=f=4500:g=-5:enable='gte(t,{c0:.4f})',lowpass=f=11000:enable='gte(t,{c0:.4f})'",
                 '-c:a', 'pcm_s16le', out], check=True)
 os.remove(tmp)
-print(f'原曲 {c0:.3f}s + 片尾 {L:.3f}s + 黑 0.6s = {len(full) / SR:.3f}s → {out}')
+print(f'原曲 {c0:.3f}s + 片尾 {L:.3f}s + 黑 1.0s = {len(full) / SR:.3f}s → {out}')
 print(f'片尾小节长 {BAR * UP / DOWN:.4f}s，渐出起点 {fade0:.3f}s（片尾内）')
