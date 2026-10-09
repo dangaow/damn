@@ -282,6 +282,27 @@ scene({ name: '念头乱窜', t0: T_STACK, t1: D.lyrics[0].t,
 // ================================================================ 2 · 雨夜（主歌一）
 const RAIN_FREEZE1 = [barT(11), D.kicks.find(k => k > barT(11) + .05)];   // 加花小节第一拍 808 空掉：雨冻住一拍
 const L_KONGBAI = lineAt(25.58), L_JUESAI = lineAt(30.84);
+const VS = 100;                                                                       // 主歌字号（原来 76，手机上偏小）
+// 玻璃上的雨滴（前景）：每句开头先对焦在玻璃上（雨滴清楚、字还虚），然后焦点拉到字上（雨滴虚掉）
+const GLASS = mk();
+function glass(c, t, line, f = 1) {
+  const g = GLASS.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
+  const r = rand(31);
+  for (let i = 0; i < 70; i++) {                                                    // 每滴：亮的折射边 + 左上一点高光 + 右下一点暗边；少数往下滑，拖一道水痕
+    const x = r() * W, y0 = r() * H, rr = 7 + r() * r() * 22, sl = r() < .25 ? 18 + r() * 40 : 0, y = mod(y0 + sl * t, H + 60) - 30;
+    if (sl) { const tg = g.createLinearGradient(0, y - rr * 9, 0, y); tg.addColorStop(0, 'rgba(200,215,255,0)'); tg.addColorStop(1, 'rgba(200,215,255,.22)');
+      g.fillStyle = tg; g.fillRect(x - rr * .35, y - rr * 9, rr * .7, rr * 9); }
+    const rx = rr * (.85 + r() * .35), ry = rr * (.7 + r() * .25), rot = (r() - .5) * .5;     // 玻璃上的水是扁的、不规则的
+    g.save(); g.translate(x, y); g.rotate(rot); g.scale(rx / rr, ry / rr);
+    const gr = g.createRadialGradient(0, rr * .35, 0, 0, rr * .1, rr);                    // 折射：下半部透出亮光，上半部偏暗
+    gr.addColorStop(0, 'rgba(205,220,255,.42)'); gr.addColorStop(.55, 'rgba(120,150,230,.16)'); gr.addColorStop(.92, 'rgba(10,18,45,.30)'); gr.addColorStop(1, 'rgba(10,18,45,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(0, 0, rr, 0, 7); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.75)'; g.beginPath(); g.arc(-rr * .32, -rr * .4, rr * .11, 0, 7); g.fill();
+    g.restore();
+  }
+  const k = line ? clamp((t - line.t - .08) / .55) : 1, blur = .4 + ease(k) * 5;
+  c.save(); c.filter = `blur(${blur.toFixed(1)}px)`; c.globalAlpha = (.95 - .4 * ease(k)) * f; c.drawImage(GLASS, 0, 0); c.restore();
+}
 function rainTime(t) {
   const g = M.gap(t); if (g) return g[0];
   const k = M.last('kick', t); if (k.since < 2 / 30) return k.t;                  // 底鼓 = 雨停一帧
@@ -296,10 +317,10 @@ function verseLine(c, t, line, idx) {
   const dev = clamp((t - line.t) / .28);                                             // 显影：从过曝发虚沉淀成清晰的字
   c.save(); c.filter = dev < 1 ? `blur(${(1 - dev) * 7}px)` : 'none';
   c.shadowColor = `rgba(220,230,255,${1 - dev})`; c.shadowBlur = 40 * (1 - dev);
-  text(c, line.text, x, y, 76, { align: 'left', fill: `rgb(${lerp(255, 242, dev) | 0},${lerp(255, 241, dev) | 0},${lerp(255, 238, dev) | 0})` });
+  text(c, line.text, x, y, VS, { align: 'left', fill: `rgb(${lerp(255, 242, dev) | 0},${lerp(255, 241, dev) | 0},${lerp(255, 238, dev) | 0})` });
   c.restore();
   const s = line.t, ts = `[${String(s / 60 | 0).padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}]  STATEMENT ${String(idx).padStart(2, '0')}/08`;
-  text(c, ts, x, y + 70, 22, { w: 400, fam: MONO, align: 'left', fill: C.blue });
+  text(c, ts, x, y + 82, 22, { w: 400, fam: MONO, align: 'left', fill: C.blue });
   c.restore();
   if (a < 1) { c.fillStyle = 'rgba(200,220,255,.8)'; c.fillRect(0, y - 260 + 260 * a + 118, W * .6, 2); }
 }
@@ -334,21 +355,22 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
     }
     if (line && i > 0 && t - line.t < .3) {                                         // 上一句往上飘着淡出
       const k = (t - line.t) / .3; c.save(); c.globalAlpha = 1 - k;
-      text(c, D.lyrics[i - 1].text, 150, H - 290 - k * 60, 76, { align: 'left', fill: C.white }); c.restore();
+      text(c, D.lyrics[i - 1].text, 150, H - 290 - k * 60, VS, { align: 'left', fill: C.white }); c.restore();
     }
     if (line) {
       verseLine(c, t, line, i + 1);
       if (line === L_KONGBAI) {                                                   // "空白"被涂黑
-        c.font = fnt(76, 900); const x = 150 + c.measureText('你故意清除的').width, w = c.measureText('空白').width;
-        redact(c, x - 6, H - 290 - 46, w + 12, 92, (t - wordT(line, '空')) / .25);
+        c.font = fnt(VS, 900); const x = 150 + c.measureText('你故意清除的').width, w = c.measureText('空白').width;
+        redact(c, x - 6, H - 290 - VS * .6, w + 12, VS * 1.2, (t - wordT(line, '空')) / .25);
       }
       if (line === L_JUESAI && t > wordT(line, '决')) {                           // "决赛"变成铬金属
-        c.font = fnt(76, 900); const x = 150 + c.measureText('我和你最后').width;
-        c.fillStyle = '#000'; c.fillRect(x - 4, H - 290 - 46, c.measureText('决赛').width + 8, 92);
-        chrome(c, '决赛', x - 20, H - 290, 96, { align: 'left', sweep: (t - wordT(line, '决')) * 1.5 });
+        c.font = fnt(VS, 900); const x = 150 + c.measureText('我和你最后').width;
+        c.fillStyle = '#000'; c.fillRect(x - 4, H - 290 - VS * .6, c.measureText('决赛').width + 8, VS * 1.2);
+        chrome(c, '决赛', x - 20, H - 290, VS * 1.26, { align: 'left', sweep: (t - wordT(line, '决')) * 1.5 });
       }
     }
     rain(c, rf, { n: 36, spd: 2100, len: 150, alpha: .32, wind: .22, seed: 9, lw: 2.4 });   // 字前面的大雨丝
+    if (lt > .5) glass(c, t, line, clamp((lt - .5) / .8));                         // 最前面：玻璃上的雨滴（开头那滴雨落完再慢慢出现）
   },
   fx(t) {
     const fill = t > barT(11), k = M.last('kick', t), end = this.t1 - t;
@@ -363,6 +385,8 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
 const KO = [lineAt(36.12), lineAt(56.46)].map(l => wordT(l, '倒'));
 const GLIDES = D.notes808.filter(n => n.glide).map(n => n.t);
 const COLS = [lineAt(37.38), lineAt(38.64), lineAt(39.92)];
+const ROWS2 = [lineAt(59.1), lineAt(59.88)];                                        // 副歌二：上下两条横栏（副歌一是竖排三栏）
+const L_FACE2 = lineAt(52.86);                                                      // 副歌二第一句：超大字特写，镜头横扫
 const SNARE_DROP = barT(15) + 4 * STEP;                                              // 小节 15 第 2 拍军鼓空掉
 const T_SHATTER = barT(24), T_POP = T_SHATTER + .36;
 // 霓虹灭掉时迸出的火星：从 woooah 的灯管上掉下来，慢慢飘落、变暗，进入桥段后变成暖色灰尘
@@ -399,6 +423,34 @@ function hookLine(c, t, line, R2) {
     if (R2 && txt === '变病态') { c.save(); c.translate(W / 2, H / 2); draw(c); c.restore(); return; }
     cutIn(c, te, line.t, idx, () => draw(c)); return;
   }
+  // 副歌二第一句：极近特写，字大到一屏只放得下两三个字，镜头从句首扫到句尾；硬切时横切错开
+  if (R2 && line === L_FACE2) {
+    const big = 430, k = clamp((te - line.t) / (line.end - line.t)), j = jerk(te);
+    c.font = fnt(big, 900); const w = c.measureText(txt).width;
+    const cut = j.act === 'cut' && j.since < .1 ? (1 - j.since / .1) * 90 : 0;
+    c.save(); c.translate(lerp(80 + w / 2, W - 80 - w / 2, ease(k)), H / 2 + 20);
+    sliced(c, 5, cut, j.i, -big * .6, big * 1.2, () => { text(c, txt, 10, 10, big, { fill: C.red }); text(c, txt, 0, 0, big, { fill: C.white }); });
+    c.restore();
+    return;
+  }
+  // 副歌二「不要这样就 / 不要躲着我」：上下两条横栏，上面红底黑字从左边甩进来，下面白底红字从右边甩进来
+  if (R2 && ROWS2.includes(line)) {
+    const tones = [[C.red, C.black], [C.white, C.red]];
+    ROWS2.forEach((l, i) => {
+      if (t < l.t) return;
+      const jj = jerk(t), fz = (jj.i + i) % 3 === 2 && jj.since < .1, tt = fz ? jj.t : gapHold(t);
+      const k = easeOut((tt - l.t) / .12), y0 = i * H / 2;
+      c.save(); c.beginPath(); c.rect(0, y0, W, H / 2); c.clip();
+      c.translate((1 - k) * (i ? W : -W), 0);
+      c.fillStyle = tones[i][0]; c.fillRect(0, y0, W, H / 2);
+      const n = [...l.text].length, sz = Math.min(330, W * .86 / n), sh = (hash(jj.i * 3 + i, 5) - .5) * 40 * Math.exp(-jj.since * 10);
+      text(c, l.text, W / 2 + sh, y0 + H / 4, sz, { fill: tones[i][1] });
+      text(c, `0${i + 1}`, 40, y0 + 46, 24, { w: 400, fam: MONO, align: 'left', fill: tones[i][1] });
+      c.restore();
+    });
+    c.fillStyle = C.black; c.fillRect(0, H / 2 - 2, W, 4);
+    return;
+  }
   // 连击：每个底鼓叠一层残影
   if (txt.includes('连击')) {
     const n = M.count('kick', line.t, te) * (R2 ? 2 : 1);
@@ -423,9 +475,6 @@ function hookLine(c, t, line, R2) {
   cutIn(c, te, line.t, idx, () => {
     if (scrub) { c.save(); c.translate(-scrub * 1.6, 0); shadowed(c, .35); c.restore(); c.translate(scrub, 0); }
     sliced(c, 5, cut, j.i, -size * .6, size * 1.2, () => shadowed(c));
-    if (R2 && (txt === '不要这样就' || txt === '不要躲着我')) {                   // 镜像的字对不上
-      c.save(); c.scale(-1, 1); c.translate((hash(frameNo(t) >> 2, 3) - .5) * 60, 0); shadowed(c, .3); c.restore();
-    }
   });
   if (R2) { c.save(); c.translate(W / 2, H / 2 + size * 1.15); c.scale(1, -1); shadowed(c, .16); c.restore(); }   // 倒影
 }
@@ -524,9 +573,13 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
       c.fillStyle = `rgba(255,255,255,${1 - open})`; c.fillRect(P.x - 200 * (1 - open), H / 2 - 2, P.w + 400 * (1 - open), 4);
       c.save(); c.beginPath(); c.rect(0, H / 2 - P.h / 2 * open, W, P.h * open); c.clip();
     } else c.save();
+    const glow = c.createRadialGradient(W / 2, P.y + P.h * .55, P.w * .3, W / 2, P.y + P.h * .55, P.w * 1.15);   // 屏幕照出来的冷光，让手机从背景里浮出来
+    glow.addColorStop(0, 'rgba(110,140,255,.16)'); glow.addColorStop(1, 'rgba(110,140,255,0)'); c.fillStyle = glow; c.fillRect(0, 0, W, H);
     c.save();
-    c.fillStyle = '#0b0c11'; c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.fill();
-    c.strokeStyle = 'rgba(255,255,255,.14)'; c.lineWidth = 3; c.stroke();
+    c.fillStyle = '#0f1119'; c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.fill();
+    c.strokeStyle = 'rgba(205,215,255,.38)'; c.lineWidth = 3; c.stroke();
+    const rim = c.createLinearGradient(0, P.y, 0, P.y + 220); rim.addColorStop(0, 'rgba(160,180,255,.10)'); rim.addColorStop(1, 'rgba(160,180,255,0)');
+    c.fillStyle = rim; c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.fill();
     c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.clip();
     if (M.gap(t)) { c.fillStyle = '#000'; c.fillRect(P.x, P.y, P.w, P.h); c.restore(); return; }   // 鼓停 = 屏幕黑掉
     text(c, '你', W / 2, P.y + 80, 34);
@@ -803,9 +856,19 @@ scene({ name: '余震', t0: T_TV, t1: T_BACK,
 });
 
 // ================================================================ 10 · 回放：底鼓砸进电视，每个鼓点闪回一个镜头
-// 第 3 格最长（看得见的约 1 秒）：放「对质」里发消息的聊天画面——1 倍速倒放，删掉的消息一条条飞回来，停在发出去的两条红色消息上
-// （1 倍速是为了躲开原片 45.85–46.17 那段鼓停黑屏）
-const MEM = [[3.0, 'invert'], [25.3, 'flip'], [47.25, 'none', 1], [36.0, 'sick'], [33.95, 'red'], [50.2, 'flip'], [57.0, 'none'], [62.9, 'invert'],
+// 第 3 格最长（看得见的约 1 秒）：「对质」的聊天记录倒放——四条消息从最下面一条开始，往上一条条缩回去消失
+// （发出去的过程倒过来），最后一条跟着屏幕像 CRT 一样合上。用关键帧控制倒放的时间：每条消息消失时放慢，
+// 中间快进；跳过原片的两段鼓停黑屏和"对方正在输入…"。
+const REW_CHAT = [[0, 46.62], [.10, 46.31], [.22, 46.172], [.2201, 45.84], [.40, 44.87], [.52, 44.732], [.5201, 44.25],
+  [.62, 43.60], [.74, 43.462], [.7401, 42.99], [.84, 42.10], [1.03, 41.885]];
+function rewChat(k) {
+  for (let i = 1; i < REW_CHAT.length; i++) {
+    const [a, ma] = REW_CHAT[i - 1], [b, mb] = REW_CHAT[i];
+    if (k < b) return lerp(ma, mb, (k - a) / (b - a));
+  }
+  return REW_CHAT[REW_CHAT.length - 1][1];
+}
+const MEM = [[3.0, 'invert'], [25.3, 'flip'], [46.62, 'none', rewChat], [36.0, 'sick'], [33.95, 'red'], [50.2, 'flip'], [57.0, 'none'], [62.9, 'invert'],
   [66.5, 'red'], [74.8, 'flip'], [12.3, 'sick'], [38.0, 'invert'], [30.9, 'flip'], [48.0, 'red'], [68.9, 'flip'], [5.5, 'sick']];
 const T_LAST = D.kicks.filter(k => k < 96).pop(), T_CRT2 = T_LAST + 1.25;
 const MEV = [...D.kicks, ...D.snares, ...D.notes808.map(n => n.t)].filter(x => x >= T_SLAM && x < T_LAST - .02).sort((a, b) => a - b)
@@ -814,7 +877,8 @@ const MEV = [...D.kicks, ...D.snares, ...D.notes808.map(n => n.t)].filter(x => x
 function memAt(t) {
   const i = lastAt(MEV, t); if (i < 0) return null;
   const [m0, how, spd = 1.5] = MEM[i % MEM.length], s = sceneAt(m0);
-  return { mt: Math.max(s.t0 + .01, m0 - (t - MEV[i]) * spd), s, how, i, since: t - MEV[i] };
+  const mt = typeof spd === 'function' ? spd(t - MEV[i]) : m0 - (t - MEV[i]) * spd;   // spd 可以是倍速，也可以是自定义的倒放曲线
+  return { mt: Math.max(s.t0 + .005, mt), s, how, i, since: t - MEV[i] };
 }
 // 录像带倒带的画面毛病：往上扫的跟踪噪声带、底部的磁头噪声、大大的 ◀◀
 function rewindFX(c, t) {
