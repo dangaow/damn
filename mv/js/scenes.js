@@ -570,52 +570,8 @@ scene({ name: '病态', t0: lineAt(52.86).t, t1: lineAt(63.36).t,
 
 // ================================================================ 7 · 面具掉了（桥段）
 const L_HURT = lineAt(67.86), T_HURT = wordT(L_HURT, '伤');
-// 「伤害」被抽出去（全片唯一一次）：
-//   进场：从句子里的位置被拎起来，沿弧线飞到右边，放大约 5 倍、淡到 25%；
-//   停留：随军鼓轻轻呼吸；
-//   退场：句子结束前慢慢往上飘、变淡，碎成暖色灰尘散掉。
-const HURT_PLUCK = .12, HURT_FLY = 1.5, HURT_OUT = L_HURT.end - .35, HURT_GONE = HURT_OUT + 1.5;
-// 指数缓出，归一化到 u = 1 时正好为 1：前面一下子走完大半，后面很长一段慢慢落定
-const expoOut = (u, r) => { u = clamp(u); return (1 - Math.pow(2, -r * u)) / (1 - Math.pow(2, -r)); };
-function hurtWord(c, t) {
-  if (t < T_HURT || t > HURT_GONE) return;
-  const size = fit(c, L_HURT.text, W * .78, 64, 400, SERIF);
-  c.font = fnt(size, 400, SERIF);
-  const wp = c.measureText('可我们还要').width, wh = c.measureText('伤害').width, wq = c.measureText('彼此就像将士').width;
-  const x0 = W / 2 - (wp + wh + wq) / 2 + wp + wh / 2, y0 = H * .7, x1 = W * .73, y1 = H * .42, s1 = 520;
-  // 1. 蓄力：在原位被揪住，轻轻颤、微微放大发亮
-  const pk = clamp((t - T_HURT) / HURT_PLUCK), shake = t < T_HURT + HURT_PLUCK ? pk * 2.5 : 0;
-  // 2. 被抽走：横向快、纵向慢（自然形成有惯性的弧线），放大按比例走，变淡比移动晚一点
-  const u = (t - T_HURT - HURT_PLUCK) / HURT_FLY;
-  const kx = expoOut(u, 9), ky = expoOut(u, 6), ks = expoOut(u, 8);
-  const drift = Math.max(0, t - T_HURT - HURT_PLUCK - HURT_FLY);                     // 3. 落定后继续极慢地漂
-  const e = clamp((t - HURT_OUT) / (HURT_GONE - HURT_OUT));                          // 4. 退场进度
-  const breath = 1 + .02 * M.hit('snare', t, 4);
-  const sz = size * (1 + .06 * easeOut(pk) * (1 - ks)) * Math.pow(s1 / size, ks) * (1 + .012 * drift) * breath;
-  const x = lerp(x0, x1, kx) + (hash(frameNo(t), 31) - .5) * 2 * shake, y = lerp(y0, y1, ky) - 6 * drift - 40 * easeOut(e) + (hash(frameNo(t), 32) - .5) * 2 * shake;
-  const a = lerp(1, .25, ease((u - .08) / .55)) * (1 - ease((e - .05) / .55));
-  const heavy = ease((ks - .25) / .5);                                               // 细体 → 粗体：交叉淡化，不会"跳"
-  const glow = easeOut(pk) * (1 - ks);
-  if (a > .005) {
-    c.save(); c.translate(x, y);
-    c.shadowColor = `rgba(255,150,80,${.7 * glow})`; c.shadowBlur = 34 * glow;
-    if (heavy < 1) { c.globalAlpha = a * (1 - heavy); text(c, '伤害', 0, 0, sz, { w: 400, fam: SERIF, fill: '#f6eee4' }); }
-    if (heavy > 0) { c.globalAlpha = a * heavy; text(c, '伤害', 0, 0, sz, { w: 900, fam: SERIF, fill: '#ffe9d6' }); }
-    c.restore();
-  }
-  if (e > 0) {                                                                       // 颗粒从字形上一点点剥落、往上飘（和实心字的溶解重叠）
-    const pts = textPoints('伤害', s1, { w: 900, fam: SERIF, step: 8 }), k = sz / s1;
-    c.save(); c.fillStyle = '#ffd9b0';
-    for (let i = 0; i < pts.length; i++) {
-      const d = clamp((e - hash(i, 5) * .45) / .55); if (d <= 0) continue;
-      const m = easeOut(d), pa = Math.sin(d * Math.PI) * .45;
-      if (pa < .02) continue;
-      c.globalAlpha = pa;
-      c.fillRect(x + pts[i][0] * k + (hash(i, 6) - .5) * 140 * m + Math.sin(d * 5 + i) * 6, y + pts[i][1] * k - (70 + hash(i, 7) * 230) * m, 2.6, 2.6);
-    }
-    c.restore();
-  }
-}
+// 「伤害」留在句子里：唱到"伤"开始变红，之后跟着鼓点一下下亮（军鼓最亮，踩镲小亮），不位移、不缩放
+function hurtRed(t) { return Math.max(M.hit('snare', t, 6), .55 * M.hit('hat', t, 9)); }
 const warmth = t => t < T_HURT ? 1 : lerp(1, .12, ease((t - T_HURT) / 4.5));
 const T_PRERAIN = lineAt(73.7).t - 1.1;
 scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
@@ -648,18 +604,20 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
       g.addColorStop(0, `rgba(255,248,235,${a})`); g.addColorStop(.14, `rgba(255,210,160,${.7 * a})`); g.addColorStop(1, 'rgba(255,150,80,0)');
       c.fillStyle = g; c.fillRect(x - R, cy - R, 2 * R, 2 * R);
     });
-    hurtWord(c, t);
     const { line } = M.lyric(t);
     if (!line) return;
     const size = fit(c, line.text, W * .78, 64, 400, SERIF), a = clamp((t - line.t) / .45) * clamp((line.end - t) / .35);
     c.globalAlpha = a;
-    if (line === L_HURT) {                                                          // 全片唯一一次：「伤害」被抽出去
+    if (line === L_HURT) {                                                          // 「伤害」唱到时变红，跟着鼓点亮
       c.font = fnt(size, 400, SERIF);
       const pre = '可我们还要', post = '彼此就像将士', wp = c.measureText(pre).width, wh = c.measureText('伤害').width, wq = c.measureText(post).width;
       let x = W / 2 - (wp + wh + wq) / 2;
       text(c, pre, x, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: '#ece6dc' });
-      if (t >= T_HURT) { c.fillStyle = 'rgba(236,230,220,.35)'; c.fillRect(x + wp + 6, H * .7 + size * .55, wh - 12, 1.5); }
-      else text(c, '伤害', x + wp, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: '#ece6dc' });
+      if (t >= T_HURT) {
+        const p = hurtRed(t), col = [lerp(150, 255, p), lerp(14, 60, p), lerp(28, 72, p)].map(v => v | 0).join(',');
+        c.save(); c.shadowColor = `rgba(255,30,60,${.35 + .55 * p})`; c.shadowBlur = 10 + 26 * p;
+        text(c, '伤害', x + wp, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: `rgb(${col})` }); c.restore();
+      } else text(c, '伤害', x + wp, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: '#ece6dc' });
       text(c, post, x + wp + wh, H * .7, size, { w: 400, fam: SERIF, align: 'left', fill: '#ece6dc' });
     } else {
       c.save(); c.shadowColor = `rgba(255,160,80,${.55 * warmth(t)})`; c.shadowBlur = 26;              // 墨晕：暖色的一圈晕
