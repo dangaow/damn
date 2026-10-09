@@ -282,7 +282,48 @@ scene({ name: '念头乱窜', t0: T_STACK, t1: D.lyrics[0].t,
 // ================================================================ 2 · 雨夜（主歌一）
 const RAIN_FREEZE1 = [barT(11), D.kicks.find(k => k > barT(11) + .05)];   // 加花小节第一拍 808 空掉：雨冻住一拍
 const L_KONGBAI = lineAt(25.58), L_JUESAI = lineAt(30.84);
-const VS = 100;                                                                       // 主歌字号（原来 76，手机上偏小）
+const VS = 130;                                                                       // 主歌字号（76 → 100 → 130，手机上看得清）
+// 右边很淡的竖排宋体：每句占自己的一列（从右往左排，像竖着写的笔录），唱到哪个字哪个字才显出来；
+// 换句时整页往右挪一列，新的一列留在固定位置，旧的往右退出画面；每列从出现起一直慢慢往上飘，不会跳回原位
+const VCOL = { x: W - 250, gap: 132, size: 104, top: 160, drift: 28 };
+function vcols(c, t, i) {
+  let page = 0; for (let j = 1; j <= i; j++) page += ease((t - D.lyrics[j].t) / .5);
+  for (let j = Math.max(0, i - 2); j <= i; j++) {
+    const l = D.lyrics[j], age = page - j, x = VCOL.x + age * VCOL.gap, a = .075 * clamp(1 - (age - .6) / 1.4);
+    if (a <= 0) continue;
+    const y0 = VCOL.top - (t - l.t) * VCOL.drift;
+    l.words.forEach((w, k) => {
+      const kk = clamp((t - w.t + .04) / .3); if (kk <= 0) return;
+      c.save(); c.globalAlpha = a * kk; if (kk < 1) c.filter = `blur(${((1 - kk) * 6).toFixed(1)}px)`;
+      text(c, w.w, x, y0 + k * VCOL.size * 1.02 - (1 - easeOut(kk)) * 14, VCOL.size, { fam: SERIF, fill: '#c8d4ff', base: 'top' });
+      c.restore();
+    });
+  }
+}
+// 手机锁屏亮了一下（"我试着不去等待"）：在画面深处、虚焦，黑暗里只看得到屏幕的光和被照亮的机身边缘；
+// 屏幕慢慢亮起 → 弹出"你"的消息 → 自动变暗 → 熄灭
+const PH_CV = mk(300, 460), PH_T = 23.14, PH_X = 1400, PH_Y = 555;
+function phone(c, t) {
+  const ph = t - PH_T; if (ph < 0 || ph > 1.55) return;
+  const on = easeOut(ph / .22), off = 1 - ease((ph - 1.2) / .32), a = on * off * (1 - .45 * ease((ph - .9) / .15));
+  if (a <= .002) return;
+  const g = c.createRadialGradient(PH_X, PH_Y, 0, PH_X, PH_Y, 430);                // 屏幕的光照到雾里
+  g.addColorStop(0, `rgba(150,175,255,${.16 * a})`); g.addColorStop(1, 'rgba(150,175,255,0)');
+  c.fillStyle = g; c.fillRect(PH_X - 430, PH_Y - 430, 860, 860);
+  const p = PH_CV.getContext('2d'), cx = 150, cy = 230, w = 150, h = 290;
+  p.setTransform(1, 0, 0, 1, 0, 0); p.clearRect(0, 0, 300, 460);
+  p.globalAlpha = .85 * clamp(on * off * 1.3);                                      // 机身：几乎看不见，只有被屏幕照亮的一圈边
+  p.fillStyle = '#04060e'; p.beginPath(); p.roundRect(cx - w / 2 - 8, cy - h / 2 - 8, w + 16, h + 16, 24); p.fill();
+  p.globalAlpha = a; p.strokeStyle = 'rgba(150,175,255,.35)'; p.lineWidth = 1.5; p.stroke();
+  const sg = p.createLinearGradient(0, cy - h / 2, 0, cy + h / 2); sg.addColorStop(0, '#2c3d78'); sg.addColorStop(1, '#0e1530');
+  p.fillStyle = sg; p.beginPath(); p.roundRect(cx - w / 2, cy - h / 2, w, h, 18); p.fill();
+  text(p, '23:47', cx, cy - h * .28, 36, { w: 400, fam: MONO, fill: 'rgba(235,240,255,.95)' });
+  const nk = easeOut((ph - .35) / .25);
+  if (nk > 0) { const ny = cy + 10 + (1 - nk) * 18; p.globalAlpha = a * nk;
+    p.fillStyle = 'rgba(225,232,255,.72)'; p.beginPath(); p.roundRect(cx - 64, ny - 24, 128, 48, 11); p.fill();
+    text(p, '你', cx - 50, ny, 18, { align: 'left', fill: '#111' }); text(p, '新消息', cx - 26, ny, 15, { w: 400, align: 'left', fill: '#444' }); }
+  c.save(); c.translate(PH_X, PH_Y); c.rotate(-.06); c.filter = 'blur(3.4px)'; c.globalAlpha = .82; c.drawImage(PH_CV, -cx, -cy); c.restore();
+}
 // 玻璃上的雨滴（前景）：每句开头先对焦在玻璃上（雨滴清楚、字还虚），然后焦点拉到字上（雨滴虚掉）
 const GLASS = mk();
 function glass(c, t, line, f = 1) {
@@ -313,14 +354,14 @@ function verseLine(c, t, line, idx) {
   const a = clamp((t - line.t) / .14), x = 150, y = H - 290;
   c.save();
   c.beginPath(); c.rect(0, y - 260, W, 260 * a + 120); c.clip();
-  text(c, String(idx).padStart(2, '0'), x - 8, y - 120, 150, { fam: ANTON, w: 400, align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
+  text(c, String(idx).padStart(2, '0'), x - 8, y - 150, 150, { fam: ANTON, w: 400, align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
   const dev = clamp((t - line.t) / .28);                                             // 显影：从过曝发虚沉淀成清晰的字
   c.save(); c.filter = dev < 1 ? `blur(${(1 - dev) * 7}px)` : 'none';
   c.shadowColor = `rgba(220,230,255,${1 - dev})`; c.shadowBlur = 40 * (1 - dev);
   text(c, line.text, x, y, VS, { align: 'left', fill: `rgb(${lerp(255, 242, dev) | 0},${lerp(255, 241, dev) | 0},${lerp(255, 238, dev) | 0})` });
   c.restore();
   const s = line.t, ts = `[${String(s / 60 | 0).padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}]  STATEMENT ${String(idx).padStart(2, '0')}/08`;
-  text(c, ts, x, y + 82, 22, { w: 400, fam: MONO, align: 'left', fill: C.blue });
+  text(c, ts, x, y + 102, 22, { w: 400, fam: MONO, align: 'left', fill: C.blue });
   c.restore();
   if (a < 1) { c.fillStyle = 'rgba(200,220,255,.8)'; c.fillRect(0, y - 260 + 260 * a + 118, W * .6, 2); }
 }
@@ -331,23 +372,8 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
   draw(c, t, lt) {
     const t12 = Math.floor(t * 12) / 12, rf = rainTime(t12);
     const { line, i } = M.lyric(t);
-    if (line) { c.save(); c.globalAlpha = .06; vtext(c, line.text, W - 300, 80 - (t - line.t) * 30, 150, { fam: SERIF, fill: '#c8d4ff' }); c.restore(); }
-    // 手机屏幕亮了一下（"我试着不去等待"）
-    const ph = t - 23.14;
-    if (ph > 0 && ph < 1.3) {
-      const a = clamp(ph / .08) * clamp((1.25 - ph) / .1) * (frameNo(t) % 7 ? 1 : .6);
-      const g = c.createRadialGradient(1560, 700, 0, 1560, 700, 300); g.addColorStop(0, `rgba(180,200,255,${.35 * a})`); g.addColorStop(1, 'rgba(180,200,255,0)');
-      c.fillStyle = g; c.fillRect(1260, 400, 600, 600);
-      c.save(); c.globalAlpha = a;                                                   // 手机锁屏：时间 + 一条"你"发来的消息
-      c.fillStyle = '#0a0d18'; c.beginPath(); c.roundRect(1470, 540, 180, 330, 26); c.fill();
-      const sg = c.createLinearGradient(0, 552, 0, 858); sg.addColorStop(0, '#2c3d78'); sg.addColorStop(1, '#0e1530');
-      c.fillStyle = sg; c.beginPath(); c.roundRect(1478, 552, 164, 306, 20); c.fill();
-      text(c, '23:47', 1560, 620, 40, { w: 400, fam: MONO, fill: 'rgba(235,240,255,.95)' });
-      const nk = easeOut((ph - .25) / .2);
-      if (nk > 0) { c.globalAlpha = a * nk; c.fillStyle = 'rgba(235,240,255,.9)'; c.beginPath(); c.roundRect(1488, 700 - (1 - nk) * 20, 144, 54, 12); c.fill();
-        text(c, '你', 1506, 727 - (1 - nk) * 20, 20, { align: 'left', fill: '#111' }); text(c, '新消息', 1532, 727 - (1 - nk) * 20, 17, { w: 400, align: 'left', fill: '#444' }); }
-      c.restore();
-    }
+    if (line) vcols(c, t, i);
+    phone(c, t);
     if (lt < .7) {                                                                  // 转场：CRT 关机缩成的那个点，变成第一滴雨落下
       const k = lt / .7, y = lerp(H / 2, H + 100, easeIn(k));
       c.strokeStyle = 'rgba(230,238,255,.95)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * k); c.lineTo(W / 2, y); c.stroke();
@@ -355,7 +381,7 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
     }
     if (line && i > 0 && t - line.t < .3) {                                         // 上一句往上飘着淡出
       const k = (t - line.t) / .3; c.save(); c.globalAlpha = 1 - k;
-      text(c, D.lyrics[i - 1].text, 150, H - 290 - k * 60, VS, { align: 'left', fill: C.white }); c.restore();
+      text(c, D.lyrics[i - 1].text, 150, H - 290 - k * VS * .8, VS, { align: 'left', fill: C.white }); c.restore();
     }
     if (line) {
       verseLine(c, t, line, i + 1);
