@@ -200,7 +200,7 @@ function tapeHud(c, o = {}) {
   const m = 64 * S, top = o.top ?? 62 * S, bot = o.bot ?? H - 62 * S, col = o.col ?? C.white;
   c.save(); c.font = fnt(22 * S, 400, MONO); c.textBaseline = 'middle'; c.globalAlpha = o.a ?? .85; c.fillStyle = col;
   c.textAlign = 'left';
-  c.save(); c.fillStyle = C.red; c.globalAlpha = 1; c.beginPath(); c.arc(m + 10 * S, top, 9 * S, 0, 7); c.fill(); c.restore();
+  c.save(); c.fillStyle = o.dot ?? C.red; c.globalAlpha = 1; c.beginPath(); c.arc(m + 10 * S, top, 9 * S, 0, 7); c.fill(); c.restore();
   c.fillText('REC', m + 30 * S, top); c.fillText('TAPE 01', m + 128 * S, top);
   c.fillText('▶ PLAY', m, bot);
   c.textAlign = 'right'; c.fillText('谎话 / dangao_w', W - m, top); c.fillText(o.tc ?? 'TC 00:00:06:00', W - m, bot);
@@ -252,11 +252,11 @@ function coverE(c) {
   c.save(); c.beginPath(); c.rect(0, mid, W, H - mid); c.clip();
   misText(c, '就别再想着', 90 * S, mid + 150 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
   misText(c, '再跟我说谎话', 90 * S, mid + 320 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
-  c.font = `${64 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 90 * S, H - 90 * S);
+  c.font = `${64 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 90 * S, H - 150 * S);
   c.restore();
   c.fillStyle = 'rgba(0,0,0,.85)'; c.fillRect(0, mid - 3 * S, W, 6 * S);
-  tapeHud(c, { col: '#0a0b10', a: .8, tc: 'TC 00:01:00:00' });
-  return { ...FLAT, ca: 1.4 };
+  tapeHud(c, { col: '#0a0b10', dot: '#0a0b10', a: .8, tc: 'TC 00:01:00:00' });
+  return { ...FLAT, ca: 0, vig: .7 };   // 整张不做色差（边缘会出彩边），错位只留在字上
 }
 
 // f · 三栏：黑 / 银 / 暗红三栏，竖排三句（副歌一）
