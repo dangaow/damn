@@ -154,7 +154,7 @@ const REV = (() => { const g = D.gaps.find(g => g[0] > T_MORE && g[1] < T_STACK)
 const PALS = [
   { bg: { mode: 'tunnel', a: '#020309', b: '#2c3f96', c: '#0d1638', amt: .95, speed: 2.6 } },
   { bg: { mode: 'static', a: '#000000', amt: .4 } },
-  { bg: { mode: 'rays', a: '#0d0003', b: '#b00c22', c: '#ff5a6e', amt: 1, speed: 5 }, acc: '#ffffff' },
+  { bg: { mode: 'smoke', a: '#0a0003', b: '#6e0a1a', c: '#ff3a55', amt: 1, speed: 4 }, acc: '#ffffff' },          // 暗红流动烟雾（和「连击」同一个世界）
   { bg: { mode: 'solid', a: '#e0112b' }, ink: '#05060a', acc: '#ffffff', glow: null },
   { bg: { mode: 'halftone', a: '#05060a', b: '#8d99b8', amt: 1, speed: 4 } },
   { bg: { mode: 'solid', a: '#e9edf5' }, ink: '#05060a', acc: '#e0112b', glow: null },
@@ -162,7 +162,7 @@ const PALS = [
   { bg: { mode: 'tunnel', a: '#0a0002', b: '#9a0c22', c: '#24000a', amt: 1, speed: 4 }, ink: '#ffe3e7' },
   { bg: { mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: 1, speed: 4 } },
 ];
-const PAL_GLIDE = { bg: { mode: 'rays', a: '#120004', b: '#e0112b', c: '#ff8090', amt: 1, speed: -3 }, acc: '#ffffff' };
+const PAL_GLIDE = { bg: { mode: 'smoke', a: '#0d0003', b: '#8a0c20', c: '#ff5a70', amt: 1.1, speed: 3, mirror: true }, acc: '#ffffff' };   // 镜子裂开：左右对称的红烟，像墨迹测试（提前呼应「病态」）
 const MOVES = ['whip', 'roll', 'crash', 'spin', 'shake', 'upside', 'push', 'pull', 'whipV'];
 // 每一团（一个镜头）：从哪一刻开始、用哪个背景、什么运镜、哪些物件
 const MESS = (() => {
