@@ -7,6 +7,8 @@
 | 文件 | 用途 |
 | --- | --- |
 | `song.mp3` | 歌曲 |
+| `stems/` | 伴奏、鼓、贝斯分轨（`analyze.py` 用来读节奏；片尾音乐取自伴奏） |
+| `credits_audio.py` | 片尾音乐（伴奏桥段降 2 个半音，变调也变速）接在原曲后面 → `output/谎话_完整音轨.wav`，导出和预览默认用它 |
 | `lyrics.lrc` | 歌词：每句的文字和开始时间 |
 | `lyrics_words.lrc` | 逐字时间轴（每个字什么时候唱到），标错的字会被自动插值修正 |
 | `analyze.py` | 分析歌曲和歌词 → `data.js`（BPM、拍点、重拍、能量曲线、段落、逐字歌词时间） |
@@ -24,10 +26,11 @@
 pip install -r requirements.txt
 python analyze.py                       # 改了歌曲或歌词后重新跑
 python fonts.py                         # 改了歌词或画面里的文字后重新跑（需要联网）
+python credits_audio.py                 # 生成完整音轨（原曲 + 片尾），导出前先跑一次
 # 浏览器打开 mv.html 预览：空格 播放/暂停，← → 快退/快进 5 秒，D 显示调试信息（拍点、段落、歌词时间线）
 node export.mjs --shots 5,22.5,45       # 截几帧到 shots/ 检查画面
 node export.mjs --from 20 --to 35       # 导出一小段试看
-node export.mjs                         # 整首导出 → mv.mp4
+node export.mjs                         # 整首导出（含片尾）→ mv.mp4
 ```
 
 > 用 `file://` 直接打开 `mv.html` 即可，不需要起服务器。

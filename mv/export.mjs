@@ -1,4 +1,4 @@
-// 把 mv.html 逐帧渲染出来，再和 song.mp3 合成 MP4。
+// 把 mv.html 逐帧渲染出来，再和音轨合成 MP4（默认 output/谎话_完整音轨.wav：原曲 + 片尾，由 credits_audio.py 生成；没有就用 song.mp3）。
 //
 //   node export.mjs                          整首导出 → mv.mp4
 //   node export.mjs --from 20 --to 35        只导出一段（试看用），音频也会截取对应部分
@@ -23,7 +23,9 @@ const FPS = +(args.fps || 30), CRF = +(args.crf || 18), SAMPLES = +(args.mb || 3
 const PNG = !!args.png, PRESET = args.preset || 'medium';                         // --png 无损传帧；--preset slow 等
 const WORKERS = args.shots ? 1 : Math.max(1, +(args.workers || Math.min(4, Math.floor(availableParallelism() / 2))));
 const PAGE = resolve(here, args.page || 'mv.html');
-const AUDIO = resolve(here, args.audio || 'song.mp3');                            // --audio 换音轨（预告用 output/teaser_audio.wav）
+const FULL = resolve(here, 'output', '谎话_完整音轨.wav');                         // 原曲 + 片尾（python3 credits_audio.py 生成）
+const AUDIO = resolve(here, args.audio || (existsSync(FULL) ? FULL : 'song.mp3'));   // --audio 换音轨（预告用 output/teaser_audio.wav）
+if (!args.audio && !existsSync(FULL)) console.warn('没有 output/谎话_完整音轨.wav：片尾没有声音，而且导出会在原曲结束处截断。先跑 python3 credits_audio.py');
 const OUT = resolve(here, args.out || 'mv.mp4');
 const CHROME = [process.env.CHROME,
   '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',

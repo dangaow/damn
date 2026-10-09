@@ -380,17 +380,19 @@ function rainTime(t) {
   if (t >= RAIN_FREEZE1[0] && t < RAIN_FREEZE1[1]) return RAIN_FREEZE1[0];
   return t;
 }
-function verseLine(c, t, line, idx) {
+// 证词：左下角一句，上面空心大编号（片尾换成空心的职位），下面等宽小字时间戳
+function verseLine(c, t, line, idx, o = {}) {
   const a = clamp((t - line.t) / .14), x = 150, y = H - 290;
   c.save();
   c.beginPath(); c.rect(0, y - 260, W, 260 * a + 120); c.clip();
-  text(c, String(idx).padStart(2, '0'), x - 8, y - 150, 150, { fam: ANTON, w: 400, align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
+  if (o.label) text(c, o.label, x - 4, y - 165, 112, { align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
+  else text(c, String(idx).padStart(2, '0'), x - 8, y - 150, 150, { fam: ANTON, w: 400, align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
   const dev = clamp((t - line.t) / .28);                                             // 显影：从过曝发虚沉淀成清晰的字
   c.save(); c.filter = dev < 1 ? `blur(${(1 - dev) * 7}px)` : 'none';
   c.shadowColor = `rgba(220,230,255,${1 - dev})`; c.shadowBlur = 40 * (1 - dev);
   text(c, line.text, x, y, VS, { align: 'left', fill: `rgb(${lerp(255, 242, dev) | 0},${lerp(255, 241, dev) | 0},${lerp(255, 238, dev) | 0})` });
   c.restore();
-  const s = line.t, ts = `[${String(s / 60 | 0).padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}]  STATEMENT ${String(idx).padStart(2, '0')}/08`;
+  const s = line.t, ts = `[${String(s / 60 | 0).padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}]  ${o.tag ?? 'STATEMENT'} ${String(idx).padStart(2, '0')}/${o.of ?? '08'}`;
   text(c, ts, x, y + 102, 22, { w: 400, fam: MONO, align: 'left', fill: C.blue });
   c.restore();
   if (a < 1) { c.fillStyle = 'rgba(200,220,255,.8)'; c.fillRect(0, y - 260 + 260 * a + 118, W * .6, 2); }
@@ -1017,7 +1019,7 @@ function lightOn(t) {
   if (left < .9 && hash(frameNo(t), 6) < lerp(.6, .1, left / .9)) return .12;
   return clamp((t - T_TITLE) / .35);
 }
-scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
+scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration,
   weather: (t, lt) => ({ rain: .2 * clamp(1 - lt / 8), n: 160 }),
   bg: t => t > T_STATIC[0] && t < T_STATIC[1] ? { mode: 'static', a: '#000000', amt: .8 } : ({ mode: 'smoke', a: '#010103', b: '#0a0f1e', amt: .5 * clamp(1 - (t - 100) / 6), speed: .4 }),
   draw(c, t, lt) {
@@ -1053,4 +1055,51 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
   },
   fx: t => ({ grain: .1, scan: .18, ca: .8, bloom: .6, flash: t >= T_TITLE && t < T_TITLE + .06 ? .4 : 0, dark: t > T_STATIC[1] && t < T_LASTDROP ? 1 : 0,
     glitch: t > T_STATIC[0] && t < T_STATIC[1] ? .6 : 0, gseed: frameNo(t) }),
+});
+
+// ================================================================ 12 · 片尾 · 证词
+// 最后那滴雨落出画面后，雨又下起来，回到开头的雨夜；"证词"的位置上写的是做这首歌的人。
+// 音乐：伴奏第 24–33 小节降 2 个半音（变调也变速，见 credits_audio.py），一小节 2.866 秒，每条字幕停一小节。
+const T_CRED = D.duration, CRED_SLOW = 110 / 98, CRED_BAR = BAR * CRED_SLOW, CRED_LEN = CRED_BAR * 9;
+const MV_END = T_CRED + CRED_LEN + .6;                                              // 片尾音乐结束后黑屏 0.6 秒
+const credAt = s => T_CRED + (s - barT(24)) * CRED_SLOW;                            // 伴奏原来的时间 → 片尾里的时间
+const CRED_GAP = M.gap(80.2).map(credAt);                                           // 原曲点题前那 0.4 秒鼓停：雨冻住、画面压暗
+const CREDITS = [['作词', 'dangao_w'], ['作曲', 'dangao_w'], ['编曲', 'luvsak111'], ['混音', 'YuKIluv7'], ['视觉', '【来自我】']]
+  .map(([role, text], i) => ({ role, text, t: T_CRED + (i + 1) * CRED_BAR }));
+const CRED_OUT = T_CRED + 6 * CRED_BAR, CRED_SIGN = T_CRED + 7 * CRED_BAR;        // 最后一条飘走；鼓回来那一下出落款，同时开始渐出
+const credRain = t => t >= CRED_GAP[0] && t < CRED_GAP[1] ? CRED_GAP[0] : t;
+const credRainK = (t, lt) => clamp((lt - .3) / 2.2) * (1 - .6 * ease((t - CRED_SIGN) / 4));   // 雨从零慢慢下大，落款之后变稀
+function signoff(c, t) {                                                            // 落款：画面正中，很小、很安静
+  const k = clamp((t - CRED_SIGN) / .9); if (k <= 0) return;
+  c.save(); c.globalAlpha = ease(k); if (k < 1) c.filter = `blur(${((1 - k) * 6).toFixed(1)}px)`;
+  text(c, D.title, W / 2, H / 2 - 36, 64, { fam: SERIF, fill: 'rgba(240,243,255,.92)' });
+  text(c, `${D.artist} · 2026.10.17`, W / 2, H / 2 + 42, 22, { w: 400, fam: MONO, fill: C.blue });
+  text(c, 'makestudio.cn', W / 2, H / 2 + 82, 18, { w: 400, fam: MONO, fill: 'rgba(200,215,255,.45)' });
+  c.restore();
+}
+scene({ name: '片尾', t0: T_CRED, t1: MV_END + 1,
+  weather: (t, lt) => ({ rain: .26 * credRainK(t, lt), rt: credRain(Math.floor(t * 12) / 12), street: .14 * clamp(lt / 2.5), wind: .22 }),
+  bg: () => ({ mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: .9, speed: 1, pulse: 0 }),
+  draw(c, t, lt) {
+    let i = -1; CREDITS.forEach((cr, j) => { if (t >= cr.t) i = j; });
+    const cr = CREDITS[i];
+    if (cr && i > 0 && t - cr.t < .3) {                                             // 上一条往上飘着淡出
+      const k = (t - cr.t) / .3; c.save(); c.globalAlpha = 1 - k;
+      text(c, CREDITS[i - 1].text, 150, H - 290 - k * VS * .8, VS, { align: 'left', fill: C.white }); c.restore();
+    }
+    if (cr && t < CRED_OUT + .5) {                                                  // 最后一条整块往上飘走
+      const k = clamp((t - CRED_OUT) / .5);
+      c.save(); c.globalAlpha = 1 - k; c.translate(0, -k * VS * .8);
+      verseLine(c, t, cr, i + 1, { label: cr.role, tag: 'CREDIT', of: '05' }); c.restore();
+    }
+    signoff(c, t);
+    rain(c, credRain(Math.floor(t * 12) / 12), { n: 36, spd: 2100, len: 150, alpha: .32 * credRainK(t, lt), wind: .22, seed: 9, lw: 2.4 });   // 字前面的大雨丝
+    if (lt > 1) glass(c, t, cr && t < CRED_OUT ? cr : null, clamp((lt - 1) / 1.5));   // 最前面：玻璃上的雨滴，每条字幕先对焦在玻璃上再拉到字上
+  },
+  fx(t) {
+    const lt = t - this.t0, gap = t >= CRED_GAP[0] && t < CRED_GAP[1];
+    const fade = ease((t - CRED_SIGN - 1.4) / (T_CRED + CRED_LEN - CRED_SIGN - 1.4));   // 落款亮一会儿后，画面跟着音乐一起暗下去
+    return { zoom: 1 + lt * .004, lb: lbIn(lt, .8), grade: 'cold', gradeMix: .7, ca: 1.2, bloom: .5, hud: 0,
+      dark: Math.max(1 - ease(lt / 2.4), gap ? .45 : 0, fade) };
+  },
 });

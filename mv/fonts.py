@@ -2,7 +2,7 @@
 
     python fonts.py        改了歌词或 mv.html 里的文字后重新跑一次
 
-用到哪些字：lyrics.lrc、mv.html 和 js/*.js 里出现的所有字符。字体均为 SIL Open Font License。
+用到哪些字：lyrics.lrc、mv.html 和 js/*.js 里出现的所有字符（不算注释）。字体均为 SIL Open Font License。
 """
 import os
 import re
@@ -31,8 +31,14 @@ def get(url):
 def main():
     chars = set()
     files = ['lyrics.lrc', 'mv.html'] + [os.path.join('js', f) for f in os.listdir(os.path.join(here, 'js')) if f.endswith('.js')]
-    for f in files:
-        chars |= set(open(os.path.join(here, f), encoding='utf-8-sig').read())
+    for f in files:                                          # 注释里的字不会画出来，不算（字太多时 Google Fonts 不按 text 子集化，只会返回一堆分片）
+        src = open(os.path.join(here, f), encoding='utf-8-sig').read()
+        if f.endswith('.js'):
+            src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+            src = re.sub(r'(?m)(^|[^:\'"`])//[^\n]*', r'\1', src)
+        if f.endswith('.html'):
+            src = re.sub(r'<!--.*?-->', '', src, flags=re.S)
+        chars |= set(src)
     chars |= {chr(c) for c in range(0x20, 0x7f)}             # 英文、数字、标点全要
     text = ''.join(sorted(c for c in chars if c.isprintable()))
     out = os.path.join(here, 'fonts')
@@ -44,7 +50,7 @@ def main():
         q = urllib.parse.urlencode({'family': f'{gname}:wght@{wght}', 'text': text, 'display': 'block'})
         sheet = get('https://fonts.googleapis.com/css2?' + q).decode()
         urls = re.findall(r'url\((https://[^)]+)\)', sheet)
-        assert urls, f'{gname} {wght}: 没拿到字体'
+        assert len(urls) == 1, f'{gname} {wght}: 应该拿到 1 个子集字体，实际 {len(urls)} 个（字太多时 Google Fonts 会改成分片）'
         fn = f"{gname.replace(' ', '')}-{wght}.woff2"
         data = get(urls[0])
         open(os.path.join(out, fn), 'wb').write(data)
