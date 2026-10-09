@@ -2,12 +2,12 @@
 // ============================================================================
 // 《谎话》竖屏预告 · 1080×1920 · 15 秒 · 朦胧（分镜见 teaser/STORYBOARD.md）
 // 隔着一扇起雾的玻璃回想那个下雨的夜晚：全程失焦，只有唱到「谎话」的那一下对焦清楚。
-// 不用 MV 的画面，只沿用 MV 的世界（雨夜、冷蓝、一点红、TAPE 01、23:47、最后一滴雨）。
+// 不用 MV 的画面，只沿用 MV 的世界（雨夜、冷蓝、一点红、TAPE 01、最后一滴雨）；手指在雾上写的是发布时间 00:00。
 // 时间点和 teaser/audio.py 对齐：「我」1.74s，「谎」10.10s，磁带 11.0s 开始卡住、11.65s 停死。
 // 约定同 MV：画面只依赖 t；随机数一律 rand(seed) / hash(i)。
 // ============================================================================
 const T_DUR = 15;
-const T_WRITE = [1.55, 4.5];       // 手指在雾上写 23:47
+const T_WRITE = [1.55, 4.5];       // 手指在雾上写 00:00
 const T_PHONE = [5.1, 7.2];        // 玻璃后面手机亮起
 const T_CAR = [7.0, 9.7];          // 一辆车的车灯从玻璃后面横扫过去
 const T_PUSH = 9.0;                // 镜头慢慢推近、雨变密
@@ -74,9 +74,10 @@ function drawBG(t, push, dim) {
 }
 const carAt = t => { const ck = (t - T_CAR[0]) / (T_CAR[1] - T_CAR[0]); return ck > 0 && ck < 1 ? { x: lerp(W * 1.35, -W * .35, ease(ck)), y: H * .63, a: Math.sin(Math.PI * ck) } : null; };
 
-// ---------------------------------------------------------------- 手指在雾上写「23:47」
+// ---------------------------------------------------------------- 手指在雾上写「00:00」（10/17 00:00 发布）
 // 字形是手写的几笔（单位格：宽 1，高 1.6），一个字一个字连着写，笔画之间稍微停一下
 const GLYPHS = {
+  0: [Array.from({ length: 27 }, (_, i) => { const a = -Math.PI / 2 - i / 24 * Math.PI * 2, r = 1 + .04 * Math.sin(i * 1.3); return [.5 + .45 * r * Math.cos(a), .8 + .77 * r * Math.sin(a)]; })],   // 手写的 0：一圈椭圆，收笔多绕一点
   2: [[[.08, .4], [.22, .13], [.5, .03], [.8, .13], [.88, .4], [.74, .72], [.4, 1.06], [.07, 1.5], [.96, 1.47]]],
   3: [[[.1, .16], [.46, .03], [.83, .16], [.85, .43], [.5, .7], [.88, .96], [.9, 1.26], [.55, 1.5], [.12, 1.4]]],
   ':': [[[.5, .52], [.5, .6]], [[.5, 1.15], [.5, 1.23]]],
@@ -84,7 +85,7 @@ const GLYPHS = {
   7: [[[.05, .07], [.94, .05], [.42, 1.56]]],
 };
 const WRITE = (() => {                                 // 把所有笔画排成一条时间线：[{pts, len, t0, t1}]
-  const str = '23:47', U = 140, gap = 34, widths = [...str].map(ch => ch === ':' ? .55 : 1);
+  const str = '00:00', U = 140, gap = 34, widths = [...str].map(ch => ch === ':' ? .55 : 1);
   const total = widths.reduce((a, b) => a + b, 0) * U + gap * (str.length - 1);
   let x0 = (W - total) / 2; const y0 = H * .34, strokes = [];
   [...str].forEach((ch, i) => {
@@ -98,8 +99,8 @@ const WRITE = (() => {                                 // 把所有笔画排成�
   return strokes.map((pts, k) => { const d = span * lens[k] / sum, o = { pts, len: lens[k], t0: tt, t1: tt + d }; tt += d + pause; return o; });
 })();
 // 写完以后，字的底部积水往下淌出几道水痕
-// [第几笔, 第几个点, 淌多长]：2 的底、4 的竖、3 的尾、7 的底
-const DRIPS = [[0, 8, 260], [5, 1, 380], [1, 8, 200], [6, 2, 330]].map(([s, p, L], i) => ({ s, p, L, t0: WRITE[s].t1 + .4 + i * .25 }));
+// [第几笔, 第几个点, 淌多长]：从四个 0 的底部淌下来
+const DRIPS = [[0, 12, 260], [4, 12, 380], [1, 12, 200], [5, 12, 330]].map(([s, p, L], i) => ({ s, p, L, t0: WRITE[s].t1 + .4 + i * .25 }));
 function strokePartial(c, pts, len, k) {
   let left = len * k; c.beginPath(); c.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length && left > 0; i++) {
@@ -241,12 +242,13 @@ function drawLayer(t) {
       c.translate(W / 2, H * .47); c.scale(s, s); chrome(c, '谎话', 0, 0, 330, { sweep: (t - T_HUANG) * 1.4 }); c.restore();
     }
   } else {
-    // 片尾：dangao_w / 10.17 从雾里浮出来；角落 TAPE 01；最后一滴雨
+    // 片尾：dangao_w / 10/17 00:00 从雾里浮出来；角落 TAPE 01；最后一滴雨
     const k = t - T_CARD, a = ease(k / .9), bl = lerp(10, 1.4, ease(k / 1.1));
     c.save(); c.globalAlpha = a; c.filter = `blur(${bl.toFixed(1)}px)`;
-    chrome(c, 'dangao_w', W / 2, H * .45, 120, { fam: GOTH, w: 400 });
-    text(c, '10.17', W / 2, H * .545, 210, { w: 400, fam: ANTON, fill: '#e9edf5' });
-    text(c, 'MV · 2026', W / 2, H * .615, 30, { w: 400, fam: MONO, fill: 'rgba(233,237,245,.7)' });
+    chrome(c, 'dangao_w', W / 2, H * .425, 120, { fam: GOTH, w: 400 });
+    text(c, '10/17', W / 2, H * .52, 200, { w: 400, fam: ANTON, fill: '#e9edf5' });
+    text(c, '00:00', W / 2, H * .6, 112, { w: 400, fam: ANTON, fill: '#e9edf5' });
+    text(c, 'MV · 2026', W / 2, H * .655, 30, { w: 400, fam: MONO, fill: 'rgba(233,237,245,.7)' });
     c.restore();
     if (k > .3) {
       c.save(); c.globalAlpha = .55 * clamp((k - .3) / .5);
