@@ -682,10 +682,6 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
   draw(c, t, lt) {
     const sp = M.hit('snare', t, 4);
     embers(c, t);                                                                   // 转场：霓虹灭掉时的火星继续飘落，变成暖色灰尘
-    if (lt < 2.2) {                                                                 // 呼应开头意识流里那张面具（右眼一道红色泪痕）：它在两团光中间，掉下去了
-      const f = Math.max(0, lt - .7), y = H * .4 + 700 * f * f, a = clamp(lt / .5) * clamp(1 - f / 1.5) * .6;
-      drawObj(c, 'mask', t, 2, { x: W / 2 + f * 40, y, s: .95, r: f * f * .35, a, ink: '#ffe6c8', acc: C.red, glow: 'rgba(255,170,90,.5)' });
-    }
     dust(c, t, 140, 21, (.3 + sp * .25) * clamp(lt / 1.2), '#ffe6c8');
     const dist = t < T_HURT ? lerp(900, 160, ease((t - this.t0) / (T_HURT - .6 - this.t0))) : lerp(160, 1250, ease((t - T_HURT) / 4.6));
     const cy = H * .37 + Math.sin(t * .6) * 10, ax = W / 2 - dist / 2, bx = W / 2 + dist / 2;
