@@ -574,26 +574,46 @@ const L_HURT = lineAt(67.86), T_HURT = wordT(L_HURT, '伤');
 //   进场：从句子里的位置被拎起来，沿弧线飞到右边，放大约 5 倍、淡到 25%；
 //   停留：随军鼓轻轻呼吸；
 //   退场：句子结束前慢慢往上飘、变淡，碎成暖色灰尘散掉。
-const HURT_FLY = .75, HURT_OUT = L_HURT.end - .35, HURT_GONE = HURT_OUT + 1.5;
+const HURT_PLUCK = .12, HURT_FLY = 1.5, HURT_OUT = L_HURT.end - .35, HURT_GONE = HURT_OUT + 1.5;
+// 指数缓出，归一化到 u = 1 时正好为 1：前面一下子走完大半，后面很长一段慢慢落定
+const expoOut = (u, r) => { u = clamp(u); return (1 - Math.pow(2, -r * u)) / (1 - Math.pow(2, -r)); };
 function hurtWord(c, t) {
   if (t < T_HURT || t > HURT_GONE) return;
   const size = fit(c, L_HURT.text, W * .78, 64, 400, SERIF);
   c.font = fnt(size, 400, SERIF);
   const wp = c.measureText('可我们还要').width, wh = c.measureText('伤害').width, wq = c.measureText('彼此就像将士').width;
   const x0 = W / 2 - (wp + wh + wq) / 2 + wp + wh / 2, y0 = H * .7, x1 = W * .73, y1 = H * .42, s1 = 520;
-  const k = ease((t - T_HURT) / HURT_FLY), e = clamp((t - HURT_OUT) / (HURT_GONE - HURT_OUT));
-  const breath = 1 + .03 * M.hit('snare', t, 4);
-  const x = lerp(x0, x1, k), y = lerp(y0, y1, k) - Math.sin(k * Math.PI) * 120 - easeOut(e) * 70;
-  const sz = lerp(size, s1, k) * breath, a = lerp(1, .25, k) * (1 - easeIn(e * 1.6));
-  if (a > .01) {
-    c.save(); c.globalAlpha = a; c.translate(x, y); c.rotate((1 - k) * k * .25);
-    c.shadowColor = `rgba(255,150,80,${.6 * (1 - k)})`; c.shadowBlur = 30 * (1 - k);
-    text(c, '伤害', 0, 0, sz, { w: k > .5 ? 900 : 400, fam: SERIF, fill: k < 1 ? '#f4ece2' : '#ffe9d6' }); c.restore();
+  // 1. 蓄力：在原位被揪住，轻轻颤、微微放大发亮
+  const pk = clamp((t - T_HURT) / HURT_PLUCK), shake = t < T_HURT + HURT_PLUCK ? pk * 2.5 : 0;
+  // 2. 被抽走：横向快、纵向慢（自然形成有惯性的弧线），放大按比例走，变淡比移动晚一点
+  const u = (t - T_HURT - HURT_PLUCK) / HURT_FLY;
+  const kx = expoOut(u, 9), ky = expoOut(u, 6), ks = expoOut(u, 8);
+  const drift = Math.max(0, t - T_HURT - HURT_PLUCK - HURT_FLY);                     // 3. 落定后继续极慢地漂
+  const e = clamp((t - HURT_OUT) / (HURT_GONE - HURT_OUT));                          // 4. 退场进度
+  const breath = 1 + .02 * M.hit('snare', t, 4);
+  const sz = size * (1 + .06 * easeOut(pk) * (1 - ks)) * Math.pow(s1 / size, ks) * (1 + .012 * drift) * breath;
+  const x = lerp(x0, x1, kx) + (hash(frameNo(t), 31) - .5) * 2 * shake, y = lerp(y0, y1, ky) - 6 * drift - 40 * easeOut(e) + (hash(frameNo(t), 32) - .5) * 2 * shake;
+  const a = lerp(1, .25, ease((u - .08) / .55)) * (1 - ease((e - .05) / .55));
+  const heavy = ease((ks - .25) / .5);                                               // 细体 → 粗体：交叉淡化，不会"跳"
+  const glow = easeOut(pk) * (1 - ks);
+  if (a > .005) {
+    c.save(); c.translate(x, y);
+    c.shadowColor = `rgba(255,150,80,${.7 * glow})`; c.shadowBlur = 34 * glow;
+    if (heavy < 1) { c.globalAlpha = a * (1 - heavy); text(c, '伤害', 0, 0, sz, { w: 400, fam: SERIF, fill: '#f6eee4' }); }
+    if (heavy > 0) { c.globalAlpha = a * heavy; text(c, '伤害', 0, 0, sz, { w: 900, fam: SERIF, fill: '#ffe9d6' }); }
+    c.restore();
   }
-  if (e > 0) {                                                                      // 碎成暖色灰尘，往上飘散
-    const pts = textPoints('伤害', s1, { w: 900, fam: SERIF, step: 9 });
-    const P = pts.map((p, i) => { const d = Math.max(0, e - hash(i, 5) * .35); return [p[0] + (hash(i, 6) - .5) * 260 * d, p[1] - (60 + hash(i, 7) * 240) * d - d * d * 80]; });
-    drawPts(c, P, x1, y1 - easeOut(e) * 70, 3, '#ffd9b0', .32 * (1 - e) * clamp(e * 6));
+  if (e > 0) {                                                                       // 颗粒从字形上一点点剥落、往上飘（和实心字的溶解重叠）
+    const pts = textPoints('伤害', s1, { w: 900, fam: SERIF, step: 8 }), k = sz / s1;
+    c.save(); c.fillStyle = '#ffd9b0';
+    for (let i = 0; i < pts.length; i++) {
+      const d = clamp((e - hash(i, 5) * .45) / .55); if (d <= 0) continue;
+      const m = easeOut(d), pa = Math.sin(d * Math.PI) * .45;
+      if (pa < .02) continue;
+      c.globalAlpha = pa;
+      c.fillRect(x + pts[i][0] * k + (hash(i, 6) - .5) * 140 * m + Math.sin(d * 5 + i) * 6, y + pts[i][1] * k - (70 + hash(i, 7) * 230) * m, 2.6, 2.6);
+    }
+    c.restore();
   }
 }
 const warmth = t => t < T_HURT ? 1 : lerp(1, .12, ease((t - T_HURT) / 4.5));
