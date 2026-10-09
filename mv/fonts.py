@@ -19,6 +19,7 @@ FAMILIES = [                      # (CSS 里的名字, Google Fonts 名字, 字�
     ('Anton', 'Anton', 400),
     ('Space Mono', 'Space Mono', 400),
     ('Silkscreen', 'Silkscreen', 700),
+    ('Long Cang', 'Long Cang', 400),          # 封面 A：手指在雾上写的「谎话」
 ]
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
