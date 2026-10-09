@@ -197,13 +197,15 @@ function coverC(c) {
 // ================================================================ 第二轮：MV 里的版式
 // 录像带角标（MV 的 HUD）：左上 ● REC TAPE 01，右上 谎话 / dangao_w，左下 ▶ PLAY，右下时间码
 function tapeHud(c, o = {}) {
-  const fs = o.fs ?? 22 * S, m = 64 * S, top = o.top ?? 62 * S, bot = o.bot ?? H - 62 * S, col = o.col ?? C.white;
-  c.save(); c.font = fnt(fs, 400, MONO); c.textBaseline = 'middle'; c.globalAlpha = o.a ?? .85; c.fillStyle = col;
+  const fs = o.fs ?? 22 * S, m = 64 * S, top = o.top ?? 62 * S, bot = o.bot ?? H - 62 * S, col = o.col ?? C.white, colTop = o.colTop ?? col, colBot = o.colBot ?? col;
+  c.save(); c.font = fnt(fs, 400, MONO); c.textBaseline = 'middle'; c.globalAlpha = o.a ?? .85; c.fillStyle = colTop;
   c.textAlign = 'left';
   c.save(); c.fillStyle = o.dot ?? C.red; c.globalAlpha = 1; c.beginPath(); c.arc(m + fs * .42, top, fs * .4, 0, 7); c.fill(); c.restore();
   const recX = m + fs * 1.35; c.fillText('REC', recX, top); c.fillText('TAPE 01', recX + c.measureText('REC').width + fs * 2.4, top);
-  c.fillText('▶ PLAY', m, bot);
-  c.textAlign = 'right'; c.fillText('谎话 / dangao_w', W - m, top); c.fillText(o.tc ?? 'TC 00:00:06:00', W - m, bot);
+  c.textAlign = 'right'; c.fillText('谎话 / dangao_w', W - m, top);
+  c.fillStyle = colBot; c.textAlign = 'left'; c.fillText('▶ PLAY', m, bot);
+  c.textAlign = 'right'; c.fillText(o.tc ?? 'TC 00:00:06:00', W - m, bot);
+  if (o.url) { c.textAlign = 'center'; c.font = fnt(fs * 1.1, 400, MONO); c.globalAlpha = Math.min(1, (o.a ?? .85) + .07); c.fillText(o.url, W / 2, bot); }
   c.restore();
 }
 // 套色没对准：先画两层错开的彩色，再画正色（MV 里的歌词就是这样）
@@ -241,24 +243,65 @@ function coverD(c) {
   return { ...FLAT };
 }
 
-// e · 红白横条：上面红底黑字、下面白底红字（副歌二），字大到被条边切掉
-function coverE(c) {
+// e / h / i · 横条：上面一条大字「谎话」，下面一条歌词（副歌二的版式）。配色：e 红白（太血腥，不用）/ h 冷蓝 / i 黑白银
+const BANDS = {
+  e: { top: C.red, bot: C.white, title: '#0a0b10', tg: ['rgba(255,214,0,1)', 'rgba(255,255,255,1)', .35], lyric: C.red, lg: ['rgba(255,214,0,1)', 'rgba(255,120,150,1)', .45], hudTop: '#0a0b10', hudBot: '#0a0b10', dot: '#0a0b10', line: 'rgba(0,0,0,.85)', sign: '#0a0b10' },
+  h: { top: '#0c1838', bot: '#dfe3ea', title: '#e9edf6', tg: ['rgba(90,124,255,1)', 'rgba(200,220,255,1)', .5], lyric: '#0c1838', lg: ['rgba(90,124,255,1)', 'rgba(160,190,255,1)', .4], hudTop: '#dfe3ea', hudBot: '#0c1838', dot: C.red, line: 'rgba(4,8,20,.9)', sign: '#0c1838' },
+  i: { top: '#0a0b10', bot: '#c9ced6', title: '#e4e7ec', tg: ['rgba(255,255,255,1)', 'rgba(110,118,134,1)', .35], lyric: '#0a0b10', lg: ['rgba(255,255,255,1)', 'rgba(110,118,134,1)', .45], hudTop: '#c9ced6', hudBot: '#0a0b10', dot: C.red, line: 'rgba(0,0,0,.9)', sign: '#0a0b10' },
+};
+function bands(c, P) {
   const mid = H * .54;
-  c.fillStyle = C.red; c.fillRect(0, 0, W, mid);
-  c.fillStyle = C.white; c.fillRect(0, mid, W, H - mid);
+  c.fillStyle = P.top; c.fillRect(0, 0, W, mid);
+  c.fillStyle = P.bot; c.fillRect(0, mid, W, H - mid);
   c.save(); c.beginPath(); c.rect(0, 0, W, mid); c.clip();
-  misText(c, '谎话', W * .5, mid - 300 * S, 700 * S, { fill: '#0a0b10', g1: 'rgba(255,214,0,1)', g2: 'rgba(255,255,255,1)', ga: .35, d: 9 });
+  misText(c, '谎话', W * .5, mid - 300 * S, 700 * S, { fill: P.title, g1: P.tg[0], g2: P.tg[1], ga: P.tg[2], d: 9 });
   c.restore();
   c.save(); c.beginPath(); c.rect(0, mid, W, H - mid); c.clip();
-  misText(c, '就别再想着', 90 * S, mid + 150 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
-  misText(c, '再跟我说谎话', 90 * S, mid + 320 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
-  c.font = `${82 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 76 * S, H - 160 * S);
+  misText(c, '就别再想着', 90 * S, mid + 150 * S, 150 * S, { align: 'left', fill: P.lyric, g1: P.lg[0], g2: P.lg[1], ga: P.lg[2], d: 5 });
+  misText(c, '再跟我说谎话', 90 * S, mid + 320 * S, 150 * S, { align: 'left', fill: P.lyric, g1: P.lg[0], g2: P.lg[1], ga: P.lg[2], d: 5 });
+  c.font = `${82 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = P.sign; c.fillText('dangao_w', W - 76 * S, H - 160 * S);
   c.restore();
-  c.fillStyle = 'rgba(0,0,0,.85)'; c.fillRect(0, mid - 3 * S, W, 6 * S);
-  tapeHud(c, { col: '#0a0b10', dot: '#0a0b10', a: .85, fs: 31 * S, top: 72 * S, bot: H - 72 * S, tc: 'TC 00:01:00:00' });
-  c.save(); c.font = fnt(34 * S, 400, MONO); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#0a0b10'; c.globalAlpha = .92;
-  c.fillText('makestudio.cn', W / 2, H - 72 * S); c.restore();   // 官网
+  c.fillStyle = P.line; c.fillRect(0, mid - 3 * S, W, 6 * S);
+  tapeHud(c, { colTop: P.hudTop, colBot: P.hudBot, dot: P.dot, a: .85, fs: 31 * S, top: 72 * S, bot: H - 72 * S, tc: 'TC 00:01:00:00', url: 'makestudio.cn' });
   return { ...FLAT, ca: 0, vig: .7 };   // 整张不做色差（边缘会出彩边），错位只留在字上
+}
+const coverE = c => bands(c, BANDS.e), coverH = c => bands(c, BANDS.h), coverI = c => bands(c, BANDS.i);
+
+// j · 雨夜字幕：上下黑边，中间是 MV 里那一帧雨夜（原尺寸重画，不放大截图），字幕「就别再想着再跟我说谎话」
+function coverJ(c) {
+  const bar = 290 * S, y0 = bar, y1 = H - bar;
+  c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+  const IMG = mk(), g = IMG.getContext('2d');
+  const grd = g.createLinearGradient(0, y0, 0, y1); grd.addColorStop(0, '#040a1e'); grd.addColorStop(.6, '#0a1638'); grd.addColorStop(1, '#122150');
+  g.fillStyle = grd; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'lighter';
+  const r = rand(14);
+  for (let i = 0; i < 46; i++) {
+    const x = r() * W, y = y0 + r() * (y1 - y0), R = (40 + r() * r() * 170) * S, col = r() < .8 ? '90,124,255' : '200,220,255', a = .05 + r() * .18;
+    const rg = g.createRadialGradient(x, y, 0, x, y, R); rg.addColorStop(0, `rgba(${col},${a})`); rg.addColorStop(.65, `rgba(${col},${a * .6})`); rg.addColorStop(1, `rgba(${col},0)`);
+    g.fillStyle = rg; g.beginPath(); g.arc(x, y, R, 0, 7); g.fill();
+  }
+  g.globalCompositeOperation = 'source-over';
+  rain(g, 4.2, { n: 340, spd: 1, len: 150 * S, alpha: .32, wind: .2, seed: 9, lw: 1.8 * S, col: 'rgb(170,190,255)' });
+  rain(g, 1.3, { n: 90, spd: 1, len: 260 * S, alpha: .2, wind: .2, seed: 21, lw: 3.2 * S, col: 'rgb(200,214,255)' });
+  dust(g, 3, 260, 5, .35, '#cfe0ff');
+  c.save(); c.beginPath(); c.rect(0, y0, W, y1 - y0); c.clip(); c.drawImage(IMG, 0, 0);
+  // 字幕：前半句宋体发蓝光，「谎话」两个字白色粗体
+  const sz = 74 * S, ym = (y0 + y1) / 2 + 10 * S, a1 = '就别再想着再跟我说', a2 = '谎话';
+  c.font = fnt(sz, 400, SERIF); const w1 = c.measureText(a1).width; c.font = fnt(sz * 1.12, 900, SANS); const w2 = c.measureText(a2).width;
+  const x0 = W / 2 - (w1 + w2 + 8 * S) / 2;
+  c.shadowColor = 'rgba(125,147,255,.9)'; c.shadowBlur = 22 * S;
+  misText(c, a1, x0, ym, sz, { align: 'left', w: 400, fam: SERIF, fill: '#cfe0ff', d: 2, ga: .5, g1: 'rgba(255,60,90,1)', g2: 'rgba(80,200,255,1)' });
+  c.shadowColor = 'rgba(220,230,255,.9)'; c.shadowBlur = 28 * S;
+  misText(c, a2, x0 + w1 + 8 * S, ym, sz * 1.12, { align: 'left', fill: '#ffffff', d: 3, ga: .55 });
+  c.restore();
+  // 下黑边：歌名 + 署名；上黑边：录像带角标
+  c.save(); c.textBaseline = 'alphabetic';
+  misText(c, '谎话', 76 * S, y1 + 150 * S, 150 * S, { align: 'left', base: 'alphabetic', fill: '#f2f1ee', d: 4, ga: .6 });
+  c.font = `${80 * S}px "${GOTH}"`; c.textAlign = 'right'; c.fillStyle = 'rgba(242,241,238,.9)'; c.fillText('dangao_w', W - 76 * S, y1 + 140 * S);
+  c.restore();
+  tapeHud(c, { col: '#e4e7ec', a: .8, fs: 31 * S, top: bar / 2, bot: H - 72 * S, tc: 'TC 00:01:18:42', url: 'makestudio.cn' });
+  return { grade: 'cold', gradeMix: .25, bloom: .35, bloomThr: .6, ca: 0, grain: .24, vig: .8, scan: .05 };
 }
 
 // f · 三栏：黑 / 银 / 暗红三栏，竖排三句（副歌一）
@@ -301,13 +344,13 @@ const OUT = document.getElementById('cv'); OUT.width = W; OUT.height = H; const 
 function render() {
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.filter = 'none';
   lx.clearRect(0, 0, W, H);
-  const base = ({ a: coverA, b: coverB, c: coverC, d: coverD, e: coverE, f: coverF, g: coverG }[V] || coverD)(lx);
+  const base = ({ a: coverA, b: coverB, c: coverC, d: coverD, e: coverE, f: coverF, g: coverG, h: coverH, i: coverI, j: coverJ }[V] || coverH)(lx);
   const fx = { zoom: 1, rot: 0, barrel: 0, shift: [0, 0], sq: [1, 1], split: 0, glitch: 0, gseed: 1, wave: 0, tear: 0, invert: 0, xerox: 0,
     flash: 0, flashCol: '#ffffff', dark: 0, scan: 0, lb: 0, ...base };
   GLX.frame(LAY, 0, { mode: 'solid', a: '#000000' }, fx, 1, true);
   ox.setTransform(1, 0, 0, 1, 0, 0); ox.drawImage(GLX.present(), 0, 0);
 }
-const FONTS = [`900 20px "${SANS}"`, `400 20px "${SANS}"`, `20px "${GOTH}"`, `400 20px "${MONO}"`, `20px "Long Cang"`];
+const FONTS = [`900 20px "${SANS}"`, `400 20px "${SANS}"`, `400 20px "${SERIF}"`, `20px "${GOTH}"`, `400 20px "${MONO}"`, `20px "Long Cang"`];
 const ready = Promise.all(FONTS.map(f => document.fonts.load(f, '谎话A'))).then(() => document.fonts.ready).then(() => { render(); return true; });
 window.__ready = () => ready;
 window.__png = () => OUT.toDataURL('image/png');
