@@ -37,12 +37,6 @@ function drawWorld(c, t, w) { if (!w) return; street(c, t, w.street ?? 0); world
 
 // 黑边从上下滑进来
 const lbIn = (lt, d = .35) => easeOut(lt / d);
-// 文字特效：乱码解码（证词像被解密一样，从乱码跳成真字）
-const POOL = [...new Set(D.lyrics.map(l => l.text).join('').replace(/[A-Za-z\s]/g, ''))];
-function decode(str, t, t0, o = {}) {
-  const per = o.per ?? .035, hold = o.hold ?? .12;
-  return [...str].map((ch, k) => t >= t0 + hold + k * per ? ch : POOL[Math.floor(hash(k * 131 + (frameNo(t) >> 1), o.seed ?? 7) * POOL.length)]).join('');
-}
 // 文字特效：切片错位（在 fn 画的东西上横切 n 条，各自错开）
 function sliced(c, n, amt, seed, top, h, fn) {
   if (amt <= .01) { fn(); return; }
@@ -50,6 +44,11 @@ function sliced(c, n, amt, seed, top, h, fn) {
     c.save(); c.beginPath(); c.rect(-W, top + h * i / n, W * 3, h / n + 1); c.clip();
     c.translate((hash(i, seed) - .5) * 2 * amt, 0); fn(); c.restore();
   }
+}
+// 硬切出现：在鼓点上直接出现，只有 3 帧极轻的落定和一点点抖；冲击力交给镜头猛推和曝光闪
+function cutIn(c, t, t0, seed, fn, o = {}) {
+  const k = Math.max(0, t - t0), s = 1 + .035 * Math.exp(-k * 30), sh = (o.shake ?? 12) * Math.exp(-k * 18);
+  c.save(); c.translate(o.x ?? W / 2, o.y ?? H / 2); c.translate((hash(seed, 1) - .5) * sh, (hash(seed, 2) - .5) * sh); c.scale(s, s); fn(); c.restore();
 }
 // 闪 n 帧
 const blink = (since, n = 2) => since >= 0 && since < n / 30 ? 1 : 0;
@@ -104,7 +103,7 @@ scene({ name: '谎话', t0: D.bar0, t1: T_MELT,
     c.save();
     if (v === 0) chrome(c, D.title, W / 2, H / 2, 600, { sweep });
     else if (v === 1) chrome(c, D.title, W * .36, H / 2 + 40, 900, { sweep });
-    else if (v === 2) { c.translate(W / 2, H / 2); c.rotate(Math.PI); chrome(c, D.title, 0, 0, 520, { sweep }); }
+    else if (v === 2) chrome(c, '谎', W * .62, H * .58, 1500, {});                                  // 极近特写：只露半个谎字
     else if (v === 3) { chrome(c, '谎', W * .3, H * .34, 470, { sweep }); chrome(c, '话', W * .66, H * .66, 470, { sweep: sweep - .3 }); }
     else { text(c, D.title, W / 2, H / 2, 1000, { fill: null, stroke: 'rgba(255,255,255,.16)', lw: 3 }); chrome(c, D.title, W / 2, H / 2, 300, { sweep }); }
     c.restore();
@@ -261,7 +260,11 @@ function verseLine(c, t, line, idx) {
   c.save();
   c.beginPath(); c.rect(0, y - 260, W, 260 * a + 120); c.clip();
   text(c, String(idx).padStart(2, '0'), x - 8, y - 120, 150, { fam: ANTON, w: 400, align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
-  text(c, decode(line.text, t, line.t, { seed: idx }), x, y, 76, { align: 'left', fill: C.white });
+  const dev = clamp((t - line.t) / .28);                                             // 显影：从过曝发虚沉淀成清晰的字
+  c.save(); c.filter = dev < 1 ? `blur(${(1 - dev) * 7}px)` : 'none';
+  c.shadowColor = `rgba(220,230,255,${1 - dev})`; c.shadowBlur = 40 * (1 - dev);
+  text(c, line.text, x, y, 76, { align: 'left', fill: `rgb(${lerp(255, 242, dev) | 0},${lerp(255, 241, dev) | 0},${lerp(255, 238, dev) | 0})` });
+  c.restore();
   const s = line.t, ts = `[${String(s / 60 | 0).padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}]  STATEMENT ${String(idx).padStart(2, '0')}/08`;
   text(c, ts, x, y + 70, 22, { w: 400, fam: MONO, align: 'left', fill: C.blue });
   c.restore();
@@ -304,7 +307,7 @@ scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
       verseLine(c, t, line, i + 1);
       if (line === L_KONGBAI) {                                                   // "空白"被涂黑
         c.font = fnt(76, 900); const x = 150 + c.measureText('你故意清除的').width, w = c.measureText('空白').width;
-        redact(c, x - 6, H - 290 - 46, w + 12, 92, (t - wordT(line, '空')) / .25, { label: 'REDACTED' });
+        redact(c, x - 6, H - 290 - 46, w + 12, 92, (t - wordT(line, '空')) / .25);
       }
       if (line === L_JUESAI && t > wordT(line, '决')) {                           // "决赛"变成铬金属
         c.font = fnt(76, 900); const x = 150 + c.measureText('我和你最后').width;
@@ -328,49 +331,64 @@ const KO = [lineAt(36.12), lineAt(56.46)].map(l => wordT(l, '倒'));
 const GLIDES = D.notes808.filter(n => n.glide).map(n => n.t);
 const COLS = [lineAt(37.38), lineAt(38.64), lineAt(39.92)];
 const SNARE_DROP = barT(15) + 4 * STEP;                                              // 小节 15 第 2 拍军鼓空掉
-const T_SHATTER = barT(24);
+const T_SHATTER = barT(24), T_POP = T_SHATTER + .36;
+// 霓虹灭掉时迸出的火星：从 woooah 的灯管上掉下来，慢慢飘落、变暗，进入桥段后变成暖色灰尘
+function embers(c, t) {
+  const k = t - T_POP; if (k < 0 || k > 3.2) return;
+  const pts = textPoints('wooooooah', 300, { fam: GOTH, w: 400, step: 26 });
+  c.save();
+  pts.forEach((p, i) => {
+    if (hash(i, 91) > .45) return;
+    const d = Math.max(0, k - hash(i, 92) * .25), vx = (hash(i, 93) - .5) * 120, vy = 40 + hash(i, 94) * 90;
+    const x = W / 2 + p[0] * 1.45 + vx * d + Math.sin(d * 2 + i) * 14, y = H / 2 + p[1] * 1.45 + vy * d + 22 * d * d;
+    const a = clamp(1 - d / (2 + hash(i, 95))) * (d < .05 ? d / .05 : 1);
+    const hot = clamp(1 - d / .8);
+    c.globalAlpha = a * .9; c.fillStyle = `rgb(255,${lerp(150, 230, hot) | 0},${lerp(80, 200, hot) | 0})`;
+    c.beginPath(); c.arc(x, y, 1.6 + hot * 1.6, 0, 7); c.fill();
+  });
+  c.restore();
+}
 function hookLine(c, t, line, R2) {
   const te = gapHold(t), txt = line.text, idx = D.lyrics.indexOf(line);
   const size = fit(c, txt, W * .84, 250);
-  const shadowed = (cc, a = 1) => { cc.globalAlpha = a; text(cc, txt, 10, 10, size, { fill: C.red }); text(cc, txt, 0, 0, size, { fill: C.white }); cc.globalAlpha = 1; };
+  const shadowed = (cc, a = 1) => { cc.globalAlpha = a; text(cc, txt, 7, 7, size, { fill: C.red }); text(cc, txt, 0, 0, size, { fill: C.white }); cc.globalAlpha = 1; };   // 红色套印错位
   // 背后：这句话的巨大空心字在滚
   scrollRows(c, te, txt, { size: 260, rows: 3, spd: R2 ? 260 : 140, col: 'rgba(255,255,255,.06)', lw: 2 });
   if (R2) { c.save(); c.globalAlpha = .45; vtext(c, txt, W / 2, 40, Math.min(150, 1000 / [...txt].length), { fam: SERIF, fill: C.red }); c.restore(); }
-  // 失态 / 病态：鼓停时冻住，808 滑音时字往下垮
+  // 失态 / 病态：鼓停时冻住；808 滑音时字一个个垂直往下沉、被拉长，像融化（不旋转）
   if (txt === '就失态' || txt === '变病态') {
     if (txt === '就失态') { c.fillStyle = 'rgba(150,6,22,.85)'; c.fillRect(0, 0, W, H); }
     const g = GLIDES.find(x => x > line.t && x < line.end + .2), k = g ? clamp((t - g) / .55) : 0;
     const draw = cc => { c.font = fnt(size, 900); let x = -c.measureText(txt).width / 2;
       [...txt].forEach((ch, j) => { const w = c.measureText(ch).width, d = easeIn(k - j * .12);
-        cc.save(); cc.translate(x + w / 2, d * (300 + hash(j, idx) * 300)); cc.rotate(d * (hash(j, idx + 1) - .3) * 1.2); text(cc, ch, 10, 10, size, { fill: C.red }); text(cc, ch, 0, 0, size); cc.restore(); x += w; }); };
+        cc.save(); cc.globalAlpha = 1 - d * .7; cc.translate(x + w / 2, d * (240 + hash(j, idx) * 160)); cc.scale(1, 1 + d * .9);
+        text(cc, ch, 7, 7, size, { fill: C.red }); text(cc, ch, 0, 0, size); cc.restore(); x += w; }); };
     if (R2 && txt === '变病态') { c.save(); c.translate(W / 2, H / 2); draw(c); c.restore(); return; }
-    slam(c, te, line.t, idx, () => draw(c)); return;
+    cutIn(c, te, line.t, idx, () => draw(c)); return;
   }
   // 连击：每个底鼓叠一层残影
   if (txt.includes('连击')) {
     const n = M.count('kick', line.t, te) * (R2 ? 2 : 1);
     for (let j = Math.min(n, 10); j > 0; j--) { c.save(); c.translate(W / 2 + j * 26, H / 2 - j * 18); text(c, txt, 0, 0, size, { fill: null, stroke: j % 2 ? C.red : 'rgba(255,255,255,.7)', lw: 3 }); c.restore(); }
   }
-  // 击倒：K.O.
+  // 击倒：字被一拳打出画面（往下甩出），K.O. 硬切出现；第二次 K.O. 之后硬切成铬金属「谎话」
   const ko = KO.find(x => x > line.t && x < line.end + .1);
   if (ko && t >= ko) {
-    const k = t - ko, pts = textPoints(txt, Math.round(size), { step: 6 });
-    if (R2 && k > .07) {                                                           // ROUND 2：碎片重组成铬金属「谎话」
-      const P = morphPts(burst(pts, .07, idx), textPoints(D.title, 380, { step: 6 }), (k - .07) / .14);
-      drawPts(c, P, W / 2, H / 2, 6, C.silver, clamp(1 - (k - .2) / .1));
-      if (k > .2) { chrome(c, D.title, W / 2, H / 2, 380, { sweep: (k - .2) * 4 }); return; }
-    } else drawPts(c, burst(pts, k, idx), W / 2, H / 2, 6, C.white);
-    const ks = 1 + .5 * Math.exp(-k * 18);
-    c.save(); c.translate(W / 2, H / 2); c.scale(ks, ks); pixel(c, 'K.O.', 0, 0, 340, { shadow: C.red, stroke: C.black }); c.restore();
+    const k = t - ko;
+    if (R2 && k > .17) { chrome(c, D.title, W / 2, H / 2, 380, {}); return; }
+    const fall = Math.pow(k / .22, 2) * H;
+    if (fall < H) { c.save(); c.translate(W / 2 + k * 260, H / 2 + fall); c.rotate(k * .5); shadowed(c); c.restore(); }
+    c.save(); c.font = fnt(820, 400, ANTON); c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = C.white; c.fillText('K.O.', W / 2, H / 2 + 40);
+    c.fillStyle = C.red; c.fillRect(W / 2 - 520, H / 2 + 330, 1040, 12); c.restore();
     return;
   }
-  // 不要让我救（ROUND 2）：碎片倒着收回来
-  if (R2 && txt === '不要让我救') {
-    const k = t - line.t, pts = textPoints(txt, Math.round(size), { step: 6 });
-    if (k < .3) { drawPts(c, burst(pts, (.3 - k) * 1.8, idx), W / 2, H / 2, 6, C.white); return; }
-  }
+  // 不要让我救（ROUND 2）：像录像带来回搓带，字在前后几帧之间来回跳几下再停住
+  let scrub = 0;
+  if (R2 && txt === '不要让我救' && t - line.t < .3) scrub = [0, -46, 28, -14, 36, -8][frameNo(t) % 6];
   const j = jerk(te), cut = j.act === 'cut' && j.since < .1 ? (1 - j.since / .1) * 70 : 0;
-  slam(c, te, line.t, idx, () => {
+  cutIn(c, te, line.t, idx, () => {
+    if (scrub) { c.save(); c.translate(-scrub * 1.6, 0); shadowed(c, .35); c.restore(); c.translate(scrub, 0); }
     sliced(c, 5, cut, j.i, -size * .6, size * 1.2, () => shadowed(c));
     if (R2 && (txt === '不要这样就' || txt === '不要躲着我')) {                   // 镜像的字对不上
       c.save(); c.scale(-1, 1); c.translate((hash(frameNo(t) >> 2, 3) - .5) * 60, 0); shadowed(c, .3); c.restore();
@@ -406,23 +424,13 @@ function woahShot(c, t, t0, R2 = false) {
   }
 }
 function hookDraw(c, t, lt, R2) {
-  if (!R2 && lt < .4) {                                                             // 转场：雨丝变红、拉长，汇聚成放射线
-    const r = rand(61), k = lt / .4;
-    c.save(); c.lineCap = 'round';
-    for (let i = 0; i < 70; i++) { const a = r() * 6.283, r0 = lerp(1400, 120, easeOut(k)) * (.4 + r() * .6), len = 260 * (1 - k) + 40;
-      c.strokeStyle = `rgba(255,${40 + r() * 60 | 0},70,${(1 - k) * .8})`; c.lineWidth = 1 + r() * 3;
-      c.beginPath(); c.moveTo(W / 2 + Math.cos(a) * r0, H / 2 + Math.sin(a) * r0); c.lineTo(W / 2 + Math.cos(a) * (r0 + len), H / 2 + Math.sin(a) * (r0 + len)); c.stroke(); }
-    c.restore();
-  }
-  if (R2 && lt < .45) {                                                             // 转场：上一幕的大红"我"炸开
-    drawPts(c, burst(textPoints('我', 640, { step: 8 }), lt, 9, { power: 1400, gravity: 0 }), W / 2, H / 2, 8, C.red, 1 - lt / .45);
-  }
   const { line } = M.lyric(t);
   if (!line) return;
   if (line.text === 'woah') {
-    if (R2 && t >= T_SHATTER) {                                                     // 整个画面像玻璃一样碎掉
-      snx.setTransform(1, 0, 0, 1, 0, 0); snx.clearRect(0, 0, W, H); woahShot(snx, T_SHATTER - .01, line.t, true);
-      shatter(c, SNAP, t - T_SHATTER, 7); return;
+    if (R2 && t >= T_SHATTER) {                                                     // 霓虹短路：闪几下，啪地一下灭掉，火星慢慢飘落
+      const k = t - T_SHATTER, on = k < T_POP - T_SHATTER ? [1, 0, 1, .25, 1, 0, 0, .9, 0, .4][frameNo(t) % 10] : 0;
+      if (on > 0) { c.save(); c.globalAlpha = on; woahShot(c, T_SHATTER - .01, line.t, true); c.restore(); }
+      embers(c, t); return;
     }
     woahShot(c, t, line.t, R2); return;
   }
@@ -446,6 +454,7 @@ function hookDraw(c, t, lt, R2) {
   }
   hookLine(c, t, line, R2);
 }
+const HOOK_T0 = [lineAt(32.44).t, lineAt(52.86).t];                                // 副歌开头一帧红闪（替代粒子 / 速度线转场）
 function hookFx(R2) {
   return function (t) {
     const k = M.last('kick', t), { line } = M.lyric(t), ko = KO.find(x => t >= x && t < x + .5);
@@ -455,14 +464,16 @@ function hookFx(R2) {
     return { ...cam(gapHold(t), R2 ? 1.3 : 1.1), ca: (R2 ? 3 : 2.2) + M.hit('kick', t, 9) * 8, xerox: .18, bloom: .55,
       grade: shatter ? 'warm' : sick ? 'sick' : M.gap(t) ? 'silver' : 'red', gradeMix: shatter ? .6 * sk : sick ? 1 : M.gap(t) ? 1 : (R2 ? .25 : .35), wave: sick ? .6 + M.hit('kick', t, 6) : 0,
       invert: shatter ? 0 : inv, glitch: hash(k.i, 13) < (R2 ? .45 : .28) ? M.hit('kick', t, 12) * .5 : 0, gseed: k.i,
-      flash: ko != null ? (t - ko < 3 / 30 ? 1 : 0) : M.hit('snare', t, 25) * (R2 ? .3 : .2),
+      flash: ko != null ? (t - ko < 2 / 30 ? 1 : 0) : R2 && t >= T_POP && t < T_POP + 2 / 30 ? .8
+        : line && t - line.t < 2 / 30 && line.text !== 'woah' ? .3 : M.hit('snare', t, 25) * (R2 ? .3 : .2),   // 每句出现时一帧曝光闪
+      flashCol: R2 && t >= T_POP && t < T_POP + .1 ? '#ffb070' : t - HOOK_T0[+R2] < 2 / 30 ? '#e0112b' : '#ffffff',
       zoom: ko != null ? 1 - .14 * Math.exp(-(t - ko) * 6) : cam(gapHold(t)).zoom ?? 1, rot: ko != null ? .05 * Math.exp(-(t - ko) * 5) : cam(gapHold(t)).rot ?? 0,
       sq: R2 ? [1, 1] : crt((t - (lineAt(41.22).t + .5)) / .16), hud: .5 * (1 - sk), lb: sk * .6 };
   };
 }
 scene({ name: '连击', t0: lineAt(32.44).t, t1: lineAt(41.88).t,
   weather: t => ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),
-  bg: t => ({ mode: 'rays', a: '#050003', b: '#2c0309', c: '#ff2040', amt: .8, speed: 1, pulse: M.hit('kick', t, 8) }),
+  bg: t => ({ mode: 'smoke', a: '#040002', b: '#4a0712', c: '#ff2a48', amt: .95, speed: 1.6, pulse: M.hit('kick', t, 8) }),
   draw: (c, t, lt) => hookDraw(c, t, lt, false), fx: hookFx(false) });
 
 // ================================================================ 4 · 对质：聊天记录
@@ -534,11 +545,12 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
     const kc = M.count('kick', this.t0 - .01, t), step = kc * .21 + easeOut(clamp(M.last('kick', t).since / .1)) * .0;
     c.save(); c.translate(W - 430, H / 2 + 30); c.rotate(step);
     text(c, '我', 0, 0, 900, { fam: SERIF, fill: null, stroke: `rgba(224,17,43,${.5 + M.hit('kick', t, 6) * .4})`, lw: 5 }); c.restore();
-    const collapse = t > T_UP3 ? easeIn((t - T_UP3) / .22) : 0, smear = t > T_FILL3 ? clamp((t - T_FILL3) / 2.1) : 0;
+    if (t >= T_UP3) { cutIn(c, t, T_UP3, 3, () => text(c, '我', 0, 0, 640, { fill: C.red })); return; }   // 跳八度：硬切成一个巨大的红"我"
+    const collapse = 0, smear = t > T_FILL3 ? clamp((t - T_FILL3) / 2.1) : 0;
     const cur = STACK.filter(l => t >= l.t).length - 1, pop = 1 + .35 * M.hit('kick', t, 9);
     STACK.forEach((l, k) => {
       if (t < l.t) return;
-      const x = 150 - 300 * (1 - easeOut((t - l.t) / .15)), y = 230 + k * 190;
+      const x = 150, y = 230 + k * 190;
       const cx = lerp(x, W / 2, collapse), cy = lerp(y, H / 2, collapse), sc = 1 - collapse;
       c.save(); c.translate(cx, cy); c.scale(sc, sc);
       c.font = fnt(120, 900); const pre = l.text.slice(0, -1), pw = c.measureText(pre).width;
@@ -550,7 +562,6 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
       c.save(); c.translate(pw + 60, 0); c.scale(pop, pop); text(c, '我', 0, 0, 120, { fill: C.red }); c.restore();
       c.restore();
     });
-    if (t > T_UP3 + .22) slam(c, t, T_UP3 + .22, 3, () => text(c, '我', 0, 0, 640, { fill: C.red }));
   },
   fx(t) {
     const end = this.t1 - t;
@@ -558,14 +569,14 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
       flash: t - this.t0 < 2 / 30 ? .9 : 0,
       glitch: hash(M.last('kick', t).i, 14) < .3 ? M.hit('kick', t, 12) * .4 : 0, gseed: M.last('kick', t).i,
       zoom: 1 + M.hit('note', t, 10) * (t > T_FILL3 ? .1 : 0) + (cam(t).zoom ?? 1) - 1,
-      dark: M.gap(t) ? .9 : 0, invert: t > T_UP3 + .3 && end > 0 ? frameNo(t) % 2 : 0, hud: .5 };
+      dark: M.gap(t) ? .9 : 0, invert: t > T_UP3 + .12 && end > 0 ? frameNo(t) % 2 : 0, hud: .5 };
   },
 });
 
 scene({ name: '病态', t0: lineAt(52.86).t, t1: lineAt(63.36).t,
   weather: t => t >= T_SHATTER ? null : ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),
   bg: t => t >= T_SHATTER ? { mode: 'leak', a: '#05060a', b: '#ff7418', c: '#ffd59a', amt: .5 * easeIn((t - T_SHATTER) / (lineAt(63.36).t - T_SHATTER)), speed: .5, seed: 3 }   // 转场：暖光从黑里渗出来
-    : ({ mode: 'rays', a: '#040003', b: '#2a030a', c: '#ff2a50', amt: .9, speed: 1.6, pulse: M.hit('kick', t, 7), mirror: true }),
+    : ({ mode: 'smoke', a: '#030002', b: '#560a16', c: '#ff2a50', amt: 1, speed: 1.8, pulse: M.hit('kick', t, 7), mirror: true }),   // 左右镜像：像墨迹测试
   draw: (c, t, lt) => hookDraw(c, t, lt, true), fx: hookFx(true) });
 
 // ================================================================ 7 · 面具掉了（桥段）
@@ -579,16 +590,7 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
   bg: function (t) { return { mode: 'leak', a: '#05060a', b: '#ff7418', c: '#ffd59a', amt: warmth(t) * (.85 + M.hit('snare', t, 5) * .25) * lerp(.5, 1, ease((t - this.t0) / 1.2)), speed: .5, seed: 3 }; },
   draw(c, t, lt) {
     const sp = M.hit('snare', t, 4);
-    if (lt < 1.6) {                                                                 // 转场：碎玻璃落下来，慢慢变成暖色的灰尘
-      const r = rand(73), k = lt / 1.6;
-      for (let i = 0; i < 70; i++) {
-        const x = r() * W, y0 = r() * H * .6 - 100, v = 380 * (.4 + r()), sz = 6 + r() * 16, rot = r() * 6;
-        const y = y0 + v * (1 - Math.exp(-lt * 2.2)) / 2.2, s2 = sz * (1 - k * .85);
-        c.save(); c.translate(x, y); c.rotate(rot + lt * (r() - .5) * 4); c.globalAlpha = (1 - k) * .8;
-        c.fillStyle = k < .4 ? 'rgba(220,235,255,.9)' : '#ffd9b0';
-        c.beginPath(); c.moveTo(0, -s2); c.lineTo(s2 * .8, s2 * .6); c.lineTo(-s2 * .7, s2 * .5); c.closePath(); c.fill(); c.restore();
-      }
-    }
+    embers(c, t);                                                                   // 转场：霓虹灭掉时的火星继续飘落，变成暖色灰尘
     dust(c, t, 140, 21, (.3 + sp * .25) * clamp(lt / 1.2), '#ffe6c8');
     const dist = t < T_HURT ? lerp(900, 160, ease((t - this.t0) / (T_HURT - .6 - this.t0))) : lerp(160, 1250, ease((t - T_HURT) / 4.6));
     const cy = H * .37 + Math.sin(t * .6) * 10, ax = W / 2 - dist / 2, bx = W / 2 + dist / 2;
@@ -847,7 +849,7 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration + 1,
       if (lt < .12) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
       c.font = `700 96px "${PIX}", monospace`; const fw = c.measureText('CONTINUE?').width;
       pixel(c, typed, W / 2 - fw / 2, H * .3, 96, { shadow: C.red, align: 'left' });
-      if (t >= T_CD0) { c.save(); c.translate(W / 2, H * .58); const sc = 1 + .22 * Math.exp(-k * 12); c.scale(sc, sc);
+      if (t >= T_CD0) { c.save(); c.translate(W / 2, H * .58);
         pixel(c, String(n), 0, 0, 330, { fill: n === 0 ? C.red : C.white, shadow: n === 0 ? C.black : C.red }); c.restore(); }
       c.globalAlpha = 1;
       return;
