@@ -253,11 +253,11 @@ function coverE(c) {
   misText(c, '就别再想着', 90 * S, mid + 150 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
   misText(c, '再跟我说谎话', 90 * S, mid + 320 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
   c.font = `${64 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 90 * S, H - 150 * S);
-  c.font = fnt(21 * S, 400, MONO); c.letterSpacing = `${7 * S}px`; c.fillStyle = 'rgba(10,11,16,.85)';   // 厂牌署名
-  c.fillText('MAKE STUDIO', W - 90 * S + 7 * S, H - 104 * S); c.letterSpacing = '0px';
   c.restore();
   c.fillStyle = 'rgba(0,0,0,.85)'; c.fillRect(0, mid - 3 * S, W, 6 * S);
   tapeHud(c, { col: '#0a0b10', dot: '#0a0b10', a: .8, tc: 'TC 00:01:00:00' });
+  c.save(); c.font = fnt(24 * S, 400, MONO); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#0a0b10'; c.globalAlpha = .9;
+  c.fillText('makestudio.cn', W / 2, H - 62 * S); c.restore();   // 官网
   return { ...FLAT, ca: 0, vig: .7 };   // 整张不做色差（边缘会出彩边），错位只留在字上
 }
 
