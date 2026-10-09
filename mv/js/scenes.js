@@ -62,9 +62,9 @@ function POLY(t) {
   const s = { a: .85, amp: 1, lie: 0, spike: 0 };
   if (t < 1.2) s.a = (t - .6) / .6 * .85;
   if (t >= 41.88 && t < 44.26) { s.lie = 1; s.amp = 1.8; }                     // "你总说……"
-  if (t >= 62.9 && t < 73.6) s.a = .85 * clamp(1 - (t - 62.9) / .4) + .85 * clamp((t - 73.2) / .4);   // 回忆里没有测谎仪
+  // 回忆里没有测谎仪；大雨那段画面有上下黑边，测谎仪被压在下黑边里只会露出一点边（点题冲顶时还会戳出一截线），所以也不画，到余震再出来
+  if (t >= 62.9 && t < T_TV + .4) s.a = .85 * clamp(1 - (t - 62.9) / .4) + .85 * clamp((t - T_TV) / .4);
   if (t >= 80.0 && t < 80.4) s.amp = 0;                                          // 鼓停，针也停
-  if (t >= 80.4) s.spike = Math.exp(-(t - 80.4) * 2.2);                          // 点题：冲顶
   for (const w of WOAH_T) if (t >= w && t < w + .8) { s.spike = Math.max(s.spike, .8 * Math.exp(-(t - w) * 2.5)); s.lie = .6; }   // woah：针冲上去写字
   if (t >= 88.38 && t < 95.8) { s.lie = .6; s.amp = 1.4; }
   if (t >= 95.8) s.amp = clamp(1 - (t - 95.8) / 8);
