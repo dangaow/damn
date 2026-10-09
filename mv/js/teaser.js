@@ -8,7 +8,8 @@
 // ============================================================================
 const T_DUR = 15;
 const T_WRITE = [1.55, 4.5];       // 手指在雾上写 23:47
-const T_PHONE = [5.1, 8.7];        // 玻璃后面手机亮起
+const T_PHONE = [5.1, 7.2];        // 玻璃后面手机亮起
+const T_CAR = [7.0, 9.7];          // 一辆车的车灯从玻璃后面横扫过去
 const T_PUSH = 9.0;                // 镜头慢慢推近、雨变密
 const T_HUANG = 10.10;             // 「谎」：对焦清楚
 const T_BLUR = 10.95;              // 雾重新盖回来
@@ -58,8 +59,20 @@ function drawBG(t, push, dim) {
     rg.addColorStop(0, `rgba(${b.col},${a})`); rg.addColorStop(.62, `rgba(${b.col},${a * .7})`); rg.addColorStop(1, `rgba(${b.col},0)`);
     c.fillStyle = rg; c.beginPath(); c.arc(x, y, R, 0, 7); c.fill();
   });
+  // 车灯：一对暖白的灯从右往左扫过去，前面一大片光晕
+  const ck = (t - T_CAR[0]) / (T_CAR[1] - T_CAR[0]);
+  if (ck > 0 && ck < 1) {
+    const x = lerp(W * 1.35, -W * .35, ease(ck)), y = H * .63, a = Math.sin(Math.PI * ck);
+    const wash = c.createRadialGradient(x, y, 0, x, y, 620); wash.addColorStop(0, `rgba(255,232,200,${.32 * a})`); wash.addColorStop(1, 'rgba(255,232,200,0)');
+    c.fillStyle = wash; c.fillRect(x - 620, y - 620, 1240, 1240);
+    [-115, 115].forEach(dx => {
+      const g2 = c.createRadialGradient(x + dx, y, 0, x + dx, y, 150); g2.addColorStop(0, `rgba(255,250,240,${.95 * a})`); g2.addColorStop(.25, `rgba(255,236,205,${.6 * a})`); g2.addColorStop(1, 'rgba(255,220,180,0)');
+      c.fillStyle = g2; c.beginPath(); c.arc(x + dx, y, 150, 0, 7); c.fill();
+    });
+  }
   c.restore(); c.globalCompositeOperation = 'source-over';
 }
+const carAt = t => { const ck = (t - T_CAR[0]) / (T_CAR[1] - T_CAR[0]); return ck > 0 && ck < 1 ? { x: lerp(W * 1.35, -W * .35, ease(ck)), y: H * .63, a: Math.sin(Math.PI * ck) } : null; };
 
 // ---------------------------------------------------------------- 手指在雾上写「23:47」
 // 字形是手写的几笔（单位格：宽 1，高 1.6），一个字一个字连着写，笔画之间稍微停一下
@@ -120,7 +133,7 @@ function drawDrop(c, x, y, R, a) {
 // ---------------------------------------------------------------- 很淡的歌词碎片（雾后面）
 const FRAGS = [
   { s: '我的心像大雨落下', t0: 1.9, t1: 4.9, x: .5, y: .62, size: 62 },
-  { s: '有真有假', t0: 6.0, t1: 8.7, x: .3, y: .24, size: 84 },
+  { s: '有真有假', t0: 6.0, t1: 8.6, x: .3, y: .24, size: 84 },
   { s: '别再想着', t0: 8.9, t1: 10.05, x: .64, y: .74, size: 72 },
 ];
 
@@ -145,13 +158,15 @@ function drawLayer(t) {
     if (pk > 0 && t < T_PHONE[1] + .4) {
       const a = clamp(pk / .15) * (pk < .3 ? (frameNo(t) % 3 ? 1 : .55) : 1) * clamp((T_PHONE[1] + .35 - t) / .35);
       phx.setTransform(1, 0, 0, 1, 0, 0); phx.clearRect(0, 0, 520, 860);
-      const sg = phx.createLinearGradient(0, 80, 0, 780); sg.addColorStop(0, '#7d97ff'); sg.addColorStop(1, '#2a3c8c');
-      phx.fillStyle = sg; phx.beginPath(); phx.roundRect(110, 80, 300, 640, 40); phx.fill();
-      phx.fillStyle = 'rgba(235,240,255,.9)'; phx.fillRect(170, 200, 180, 46);
+      phx.fillStyle = '#0c0f1a'; phx.beginPath(); phx.roundRect(140, 90, 240, 500, 44); phx.fill();          // 机身
+      const sg = phx.createLinearGradient(0, 104, 0, 576); sg.addColorStop(0, '#9fb3ff'); sg.addColorStop(.6, '#5a72d8'); sg.addColorStop(1, '#2b3a86');
+      phx.fillStyle = sg; phx.beginPath(); phx.roundRect(152, 102, 216, 476, 34); phx.fill();                // 亮屏
+      phx.fillStyle = '#0c0f1a'; phx.beginPath(); phx.roundRect(232, 112, 56, 14, 7); phx.fill();             // 刘海
+      phx.fillStyle = 'rgba(240,244,255,.95)'; phx.fillRect(205, 180, 110, 34);                               // 锁屏时间
       const nk = easeOut((pk - .45) / .25);
-      if (nk > 0) { phx.globalAlpha = nk; phx.fillStyle = '#f4f6ff'; phx.beginPath(); phx.roundRect(135, 360 - (1 - nk) * 30, 250, 92, 18); phx.fill(); phx.globalAlpha = 1; }
-      c.save(); c.globalAlpha = a * .7; c.globalCompositeOperation = 'lighter'; c.filter = 'blur(34px)';
-      c.drawImage(PH, W * .62 - 260, H * .66 - 430); c.restore();
+      if (nk > 0) { phx.globalAlpha = nk; phx.fillStyle = '#f4f6ff'; phx.beginPath(); phx.roundRect(166, 300 - (1 - nk) * 24, 188, 64, 14); phx.fill(); phx.globalAlpha = 1; }
+      c.save(); c.globalAlpha = a * .8; c.filter = 'blur(16px)'; c.drawImage(PH, W * .64 - 260, H * .6 - 430); c.restore();   // 手机本身（糊）
+      c.save(); c.globalAlpha = a * .5; c.globalCompositeOperation = 'lighter'; c.filter = 'blur(60px)'; c.drawImage(PH, W * .64 - 260, H * .6 - 430); c.restore();   // 屏幕照出来的光
     }
     // 歌词碎片：很淡、发虚、慢慢往上飘
     FRAGS.forEach(f => {
@@ -191,6 +206,11 @@ function drawLayer(t) {
   f.globalAlpha = fogA * .55; f.drawImage(FOGTEX, 0, 0); f.globalAlpha = 1;
   f.globalCompositeOperation = 'destination-out'; f.drawImage(MASK, 0, 0); f.globalCompositeOperation = 'source-over';
   c.drawImage(FOG, 0, 0);
+  const car = !card && carAt(v);
+  if (car) {                                                                      // 车灯照在起雾的玻璃上，雾被照亮一大片
+    const g = c.createRadialGradient(car.x, car.y, 0, car.x, car.y, 700); g.addColorStop(0, `rgba(255,228,196,${.2 * car.a})`); g.addColorStop(1, 'rgba(255,228,196,0)');
+    c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = g; c.fillRect(0, 0, W, H); c.restore();
+  }
 
   // 玻璃最前面的小水珠（推近时更密）
   const beadN = card ? 90 : Math.round(lerp(70, 150, ease((v - T_PUSH) / 2.6)));
@@ -244,7 +264,7 @@ function drawLayer(t) {
   const fx = { zoom: 1 + .015 * focus * Math.exp(-(t - T_HUANG) * 5), rot: Math.sin(t * .13) * .003, barrel: .03, shift: [Math.sin(t * .21) * .002, Math.cos(t * .17) * .002], sq: [1, 1],
     ca: 1.2 + focus * 1.5, split: 0, glitch: 0, gseed: frameNo(t), wave: 0, tear: 0, invert: 0, xerox: 0,
     grade: 'cold', gradeMix: .45, bloom: .5 + focus * .3, bloomThr: .5, flash: t >= T_HUANG && t < T_HUANG + 2 / 30 ? .32 : 0, flashCol: '#ffffff',
-    dark: t < 1.4 ? 1 - ease(t / 1.4) : t < T_CARD ? (t > T_STOP[0] ? .92 * ease((t - T_STOP[0]) / (T_STOP[1] - T_STOP[0])) : 0) : ease((t - T_FADE) / (T_DUR - .05 - T_FADE)),
+    dark: t < .7 ? 1 - ease(t / .7) : t < T_CARD ? (t > T_STOP[0] ? .92 * ease((t - T_STOP[0]) / (T_STOP[1] - T_STOP[0])) : 0) : ease((t - T_FADE) / (T_DUR - .05 - T_FADE)),
     grain: .2, scan: .1, vig: 1.05, lb: 0 };
   // 磁带卡住时：一条跟踪噪声带从下往上扫过
   if (t > T_STOP[0] && t < T_STOP[1]) {
