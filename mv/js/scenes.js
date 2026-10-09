@@ -300,29 +300,59 @@ function vcols(c, t, i) {
     });
   }
 }
-// 手机锁屏亮了一下（"我试着不去等待"）：在画面深处、虚焦，黑暗里只看得到屏幕的光和被照亮的机身边缘；
-// 屏幕慢慢亮起 → 弹出"你"的消息 → 自动变暗 → 熄灭
-const PH_CV = mk(300, 460), PH_T = 23.14, PH_X = 1400, PH_Y = 555;
+// 手机（"我试着不去猜"→"我和你最后决赛"）：一直放在画面深处、虚焦。屏幕上是一段聊天，消息一条条弹出来，越吵越快；
+// 每条气泡都被动态马赛克盖住，看不清写了什么。新消息进来时屏幕亮一下，对方发来的还会震一下
+const PH_CV = mk(360, 560), PH_ON = 22.2, PH_X = 1400, PH_Y = 555;
+const PH_MSG = [22.70, 23.351, 24.309, 25.266, 26.224, 26.862, 27.341, 28.458, 29.256, 29.894, 30.373, 30.692, 31.33, 31.649, 31.968]
+  .map((t, i) => { const r = rand(70 + i), rows = r() < .45 ? 2 : 1;
+    return { t, me: 'LLRLRRLRLRLRRLR'[i] === 'R', rows, fr: rows > 1 ? .8 + r() * .2 : .3 + r() * .6, last: .3 + r() * .5, h: 18 + rows * 12, seed: 300 + i * 17 }; });
+const PH_INK = { L: ['#c4cce6', '#8b95b6', '#4d5778', '#1f2639'], R: ['#4f6fe8', '#7891ff', '#aebdff', '#e4eaff'] };
+function phMosaic(p, x, y, w, m, t) {                                                // 动态马赛克：两格一个"字"，每两帧重新取样一次
+  const s = 6, f = frameNo(t) >> 1, ink = PH_INK[m.me ? 'R' : 'L'];
+  for (let r = 0; r < m.rows; r++) {
+    const rw = r === m.rows - 1 && m.rows > 1 ? w * m.last : w;
+    for (let yy = 0; yy < 12; yy += s) for (let xx = 0; xx < rw; xx += s) {
+      const g = hash(m.seed * 59 + r * 13 + (xx / (s * 2) | 0), 3), v = lerp(g, hash(m.seed * 1013 + r * 197 + xx / s * 31 + yy / s * 7 + f * 131, 6), .6);
+      p.fillStyle = ink[Math.min(3, v * 4 | 0)]; p.fillRect(x + xx, y + r * 12 + yy, Math.min(s, rw - xx), s);
+    }
+  }
+}
 function phone(c, t) {
-  const ph = t - PH_T; if (ph < 0 || ph > 1.55) return;
-  const on = easeOut(ph / .22), off = 1 - ease((ph - 1.2) / .32), a = on * off * (1 - .45 * ease((ph - .9) / .15));
-  if (a <= .002) return;
-  const g = c.createRadialGradient(PH_X, PH_Y, 0, PH_X, PH_Y, 430);                // 屏幕的光照到雾里
-  g.addColorStop(0, `rgba(150,175,255,${.16 * a})`); g.addColorStop(1, 'rgba(150,175,255,0)');
-  c.fillStyle = g; c.fillRect(PH_X - 430, PH_Y - 430, 860, 860);
-  const p = PH_CV.getContext('2d'), cx = 150, cy = 230, w = 150, h = 290;
-  p.setTransform(1, 0, 0, 1, 0, 0); p.clearRect(0, 0, 300, 460);
-  p.globalAlpha = .85 * clamp(on * off * 1.3);                                      // 机身：几乎看不见，只有被屏幕照亮的一圈边
-  p.fillStyle = '#04060e'; p.beginPath(); p.roundRect(cx - w / 2 - 8, cy - h / 2 - 8, w + 16, h + 16, 24); p.fill();
-  p.globalAlpha = a; p.strokeStyle = 'rgba(150,175,255,.35)'; p.lineWidth = 1.5; p.stroke();
-  const sg = p.createLinearGradient(0, cy - h / 2, 0, cy + h / 2); sg.addColorStop(0, '#2c3d78'); sg.addColorStop(1, '#0e1530');
-  p.fillStyle = sg; p.beginPath(); p.roundRect(cx - w / 2, cy - h / 2, w, h, 18); p.fill();
-  text(p, '23:47', cx, cy - h * .28, 36, { w: 400, fam: MONO, fill: 'rgba(235,240,255,.95)' });
-  const nk = easeOut((ph - .35) / .25);
-  if (nk > 0) { const ny = cy + 10 + (1 - nk) * 18; p.globalAlpha = a * nk;
-    p.fillStyle = 'rgba(225,232,255,.72)'; p.beginPath(); p.roundRect(cx - 64, ny - 24, 128, 48, 11); p.fill();
-    text(p, '你', cx - 50, ny, 18, { align: 'left', fill: '#111' }); text(p, '新消息', cx - 26, ny, 15, { w: 400, align: 'left', fill: '#444' }); }
-  c.save(); c.translate(PH_X, PH_Y); c.rotate(-.06); c.filter = 'blur(3.4px)'; c.globalAlpha = .82; c.drawImage(PH_CV, -cx, -cy); c.restore();
+  const on = easeOut((t - PH_ON) / .5); if (on <= 0) return;
+  let li = -1; for (let j = 0; j < PH_MSG.length; j++) if (t >= PH_MSG[j].t) li = j;
+  const since = li < 0 ? 9 : t - PH_MSG[li].t, pulse = Math.exp(-since * 2.6), a = on * (.82 + .18 * pulse);
+  const buzz = li >= 0 && !PH_MSG[li].me ? Math.exp(-since * 9) * 5 : 0, dx = (hash(frameNo(t), 41) - .5) * 2 * buzz, dy = (hash(frameNo(t), 42) - .5) * buzz;
+  const g = c.createRadialGradient(PH_X, PH_Y, 0, PH_X, PH_Y, 440);                // 屏幕的光照到雾里
+  g.addColorStop(0, `rgba(150,175,255,${(.11 + .09 * pulse) * on})`); g.addColorStop(1, 'rgba(150,175,255,0)');
+  c.fillStyle = g; c.fillRect(PH_X - 440, PH_Y - 440, 880, 880);
+  const p = PH_CV.getContext('2d'), cx = 180, cy = 280, w = 184, h = 360, top = cy - h / 2, bot = cy + h / 2, L = cx - w / 2, R = cx + w / 2;
+  p.setTransform(1, 0, 0, 1, 0, 0); p.clearRect(0, 0, 360, 560); p.globalAlpha = 1;
+  p.fillStyle = '#04060e'; p.beginPath(); p.roundRect(L - 8, top - 8, w + 16, h + 16, 26); p.fill();   // 机身：几乎看不见，只有被屏幕照亮的一圈边
+  p.strokeStyle = `rgba(150,175,255,${.3 * a})`; p.lineWidth = 1.5; p.stroke();
+  p.save(); p.beginPath(); p.roundRect(L, top, w, h, 20); p.clip();
+  p.globalAlpha = a;
+  const sg = p.createLinearGradient(0, top, 0, bot); sg.addColorStop(0, '#1c2752'); sg.addColorStop(1, '#0b1128');
+  p.fillStyle = sg; p.fillRect(L, top, w, h);
+  text(p, '23:47', cx, top + 13, 11, { w: 400, fam: MONO, fill: 'rgba(225,232,255,.8)' });   // 状态栏 + 对方的名字
+  p.fillStyle = '#8fa3d8'; p.beginPath(); p.arc(cx, top + 34, 8, 0, 7); p.fill();
+  text(p, '你', cx, top + 54, 12, { fill: 'rgba(235,240,255,.9)' });
+  p.fillStyle = 'rgba(150,175,255,.18)'; p.fillRect(L, top + 66, w, 1);
+  p.strokeStyle = 'rgba(150,175,255,.3)'; p.lineWidth = 1; p.beginPath(); p.roundRect(L + 10, bot - 32, w - 20, 22, 11); p.stroke();   // 输入框
+  p.save(); p.beginPath(); p.rect(L, top + 67, w, h - 67 - 38); p.clip();
+  let y = bot - 46;                                                                 // 新消息在最下面，把旧的往上推
+  for (let j = li; j >= 0 && y > top + 40; j--) {
+    const m = PH_MSG[j], k = easeOut((t - m.t) / .26), bw = 18 + (w * .7 - 18) * m.fr, x = m.me ? R - 10 - bw : L + 10;
+    p.save(); p.globalAlpha = a * clamp(k * 1.6);
+    p.translate(m.me ? x + bw : x, y); p.scale(.82 + .18 * k, .82 + .18 * k); p.translate(m.me ? -bw : 0, -m.h);
+    p.fillStyle = m.me ? '#3d5ad8' : '#d3daf0'; p.beginPath(); p.roundRect(0, 0, bw, m.h, 11); p.fill();
+    phMosaic(p, 9, 9, bw - 18, m, t);
+    p.restore();
+    y -= (m.h + 7) * k;
+  }
+  p.restore();
+  if (pulse > .01) { p.fillStyle = `rgba(200,215,255,${.07 * pulse})`; p.fillRect(L, top, w, h); }
+  p.restore();
+  c.save(); c.translate(PH_X + dx, PH_Y + dy); c.rotate(-.06); c.filter = 'blur(2.2px)'; c.globalAlpha = .85 * on; c.drawImage(PH_CV, -cx, -cy); c.restore();
 }
 // 玻璃上的雨滴（前景）：每句开头先对焦在玻璃上（雨滴清楚、字还虚），然后焦点拉到字上（雨滴虚掉）
 const GLASS = mk();
