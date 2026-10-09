@@ -140,110 +140,143 @@ scene({ name: '融化', t0: T_MELT, t1: D.notes808.find(n => n.t > T_UP).t,
   },
 });
 
-// 银色的心：前奏后半段不再出现字，换成一颗银色线框的 3D 心（这段关系）。
-// 底鼓 3-3-2 推 / 转 / 冻；14.10 808 滑音时从中间裂开、往下垮，之后一直带着裂痕；最后被踩镲复制成残影，收成一个点。
-const T_STACK = barT(7);
-const GLIDE1 = D.notes808.find(n => n.glide && n.t < 20);
-const T_CRT1 = D.lyrics[0].t - .24;
-const HEART = (() => {
-  const P = (u, v) => { const s = Math.sqrt(1 - v * v);
-    return [16 * Math.pow(Math.sin(u), 3) * s, -(13 * Math.cos(u) - 5 * Math.cos(2 * u) - 2 * Math.cos(3 * u) - Math.cos(4 * u)) * s + 2.5, v * 7]; };
-  const lines = [], NU = 72, NV = 9;
-  for (let j = 0; j < NV; j++) {                                                    // 横截面：一圈圈心形
-    const v = -.92 + 1.84 * j / (NV - 1), ring = [];
-    for (let i = 0; i <= NU; i++) ring.push(P(i / NU * 6.2832, v));
-    lines.push(ring);
-  }
-  for (let i = 0; i < 12; i++) {                                                     // 经线
-    const u = i / 12 * 6.2832 + .13, mer = [];
-    for (let j = 0; j <= 16; j++) mer.push(P(u, -.96 + 1.92 * j / 16));
-    lines.push(mer);
-  }
-  return lines;
+// 意识流：前奏后半段不出现字。脑子里乱成一团：一堆物件（手机、钟、月亮、眼睛、镜子、戒指、钥匙、门、打火机、烟、面具、小丑牌、伞）
+// 大的大、小的小、倒着的、翻着的、叠在一起乱飞，有的一闪一闪；镜头也是乱的（甩、翻滚、急推急拉、倒过来、手持乱晃），
+// 每次切镜换一个不同的背景（蓝隧道、雪花、红色放射线、纯红、网点、纯白、烟、夜雨……）。
+// 底鼓「猛推」「硬切」= 切到下一团（卡帧的那一下停住 3 帧）；踩镲 = 闪一下（反色 / 白闪 / 黑一帧）。
+// 14.10 那次 808 往下滑：镜子裂开，所有东西往下掉。第 6 小节东西越来越多；静音之后时间倒流（东西往回飞、雨往天上飞、◀◀）。
+// 最后一小节每个踩镲切一次，最后所有东西被吸进画面中心 → 白点 → TAPE 01 → CRT 关机（这个点变成雨夜的第一滴雨）。
+const T_THINK = D.notes808.find(n => n.t > T_UP).t;
+const T_STACK = barT(7), T_MORE = barT(6);
+const T_CRT1 = D.lyrics[0].t - .24, T_SUCK = T_CRT1 - .62;
+const GLIDE1 = D.notes808.find(n => n.glide && n.t > T_THINK && n.t < T_STACK);
+const REV = (() => { const g = D.gaps.find(g => g[0] > T_MORE && g[1] < T_STACK); return g ? [g[1], T_STACK] : [T_STACK, T_STACK]; })();
+const PALS = [
+  { bg: { mode: 'tunnel', a: '#020309', b: '#2c3f96', c: '#0d1638', amt: .95, speed: 2.6 } },
+  { bg: { mode: 'static', a: '#000000', amt: .4 } },
+  { bg: { mode: 'rays', a: '#0d0003', b: '#b00c22', c: '#ff5a6e', amt: 1, speed: 5 }, acc: '#ffffff' },
+  { bg: { mode: 'solid', a: '#e0112b' }, ink: '#05060a', acc: '#ffffff', glow: null },
+  { bg: { mode: 'halftone', a: '#05060a', b: '#8d99b8', amt: 1, speed: 4 } },
+  { bg: { mode: 'solid', a: '#e9edf5' }, ink: '#05060a', acc: '#e0112b', glow: null },
+  { bg: { mode: 'smoke', a: '#020309', b: '#1d2f78', c: '#8aa0ff', amt: 1, speed: 4 } },
+  { bg: { mode: 'tunnel', a: '#0a0002', b: '#9a0c22', c: '#24000a', amt: 1, speed: 4 }, ink: '#ffe3e7' },
+  { bg: { mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: 1, speed: 4 } },
+];
+const PAL_GLIDE = { bg: { mode: 'rays', a: '#120004', b: '#e0112b', c: '#ff8090', amt: 1, speed: -3 }, acc: '#ffffff' };
+const MOVES = ['whip', 'roll', 'crash', 'spin', 'shake', 'upside', 'push', 'pull', 'whipV'];
+// 每一团（一个镜头）：从哪一刻开始、用哪个背景、什么运镜、哪些物件
+const MESS = (() => {
+  const g = GLIDE1 ? GLIDE1.t : -1, ts = [[T_THINK, 'start']];
+  D.kicks.forEach((k, i) => { if (k > T_THINK + .05 && k < T_STACK - .05 && JERK[i % 3] !== 'freeze' && Math.abs(k - g) > .05) ts.push([k, 'kick']); });
+  if (g > 0) ts.push([g, 'glide']);
+  if (REV[0] < REV[1]) ts.push([REV[0], 'kick']);
+  D.hats.forEach(h => { if (h >= T_STACK - .02 && h < T_SUCK) ts.push([h, 'hat']); });
+  ts.sort((a, b) => a[0] - b[0]);
+  const out = []; let lastPal = -1;
+  ts.forEach(([t, kind]) => { if (out.length && t - out[out.length - 1].t < .06) return;
+    const i = out.length, r = rand(i * 131 + 7);
+    let pal = Math.floor(r() * PALS.length); if (pal === lastPal) pal = (pal + 1 + Math.floor(r() * 3)) % PALS.length; lastPal = pal;
+    const many = t >= T_MORE, rush = t >= T_STACK - .02, objs = [];
+    const pick = () => OBJ_NAMES[Math.floor(r() * OBJ_NAMES.length)];
+    const add = (o) => objs.push({ r: (r() - .5) * 2.4, spin: (r() - .5) * (rush ? 6 : 3), vx: (r() - .5) * 500, vy: (r() - .5) * 350,
+      flip: r() < .3 ? 2 + r() * 6 : 0, upside: r() < .25, far: false, flick: r() < .3, echo: r() < .3, seed: Math.floor(r() * 999), ...o });
+    if (kind !== 'glide' && r() < .6) add({ name: pick(), x: r() < .5 ? W * (.05 + r() * .2) : W * (.75 + r() * .2), y: H * (.2 + r() * .6), s: 2.6 + r() * 1.6,
+      far: true, flick: false, echo: false, vx: (r() - .5) * 120, vy: (r() - .5) * 80, spin: (r() - .5) * .6 });   // 背后一个巨大的、糊掉的
+    add({ name: kind === 'glide' ? 'mirror' : pick(), x: W * (.3 + r() * .4), y: H * (.32 + r() * .36), s: kind === 'glide' ? 1.3 : 1.1 + r() * 1.1,
+      vx: (r() - .5) * 200, vy: (r() - .5) * 140, spin: kind === 'glide' ? 0 : (r() - .5) * 1.5, r: kind === 'glide' ? 0 : (r() - .5) * 1.4, flick: false, upside: kind !== 'glide' && r() < .25 });
+    const sw = pick(), nsw = rush ? 6 + Math.floor(r() * 5) : many ? 8 + Math.floor(r() * 6) : 4 + Math.floor(r() * 4);   // 一群一样的小东西乱飞
+    for (let j = 0; j < nsw; j++) add({ name: sw, x: W * (.04 + r() * .92), y: H * (.08 + r() * .84), s: .1 + r() * .22, spin: (r() - .5) * 8, vx: (r() - .5) * 1000, vy: (r() - .5) * 600, echo: r() < .5 });
+    const nmid = many || rush ? 3 + Math.floor(r() * 3) : 2 + Math.floor(r() * 3);
+    for (let j = 0; j < nmid; j++) add({ name: pick(), x: W * (.08 + r() * .84), y: H * (.12 + r() * .76), s: .32 + r() * .55, far: r() < .3 });
+    out.push({ t, kind, i, pal: kind === 'glide' ? PAL_GLIDE : PALS[pal], move: kind === 'start' ? 'rise' : MOVES[Math.floor(r() * MOVES.length)],
+      dir: r() < .5 ? -1 : 1, split: kind !== 'glide' && PALS[pal].glow !== null && r() < .2 ? Math.floor(r() * 3) : -1, objs });
+  });
+  return out;
 })();
-// 画一颗心：cx, cy 屏幕中心；s 大小；a 绕 Y 轴转角；crack 0..1 裂开程度；droop 往下垮的像素
-function heart(c, cx, cy, s, a, o = {}) {
-  const crack = o.crack ?? 0, droop = o.droop ?? 0, tilt = o.tilt ?? .18, f = 1100, ca = Math.cos(a), sa = Math.sin(a), ct = Math.cos(tilt), st = Math.sin(tilt);
-  const proj = p => {
-    const side = p[0] < 0 ? -1 : 1;
-    const x0 = p[0] + side * crack * 2.2, y0 = p[1] + crack * (side < 0 ? 1.2 : 2.2);
-    let x = x0 * ca + p[2] * sa, z = -x0 * sa + p[2] * ca, y = y0 * ct - z * st; z = y0 * st + z * ct;
-    const k = f / (f + z * s);
-    return [cx + x * s * k, cy + y * s * k + droop * (side < 0 ? .7 : 1), z, side];
-  };
-  c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
-  for (const line of HEART) {
-    const q = line.map(proj);
-    for (let i = 1; i < q.length; i++) {
-      if (crack > .02 && q[i][3] !== q[i - 1][3]) continue;                          // 裂开后，跨过中线的线段断掉
-      const depth = clamp(.5 - (q[i][2] + q[i - 1][2]) / 28);
-      c.strokeStyle = o.col ?? `rgba(${lerp(120, 245, depth) | 0},${lerp(130, 248, depth) | 0},${lerp(150, 255, depth) | 0},${(o.a ?? 1) * lerp(.25, 1, depth)})`;
-      c.lineWidth = (o.lw ?? 2.8) * lerp(.6, 1.2, depth);
-      c.beginPath(); c.moveTo(q[i - 1][0], q[i - 1][1]); c.lineTo(q[i][0], q[i][1]); c.stroke();
-    }
+function messAt(t) { const i = Math.max(0, lastAt(MESS, t, m => m.t)); return MESS[i]; }
+// 混乱的运镜：返回这一刻物件层的位移 / 旋转 / 缩放
+function messCam(m, k, t) {
+  const d = m.dir, e = (dur) => 1 - easeOut(clamp(k / dur));
+  switch (m.move) {
+    case 'rise': return { y: H * 1.1 * e(.22), r: 0, s: 1 };
+    case 'whip': return { x: d * W * .95 * e(.16) - d * 80 * k, r: d * .04, s: 1.05 };
+    case 'whipV': return { y: d * H * .9 * e(.16) - d * 60 * k, r: -d * .06, s: 1.05 };
+    case 'roll': return { r: d * (.25 + k * .8), s: 1.12 };
+    case 'crash': return { s: lerp(2.8, 1, 1 - e(.2)) + k * .06, r: d * .05 };
+    case 'spin': return { r: d * Math.PI * e(.3), s: 1 + .4 * e(.3) };
+    case 'shake': { const f = frameNo(t); return { x: (hash(f, 71) - .5) * 70, y: (hash(f, 72) - .5) * 50, r: (hash(f, 73) - .5) * .09, s: 1.08 }; }
+    case 'upside': return { r: Math.PI + d * k * .2, s: 1.05 };
+    case 'push': return { s: 1 + k * .5, r: d * k * .1 };
+    case 'pull': return { s: 1.7 - Math.min(k, 1.2) * .55, r: -d * k * .06 };
   }
-  if (crack > .02) {                                                                // 中间那道红色裂痕
-    const r = rand(17), top = proj([0, -5, 0]), bot = proj([0, 17, 0]);
-    c.strokeStyle = `rgba(230,20,45,${(o.a ?? 1) * (.6 + .4 * hash(frameNo(o.t ?? 0), 5))})`; c.lineWidth = 3;
-    c.beginPath(); c.moveTo(top[0], top[1]);
-    for (let i = 1; i < 12; i++) c.lineTo(lerp(top[0], bot[0], i / 12) + (r() - .5) * 26 * s / 14, lerp(top[1], bot[1], i / 12));
-    c.lineTo(bot[0], bot[1]); c.stroke();
+  return {};
+}
+function drawMess(c, t, te) {
+  const m = messAt(te); let k = te - m.t;
+  const rev = te >= REV[0] && te < REV[1], km = rev ? Math.max(0, 1.1 - (te - REV[0]) * 1.6) : k;   // 倒流：东西往回飞
+  const suck = clamp((te - T_SUCK) / .5), su = easeIn(suck);
+  const cm = messCam(m, k, t), pal = m.pal;
+  if (m.split >= 0) {                                                            // 背景也是乱的：一半换成别的颜色
+    c.save(); c.fillStyle = m.split === 1 ? '#000000' : '#e0112b'; c.beginPath();
+    if (m.split === 0) c.rect(0, 0, W / 2 + Math.sin(t * 3) * 40, H);
+    else if (m.split === 1) { c.moveTo(W * .3, 0); c.lineTo(W, 0); c.lineTo(W, H); c.lineTo(W * .7, H); }
+    else c.rect(0, H * .5, W, H * .5);
+    c.fill(); c.restore();
   }
+  c.save();
+  c.translate(W / 2 + (cm.x ?? 0), H / 2 + (cm.y ?? 0)); c.rotate((cm.r ?? 0) + su * 4); c.scale((cm.s ?? 1) * (1 - su * .2), (cm.s ?? 1) * (1 - su * .2)); c.translate(-W / 2, -H / 2);
+  const f = frameNo(t);
+  m.objs.forEach(o => {
+    if (o.flick && hash(f, o.seed) < .45) return;                               // 一闪一闪
+    const at = kk => {
+      let x = o.x + o.vx * kk, y = o.y + o.vy * kk + (m.kind === 'glide' ? 2600 * kk * kk * .5 * (o.name === 'mirror' ? .25 : 1) : 0);   // 808 往下滑：东西往下掉
+      x = lerp(x, W / 2, su); y = lerp(y, H / 2, su);
+      return { x, y, r: o.r + o.spin * kk, s: o.s * (1 - su), sx: o.flip ? Math.sign(Math.cos(kk * o.flip) || 1) * Math.max(.06, Math.abs(Math.cos(kk * o.flip))) : 1,
+        sy: (o.upside ? -1 : 1) * (m.kind === 'glide' ? 1 + Math.min(km, .5) * 1.4 : 1) };
+    };
+    const base = { ink: pal.ink, acc: pal.acc, glow: pal.glow, crack: o.name === 'mirror' && m.kind === 'glide' ? clamp(km / .22) : 0 };
+    if (o.far) { c.save(); c.filter = 'blur(5px)'; }
+    if (o.echo) for (let e = 3; e >= 1; e--) drawObj(c, o.name, t, km, { ...base, ...at(Math.max(0, km - e * .06)), a: (o.far ? .45 : 1) * .22 / e });
+    drawObj(c, o.name, t, km, { ...base, ...at(km), a: o.far ? .45 : 1 });
+    if (o.far) c.restore();
+  });
   c.restore();
+  return { m, k, cm, su };
 }
-// 心的姿态：底鼓猛推 = 放大（心跳），硬切 = 猛转 45°，卡帧 = 冻住
-function heartPose(t, t0) {
-  const te = frozen(t), j = jerk(te), n = cuts(te, t0);
-  const snap = j.act === 'cut' ? easeOut(j.since / .09) : 1;
-  const a = te * .55 + (n - 1 + snap) * Math.PI / 4;
-  const beat = t > barT(6) ? .26 : .16;
-  const pulse = j.act === 'punch' || t > barT(6) ? Math.exp(-j.since * 11) : 0;
-  const crack = GLIDE1 && te > GLIDE1.t ? easeOut((te - GLIDE1.t) / .25) : 0;
-  const droop = GLIDE1 && te > GLIDE1.t ? 240 * easeIn(clamp((te - GLIDE1.t) / .5)) * (1 - .75 * easeOut(clamp((te - GLIDE1.t - .5) / .8))) : 0;
-  return { te, a, s: 19 * (1 + beat * pulse), crack, droop, jit: M.hit('hat', t, 30) };
-}
-function heartGlow(c, cx, cy, k, a = 1) {                                           // 心里面一团暗红的光，跟着底鼓亮
-  const g = c.createRadialGradient(cx, cy, 0, cx, cy, 300);
-  g.addColorStop(0, `rgba(224,17,43,${(.18 + .35 * k) * a})`); g.addColorStop(1, 'rgba(224,17,43,0)');
-  c.fillStyle = g; c.fillRect(cx - 300, cy - 300, 600, 600);
-}
-scene({ name: '银色的心', t0: D.notes808.find(n => n.t > T_UP).t, t1: T_STACK,
-  weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
-  bg: t => ({ mode: 'tunnel', a: '#020309', b: '#2c3f96', c: '#0d1638', amt: .9, speed: 1 + M.low(t) * 1.4, pulse: M.hit('kick', t, 8) }),
-  draw(c, t, lt) {
-    if (M.gap(t)) return;
-    const p = heartPose(t, this.t0), drop = lt < .2 ? (1 - easeOut(lt / .2)) * -H * .8 : 0;   // 转场：接住"往上冲"，心从上面落下来
-    const cy = H / 2 + drop + p.droop;
-    heartGlow(c, W / 2, cy, M.hit('kick', t, 7));
-    heart(c, W / 2 + (hash(frameNo(t), 3) - .5) * 8 * p.jit, cy, p.s, p.a, { crack: p.crack, t });
-    if (GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .12) bars(c, 5, 77, '#e0112b', .5);                // 裂开那一下：红色扫描条
-  },
-  fx: t => ({ ...cam(frozen(t)), ca: 2 + M.hit('kick', t, 9) * 6, split: M.hit('hat', t, 25) * 2, bloom: .7, bloomThr: .5, grade: 'silver', gradeMix: .3,
-    glitch: GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .2 ? .5 : 0, gseed: frameNo(t), dark: M.gap(t) ? .95 : 0, hud: .7,
-    flash: GLIDE1 && t >= GLIDE1.t && t < GLIDE1.t + 2 / 30 ? .5 : 0, flashCol: '#e0112b' }),
+const messWeather = t => {
+  const te = frozen(t);
+  if (te >= REV[0] && te < REV[1]) return { rain: .13, col: '205,212,230', rt: REV[0] - (te - REV[0]) * 1.4 };   // 时间倒流：雨往天上飞
+  return { rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: te };
+};
+const messBG = t => {
+  const te = frozen(t), m = messAt(te), b = m.pal.bg, su = easeIn(clamp((te - T_SUCK) / .5));
+  return { ...b, amt: (b.amt ?? 1) * (1 - su), a: su > 0 ? '#000000' : b.a, pulse: M.hit('kick', t, 9) * .8 + M.hit('hat', t, 25) * .3 };
+};
+const messFX = (t, lt) => {
+  const te = frozen(t), m = messAt(te), k = te - m.t, h = M.last('hat', t), cm = messCam(m, k, t);
+  const hatFlash = h.since < 1 / 30 && Math.abs(h.t - m.t) > .03 && t < T_SUCK ? Math.floor(hash(h.i, 17) * 3) : -1;   // 踩镲：0 反色 1 白闪 2 黑一帧
+  const start = k < 1 / 30 && m.kind !== 'start';
+  return { ...cam(te), shift: [(cm.x ?? 0) / W * .04, -(cm.y ?? 0) / H * .04], ca: 2.5 + M.hit('kick', t, 9) * 6 + (start ? 6 : 0), split: M.hit('hat', t, 25) * 2,
+    bloom: .6, bloomThr: .55, grade: 'silver', gradeMix: .2, hud: .7, gseed: frameNo(t),
+    glitch: start ? .45 : GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .2 ? .5 : 0,
+    invert: hatFlash === 0 && m.pal.glow !== null ? 1 : 0, flash: hatFlash === 1 ? .55 : start ? .4 : lt < 2 / 30 && m.kind === 'start' ? .35 : 0,
+    flashCol: m.kind === 'glide' && start ? '#e0112b' : '#ffffff',
+    dark: M.gap(t) ? .95 : hatFlash === 2 || (hatFlash === 0 && m.pal.glow === null) ? .9 : 0, hudMode: te >= REV[0] && te < REV[1] ? '◀◀ REW' : '▶ PLAY' };
+};
+scene({ name: '念头', t0: T_THINK, t1: T_STACK,
+  weather: messWeather, bg: messBG,
+  draw(c, t) { if (!M.gap(t)) drawMess(c, t, frozen(t)); },
+  fx: messFX,
 });
-
-// 心跳残影：踩镲滚奏把心复制成好几个残影，频闪、反色；最后全部收成一个点 → TAPE 01 → CRT 关机（这个点变成雨夜的第一滴雨）
-scene({ name: '心跳残影', t0: T_STACK, t1: D.lyrics[0].t,
-  weather: t => ({ rain: M.gap(t) ? 0 : .13, col: '205,212,230', rt: frozen(t) }),
-  bg: t => ({ mode: 'tunnel', a: '#020206', b: '#3a2050', c: '#1a0a14', amt: .8, speed: 2.2, pulse: M.hit('hat', t, 12) }),
-  draw(c, t, lt) {
-    const p = heartPose(t, SCENES.find(s => s.name === '银色的心').t0), h = M.last('hat', t);
-    const shrink = 1 - easeIn((t - (T_CRT1 - .5)) / .5);
-    if (shrink <= 0) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 5, 0, 7); c.fill(); }
-    else {
-      for (let j = 5; j >= 1; j--) {                                                // 残影：最近几个踩镲各留一颗
-        const i = h.i - j; if (i < 0) continue;
-        const x = W * (.2 + hash(i, 1) * .6), y = H * (.25 + hash(i, 2) * .5), s = p.s * (.35 + hash(i, 3) * .5) * shrink;
-        heart(c, lerp(x, W / 2, 1 - shrink), lerp(y, H / 2, 1 - shrink), s, p.a + i * .7, { crack: 1, a: .25 + .35 / j, col: i % 2 ? 'rgba(224,17,43,.7)' : null, lw: 1.6, t });
-      }
-      heartGlow(c, W / 2, H / 2, M.hit('kick', t, 7), shrink);
-      heart(c, W / 2, H / 2, p.s * shrink, p.a, { crack: 1, t });
-    }
+// 念头乱窜：每个踩镲切一次；最后所有东西被吸进中心 → 白点 → TAPE 01 → CRT 关机
+scene({ name: '念头乱窜', t0: T_STACK, t1: D.lyrics[0].t,
+  weather: messWeather, bg: messBG,
+  draw(c, t) {
+    const { su } = drawMess(c, t, frozen(t));
+    if (su >= 1) { c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, H / 2, 6, 0, 7); c.fill(); }
     if (t > T_CRT1 - .55 && frameNo(t) % 3) pixel(c, 'TAPE 01', W / 2, H / 2 + 230, 110, { shadow: C.red });
   },
-  fx: t => { const h = M.last('hat', t); return { ca: 4, invert: h.i % 2 && h.since < .05 ? 1 : 0, flash: M.hit('snare', t, 20) * .5, glitch: .2, gseed: h.i,
-    bloom: .7, bloomThr: .5, grade: 'silver', gradeMix: .3, sq: crt((t - T_CRT1) / .24), hud: .7 }; },
+  fx: (t, lt) => ({ ...messFX(t, lt), ca: 4, sq: crt((t - T_CRT1) / .24) }),
 });
 
 // ================================================================ 2 · 雨夜（主歌一）
