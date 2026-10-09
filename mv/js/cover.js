@@ -1,9 +1,10 @@
 'use strict';
 // ============================================================================
-// 《谎话》封面（正方形）。沿用 MV / 预告的画面：雨夜、冷蓝、一点红、铬金属。
-//   a · 雾上的字：起雾的玻璃，有人用手指写了「谎话」，擦开的地方透出后面的夜色，水往下淌
-//   b · 铬金属：黑底上铬金属的「谎话」和倒影，底下一道红色测谎仪曲线在「谎」字下面猛跳
-//   c · 对质：糊掉的雨夜前面，几条聊天气泡，最后一条红色的被涂掉
+// 《谎话》封面（正方形）。
+//   第一轮：a 雾上的字（不要）/ b 铬金属 / c 对质
+//   第二轮（直接用 MV 里的版式，平面、硬边，不加发光）：
+//   d 片名卡：MV 片头的片名卡 + 录像带角标     e 红白横条：副歌二的红白两条大字
+//   f 三栏：副歌一的三栏竖排                   g 我：「都是我」那段，红网点 + 测谎仪格子上的大「我」
 // 尺寸以 1500 为基准（S = 边长 / 1500），正式版 ?s=3000。
 // ============================================================================
 const Q = new URLSearchParams(location.search), V = Q.get('v') || 'a';
@@ -193,18 +194,118 @@ function coverC(c) {
   return { grade: 'cold', gradeMix: .3, bloom: .45, bloomThr: .6, ca: 1, grain: .2, vig: 1.1 };
 }
 
+// ================================================================ 第二轮：MV 里的版式
+// 录像带角标（MV 的 HUD）：左上 ● REC TAPE 01，右上 谎话 / dangao_w，左下 ▶ PLAY，右下时间码
+function tapeHud(c, o = {}) {
+  const m = 64 * S, top = o.top ?? 62 * S, bot = o.bot ?? H - 62 * S, col = o.col ?? C.white;
+  c.save(); c.font = fnt(22 * S, 400, MONO); c.textBaseline = 'middle'; c.globalAlpha = o.a ?? .85; c.fillStyle = col;
+  c.textAlign = 'left';
+  c.save(); c.fillStyle = C.red; c.globalAlpha = 1; c.beginPath(); c.arc(m + 10 * S, top, 9 * S, 0, 7); c.fill(); c.restore();
+  c.fillText('REC', m + 30 * S, top); c.fillText('TAPE 01', m + 128 * S, top);
+  c.fillText('▶ PLAY', m, bot);
+  c.textAlign = 'right'; c.fillText('谎话 / dangao_w', W - m, top); c.fillText(o.tc ?? 'TC 00:00:06:00', W - m, bot);
+  c.restore();
+}
+// 套色没对准：先画两层错开的彩色，再画正色（MV 里的歌词就是这样）
+function misText(c, str, x, y, size, o = {}) {
+  c.save(); c.font = fnt(size, o.w ?? 900, o.fam ?? SANS); c.textAlign = o.align ?? 'center'; c.textBaseline = o.base ?? 'middle';
+  const d = (o.d ?? 6) * S;
+  if (o.ghost !== false) {
+    c.globalAlpha = o.ga ?? .75; c.fillStyle = o.g1 ?? 'rgba(255,40,70,1)'; c.fillText(str, x - d, y + d * .3);
+    c.fillStyle = o.g2 ?? 'rgba(60,170,255,1)'; c.fillText(str, x + d, y - d * .3); c.globalAlpha = 1;
+  }
+  c.fillStyle = o.fill ?? C.white; c.fillText(str, x, y);
+  c.restore();
+}
+function vMis(c, str, x, y, size, o = {}) { [...str].forEach((ch, k) => misText(c, ch, x, y + k * size * (o.lead ?? 1.02), size, { ...o, base: 'top' })); }
+// 网点：一格一个圆点，半径由 f(x, y) 决定（0..1）
+function halftone(c, cell, col, f) {
+  c.save(); c.fillStyle = col;
+  for (let y = cell / 2; y < H; y += cell) for (let x = cell / 2; x < W; x += cell) { const r = f(x / W, y / H) * cell * .5; if (r > .3) { c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); } }
+  c.restore();
+}
+const FLAT = { grade: 'none', gradeMix: 0, bloom: .12, bloomThr: .8, ca: 1.1, grain: .26, vig: .9, scan: .07 };
+
+// d · 片名卡：黑底，满屏空心大字「谎话」被画面切掉，中间细框里是正片名，录像带角标在上下黑边里
+function coverD(c) {
+  c.fillStyle = '#040406'; c.fillRect(0, 0, W, H);
+  const lb = 150 * S;
+  c.save(); c.font = fnt(1060 * S, 900); c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineWidth = 3 * S; c.strokeStyle = 'rgba(201,206,214,.16)'; c.strokeText('谎话', W * .47, H * .5); c.restore();
+  const fw = 820 * S, fh = 420 * S, fx = (W - fw) / 2, fy = H * .5 - fh / 2;
+  c.save(); c.fillStyle = '#040406'; c.fillRect(fx, fy, fw, fh); c.strokeStyle = 'rgba(242,241,238,.9)'; c.lineWidth = 3 * S; c.strokeRect(fx, fy, fw, fh); c.restore();
+  misText(c, '谎话', W / 2, H * .5 - 10 * S, 250 * S, { d: 5 });
+  c.save(); c.font = `${40 * S}px "${GOTH}"`; c.textAlign = 'right'; c.fillStyle = 'rgba(242,241,238,.85)'; c.fillText('dangao_w', fx + fw - 26 * S, fy + fh - 30 * S); c.restore();
+  c.fillStyle = '#000'; c.fillRect(0, 0, W, lb); c.fillRect(0, H - lb, W, lb);
+  tapeHud(c, { top: lb / 2, bot: H - lb / 2 });
+  return { ...FLAT };
+}
+
+// e · 红白横条：上面红底黑字、下面白底红字（副歌二），字大到被条边切掉
+function coverE(c) {
+  const mid = H * .54;
+  c.fillStyle = C.red; c.fillRect(0, 0, W, mid);
+  c.fillStyle = C.white; c.fillRect(0, mid, W, H - mid);
+  c.save(); c.beginPath(); c.rect(0, 0, W, mid); c.clip();
+  misText(c, '谎话', W * .5, mid - 300 * S, 700 * S, { fill: '#0a0b10', g1: 'rgba(255,214,0,1)', g2: 'rgba(255,255,255,1)', ga: .35, d: 9 });
+  c.restore();
+  c.save(); c.beginPath(); c.rect(0, mid, W, H - mid); c.clip();
+  misText(c, '就别再想着', 90 * S, mid + 150 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
+  misText(c, '再跟我说谎话', 90 * S, mid + 320 * S, 150 * S, { align: 'left', fill: C.red, g1: 'rgba(255,214,0,1)', g2: 'rgba(255,120,150,1)', ga: .45, d: 5 });
+  c.font = `${64 * S}px "${GOTH}"`; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; c.fillStyle = '#0a0b10'; c.fillText('dangao_w', W - 90 * S, H - 90 * S);
+  c.restore();
+  c.fillStyle = 'rgba(0,0,0,.85)'; c.fillRect(0, mid - 3 * S, W, 6 * S);
+  tapeHud(c, { col: '#0a0b10', a: .8, tc: 'TC 00:01:00:00' });
+  return { ...FLAT, ca: 1.4 };
+}
+
+// f · 三栏：黑 / 银 / 暗红三栏，竖排三句（副歌一）
+function coverF(c) {
+  const cw = W / 3, tones = [[C.black, C.white], [C.silver, C.black], ['#9a0718', C.black]], lines = ['不要这样就', '不要躲着我', '就别抱紧我'];
+  const size = 200 * S, top = [190, 300, 245];
+  lines.forEach((l, i) => {
+    c.fillStyle = tones[i][0]; c.fillRect(i * cw, 0, cw + 1, H);
+    vMis(c, l, i * cw + cw / 2, top[i] * S, size, { fill: tones[i][1], d: 4, ga: i === 0 ? .7 : .3 });
+  });
+  c.fillStyle = 'rgba(0,0,0,.9)'; c.fillRect(cw - 3 * S, 0, 6 * S, H); c.fillRect(2 * cw - 3 * S, 0, 6 * S, H);
+  c.save(); c.font = fnt(46 * S, 900); c.textAlign = 'left'; c.textBaseline = 'alphabetic'; c.fillStyle = C.white; c.fillText('谎话', 64 * S, H - 190 * S);
+  c.font = `${34 * S}px "${GOTH}"`; c.fillStyle = 'rgba(242,241,238,.8)'; c.fillText('dangao_w', 66 * S, H - 144 * S); c.restore();
+  tapeHud(c, { a: .75, tc: 'TC 00:00:38:19' });
+  return { ...FLAT };
+}
+
+// g · 我：暗红底、红网点、测谎仪的格子和曲线，一个巨大的「我」，左上三句歌词
+function coverG(c) {
+  c.fillStyle = '#12020a'; c.fillRect(0, 0, W, H);
+  halftone(c, 16 * S, 'rgba(224,17,43,.55)', (x, y) => clamp(.15 + .75 * Math.exp(-((x - .6) ** 2 + (y - .62) ** 2) * 3.2)));
+  c.save(); c.strokeStyle = 'rgba(224,17,43,.35)'; c.lineWidth = 1.5 * S;
+  for (let x = 0; x <= W; x += 75 * S) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke(); }
+  for (let y = 0; y <= H; y += 75 * S) { c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
+  const r = rand(4); c.strokeStyle = 'rgba(255,60,80,.8)'; c.lineWidth = 3 * S; c.beginPath();
+  for (let x = 0, y = H * .74; x <= W; x += 10 * S) { y += (r() - .5) * 26 * S + (H * .74 - y) * .08; x ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.stroke(); c.restore();
+  misText(c, '我', W * .6, H * .58, 1100 * S, { fill: C.red, g1: 'rgba(0,0,0,1)', g2: 'rgba(255,120,140,1)', ga: .5, d: 10 });
+  ['逃避的人是我', '不说话的也是我', '好像什么都是我'].forEach((l, i) => {
+    misText(c, l, 90 * S, 230 * S + i * 74 * S, 52 * S, { align: 'left', fill: i === 2 ? C.white : 'rgba(242,241,238,.55)', d: 3, ga: .5 });
+  });
+  c.save(); c.font = fnt(46 * S, 900); c.textAlign = 'left'; c.textBaseline = 'alphabetic'; c.fillStyle = C.white; c.fillText('谎话', 90 * S, H - 190 * S);
+  c.font = `${34 * S}px "${GOTH}"`; c.fillStyle = 'rgba(242,241,238,.8)'; c.fillText('dangao_w', 92 * S, H - 144 * S); c.restore();
+  tapeHud(c, { a: .75, tc: 'TC 00:00:52:00' });
+  return { ...FLAT, ca: 1.3 };
+}
+
 // ---------------------------------------------------------------- 渲染 + 导出
 const OUT = document.getElementById('cv'); OUT.width = W; OUT.height = H; const ox = OUT.getContext('2d');
 function render() {
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.filter = 'none';
   lx.clearRect(0, 0, W, H);
-  const base = ({ a: coverA, b: coverB, c: coverC }[V] || coverA)(lx);
+  const base = ({ a: coverA, b: coverB, c: coverC, d: coverD, e: coverE, f: coverF, g: coverG }[V] || coverD)(lx);
   const fx = { zoom: 1, rot: 0, barrel: 0, shift: [0, 0], sq: [1, 1], split: 0, glitch: 0, gseed: 1, wave: 0, tear: 0, invert: 0, xerox: 0,
     flash: 0, flashCol: '#ffffff', dark: 0, scan: 0, lb: 0, ...base };
   GLX.frame(LAY, 0, { mode: 'solid', a: '#000000' }, fx, 1, true);
   ox.setTransform(1, 0, 0, 1, 0, 0); ox.drawImage(GLX.present(), 0, 0);
 }
-const FONTS = [`900 20px "${SANS}"`, `400 20px "${SANS}"`, `20px "${GOTH}"`, `20px "${MONO}"`, `20px "Long Cang"`];
+const FONTS = [`900 20px "${SANS}"`, `400 20px "${SANS}"`, `20px "${GOTH}"`, `400 20px "${MONO}"`, `20px "Long Cang"`];
 const ready = Promise.all(FONTS.map(f => document.fonts.load(f, '谎话A'))).then(() => document.fonts.ready).then(() => { render(); return true; });
 window.__ready = () => ready;
 window.__png = () => OUT.toDataURL('image/png');
