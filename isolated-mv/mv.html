@@ -121,6 +121,10 @@ function revealText(c, s, t0, t1, T, x, y, o = {}) {
   c.restore();
   return { x0, w };
 }
+// two voices: dangao_w sings from 我试着再忘记你一次 to back to you, yuki; everything else is YuKIluv7
+const VOICES = [[0, 'YuKIluv7'], [56.48, 'dangao_w'], [90.40, 'YuKIluv7']];
+const isDangao = T => T >= 56.48 && T < 90.40;
+const TOBACCO = [1.05, .97, .84];                                     // his part looks like paper kept in a smoker's room
 function sub(i, T, o = {}) {
   const l = L[i], a = lineA(i, T, o.fi ?? .08, o.fo ?? .2) * (o.alpha ?? 1); if (a <= .002) return;
   const c = o.ctx || xx, size = o.size || 58, x = o.x ?? W / 2, y = o.y ?? 925;
@@ -293,7 +297,7 @@ void main(){
   float l = lum(sc) * .5 + (lum(texture(uS, suv + vec2(tx.x, 0.)).rgb) + lum(texture(uS, suv - vec2(tx.x, 0.)).rgb)
           + lum(texture(uS, suv + vec2(0., tx.y)).rgb) + lum(texture(uS, suv - vec2(0., tx.y)).rgb)) * .125;
   l = clamp(l * uLev.x + uLev.y, 0., 1.);
-  l = smoothstep(.06, .94, l);                                       // flat ink and clean paper, like the cover's solid blacks
+  l = smoothstep(.06, .94, l);                                       // flat ink and clean paper, solid blacks
   float er = 0.;                                                     // erosion sweeps left to right and leaves blank paper
   if (uErode > 0.) { float ex = vUv.x + (hash(floor(px / 16.)) - .5) * .05; er = smoothstep(ex, ex + .2, uErode * 1.25); l = mix(l, 1., er); }
   // halftone: a continuous 45-degree spot function, so highlights become dots and shadows become holes
@@ -469,6 +473,120 @@ function glassDrops(c, T, o = {}) {
   }
   c.restore();
 }
+// one street lamp alone in the dark: returns the cone of light as [head x, head y, ground y, half width at the ground]
+function lonelyLamp(c, T, o = {}) {
+  const hx = o.x ?? W / 2 - 46, hy = o.y ?? 100, gy = o.ground ?? 590, hw = o.spread ?? 400, px = hx - 170;
+  const fl = 1 - .04 * Math.max(0, vnoise(T * 6, 77));                  // the old bulb hums a little
+  c.save();
+  const pool = c.createRadialGradient(hx, gy, 0, hx, gy, hw * 1.25); pool.addColorStop(0, `rgba(255,255,255,${.55 * fl})`); pool.addColorStop(1, 'rgba(255,255,255,0)');
+  c.save(); c.translate(hx, gy); c.scale(1, .16); c.translate(-hx, -gy); c.fillStyle = pool; c.fillRect(hx - hw * 1.3, gy - hw * 1.3, hw * 2.6, hw * 2.6); c.restore();
+  const rf = c.createLinearGradient(0, gy, 0, gy + 260); rf.addColorStop(0, `rgba(255,255,255,${.2 * fl})`); rf.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = rf; c.fillRect(hx - 22, gy, 44, 260);                    // its smear on the wet ground
+  const cg = c.createLinearGradient(0, hy, 0, gy); cg.addColorStop(0, `rgba(255,255,255,${.4 * fl})`); cg.addColorStop(1, `rgba(255,255,255,${.12 * fl})`);
+  c.fillStyle = cg; c.beginPath(); c.moveTo(hx - 26, hy + 10); c.lineTo(hx + 26, hy + 10); c.lineTo(hx + hw, gy); c.lineTo(hx - hw, gy); c.closePath(); c.fill();
+  const hg = c.createRadialGradient(hx, hy + 8, 0, hx, hy + 8, 210); hg.addColorStop(0, `rgba(255,255,255,${.85 * fl})`); hg.addColorStop(.25, `rgba(255,255,255,${.26 * fl})`); hg.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = hg; c.fillRect(hx - 210, hy - 202, 420, 420);
+  inkLine(c, px, gy + 4, px, hy - 30, 9, 1, 13, '#2c2c2c');               // the pole, the arm, the shade
+  c.strokeStyle = '#2c2c2c'; c.lineWidth = 7; c.lineCap = 'round'; c.beginPath(); c.moveTo(px, hy - 26); c.quadraticCurveTo(px + 20, hy - 60, hx, hy - 24); c.stroke();
+  c.fillStyle = '#1c1c1c'; c.beginPath(); c.moveTo(hx - 34, hy + 4); c.lineTo(hx + 34, hy + 4); c.lineTo(hx + 12, hy - 26); c.lineTo(hx - 12, hy - 26); c.closePath(); c.fill();
+  c.fillStyle = `rgba(255,255,255,${fl})`; c.beginPath(); c.ellipse(hx, hy + 6, 22, 6, 0, 0, TAU); c.fill();
+  c.restore();
+  return [hx, hy, gy, hw];
+}
+const conePath = (c, [hx, hy, gy, hw]) => { c.beginPath(); c.moveTo(hx - 26, hy + 10); c.lineTo(hx + 26, hy + 10); c.lineTo(hx + hw, gy); c.lineTo(hx - hw, gy); c.closePath(); };
+// rain falling into a puddle on the road; the street lamp above is only there in the water, shaken by every drop
+function puddle(c, T, o = {}) {
+  c.fillStyle = '#0b0b0b'; c.fillRect(0, 0, W, H);
+  c.save(); c.globalAlpha = .5; c.globalCompositeOperation = 'lighter';           // wet asphalt glints
+  for (let i = 0; i < 260; i++) { const x = hash1(i * 3.7) * W, y = hash1(i * 9.1) * H, a = .05 + .12 * hash1(i * 1.3) * (.6 + .4 * Math.sin(T * 2 + i));
+    c.fillStyle = `rgba(255,255,255,${a})`; c.fillRect(x, y, 2 + 3 * hash1(i * 5.5), 2); }
+  c.restore();
+  const cx = W / 2, cy = H * .48, rx = 860, ry = 300;
+  const edge = (a) => 1 + .07 * Math.sin(a * 3 + 1) + .05 * Math.sin(a * 7 + 2);
+  const shape = () => { c.beginPath(); for (let k = 0; k <= 72; k++) { const a = k / 72 * TAU, e = edge(a); c.lineTo(cx + Math.cos(a) * rx * e, cy + Math.sin(a) * ry * e); } c.closePath(); };
+  c.save(); shape(); c.clip();
+  const sg = c.createLinearGradient(0, cy - ry, 0, cy + ry); sg.addColorStop(0, '#2e2e2e'); sg.addColorStop(1, '#151515'); c.fillStyle = sg; c.fillRect(0, 0, W, H);
+  const lx = W * .58, ly = cy - 40, shake = y => vnoise(y * .025 + T * 2.2, 5) * 16 + vnoise(y * .09 - T * 4, 9) * 6;
+  for (let y = cy - ry - 40; y < cy + ry + 40; y += 5) {                // the lamp's light stretched into a long trembling streak
+    const d = Math.abs(y - ly), x = lx + shake(y), a = .75 * Math.exp(-d / 150), hw = 16 + 50 * Math.exp(-d / 40);
+    const g = c.createLinearGradient(x - hw * 2, 0, x + hw * 2, 0); g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(.5, `rgba(255,255,255,${a})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.fillRect(x - hw * 2, y, hw * 4, 5);
+  }
+  for (let y = ly + 30; y < cy + ry + 40; y += 5) { c.fillStyle = 'rgba(0,0,0,.8)'; c.fillRect(lx - 190 + shake(y), y, 10, 5); }   // the pole, upside down
+  c.lineWidth = 2.6;
+  for (let i = 0; i < (o.n ?? 30); i++) {                                 // rings: every drop that lands
+    const per = 1 + 1.3 * hash1(i * 2.3), ph = hash1(i * 5.9) * per, age = (T + ph) % per, cyc = Math.floor((T + ph) / per);
+    const px = cx + (hash2(i, cyc) - .5) * rx * 1.5, py = cy + (hash2(i + 40, cyc) - .5) * ry * 1.4, r = 10 + age * 170, a = .8 * (1 - age / per) ** 1.4;
+    for (const [rr, aa] of [[r, a], [r * .6, a * .55]]) { c.strokeStyle = `rgba(240,240,240,${aa})`; c.beginPath(); c.ellipse(px, py, rr, rr * .3, 0, 0, TAU); c.stroke(); }
+  }
+  c.restore();
+  c.strokeStyle = 'rgba(0,0,0,.9)'; c.lineWidth = 10; shape(); c.stroke();
+  c.strokeStyle = 'rgba(190,190,190,.35)'; c.lineWidth = 2.5; shape(); c.stroke();
+}
+// cigarette smoke: thin strands rising from each source, curling on smooth noise, drawn at half size and softened once
+let SMK = null;
+function smoke(c, T, o = {}) {
+  if (!SMK) SMK = canvas(960, 540);
+  const g = SMK.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 960, 540); g.lineCap = 'round';
+  const col = o.dark ? '20,20,20' : '235,235,235', rise = (o.rise ?? 700) / 2, n = o.strands ?? 5, a0 = o.alpha ?? .5, wind = (o.wind ?? 60) / 2;
+  (o.src || [[W / 2, H]]).forEach(([sx0, sy0], si) => {
+    for (let k = 0; k < n; k++) {
+      const seed = si * 17 + k * 3 + (o.seed ?? 0);
+      let px = sx0 / 2, py = sy0 / 2;
+      for (let q = 1; q <= 44; q++) {
+        const u = q / 44, ph = u * 2.6 - T * .32 + k * .7;
+        const x = sx0 / 2 + vnoise(ph, seed) * 150 * u ** 1.1 + vnoise(ph * 2.7 + 5, seed + 2) * 40 * u + Math.sin(u * 7 - T * 1.1 + k * 1.9) * 14 * u + wind * u * u + (k - n / 2) * 30 * u;
+        const y = sy0 / 2 - u * rise * (.8 + .4 * hash1(seed));
+        g.strokeStyle = `rgba(${col},${a0 * (1 - u) ** 1.4 * sstep(0, .1, u) * (.55 + .45 * hash1(seed + 1))})`;
+        g.lineWidth = 2 + 70 * u ** 1.6; g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke();
+        px = x; py = y;
+      }
+    }
+  });
+  c.save(); c.filter = `blur(${o.blur ?? 7}px)`; c.globalCompositeOperation = o.dark ? 'multiply' : 'screen'; c.drawImage(SMK, 0, 0, W, H); c.restore();
+}
+// a cigarette left burning: paper, filter, ash and an ember that glows a little brighter now and then; returns the tip
+function cigarette(c, x, y, ang, T, len = 230) {
+  c.save(); c.translate(x, y); c.rotate(ang);
+  c.fillStyle = 'rgba(0,0,0,.45)'; c.fillRect(-len * .1, 10, len * 1.05, 12);                       // its shadow
+  c.fillStyle = '#9c8a74'; c.fillRect(-len * .35, -9, len * .35, 18);                                // filter
+  c.fillStyle = '#e9e6df'; c.fillRect(0, -9, len * .62, 18);                                          // paper
+  c.fillStyle = '#6a6a6a'; c.fillRect(len * .62, -8, len * .08, 16);                                  // ash
+  const br = .65 + .35 * Math.max(0, vnoise(T * .9, 61));
+  const eg = c.createRadialGradient(len * .7, 0, 0, len * .7, 0, 30); eg.addColorStop(0, `rgba(255,60,30,${br})`); eg.addColorStop(1, 'rgba(255,60,30,0)');
+  c.fillStyle = eg; c.fillRect(len * .7 - 30, -30, 60, 60);
+  c.fillStyle = `rgba(255,${Math.round(70 + 60 * br)},40,${br})`; c.fillRect(len * .7, -7, 6, 14);
+  c.restore();
+  return [x + Math.cos(ang) * len * .72, y + Math.sin(ang) * len * .72];
+}
+// a few pills spilled on paper: capsules and scored tablets, each with a soft shadow
+function pills(c, list) {
+  for (const [x, y, r, kind, rot] of list) {
+    c.save(); c.translate(x, y); c.rotate(rot);
+    c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.ellipse(4, 6, kind ? r * 1.9 : r, r * .9, 0, 0, TAU); c.fill();
+    if (kind) { roundRect(c, -r * 1.8, -r * .8, r * 3.6, r * 1.6, r * .8); c.fillStyle = '#fbfaf7'; c.fill();
+      c.save(); c.clip(); c.fillStyle = '#cfcac0'; c.fillRect(0, -r, r * 2, r * 2); c.restore();
+      c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = 1.5; c.stroke(); }
+    else { c.fillStyle = '#fbfaf7'; c.beginPath(); c.arc(0, 0, r, 0, TAU); c.fill(); c.strokeStyle = 'rgba(0,0,0,.22)'; c.lineWidth = 1.5; c.stroke();
+      c.beginPath(); c.moveTo(-r * .7, 0); c.lineTo(r * .7, 0); c.stroke(); }
+    c.restore();
+  }
+}
+// a drop of blood: forms at (x, y0) from t0, falls at t1 and lands at y1 in a small splash
+function bloodDrop(c, x, y0, y1, t0, t1, T, r = 9) {
+  if (T < t0) return;
+  const fall = T - t1, y = fall < 0 ? y0 + r * eio(clamp((T - t0) / (t1 - t0))) : Math.min(y1, y0 + r + 2600 * fall * fall);
+  c.save(); c.fillStyle = '#7a0612';
+  if (y < y1) {
+    const rr = fall < 0 ? r * eio(clamp((T - t0) / (t1 - t0))) : r;
+    c.beginPath(); c.moveTo(x, y - rr * 2.1); c.quadraticCurveTo(x + rr, y - rr * .4, x + rr, y); c.arc(x, y, rr, 0, PI); c.quadraticCurveTo(x - rr, y - rr * .4, x, y - rr * 2.1); c.fill();
+  } else {
+    const k = clamp((T - t1 - Math.sqrt((y1 - y0 - r) / 2600)) / .15);
+    c.beginPath(); c.ellipse(x, y1, r * (1.2 + .5 * eout(k)), r * (.45 + .1 * eout(k)), 0, 0, TAU); c.fill();
+    for (let i = 0; i < 6; i++) { const a = PI + i / 5 * PI, d = r * (1.6 + 1.4 * eout(k)) * (.6 + .4 * hash1(i * 2.7)); c.beginPath(); c.arc(x + Math.cos(a) * d * 1.6, y1 + Math.sin(a) * d * .4, r * .18, 0, TAU); c.fill(); }
+  }
+  c.restore();
+}
 // a city skyline in three depths; o.lit picks one window (layer 2) to glow; returns that window's position
 function skyline(c, T, o = {}) {
   const base = o.base ?? H, pan = o.pan ?? 0, zm = o.zoom ?? 1;
@@ -487,7 +605,7 @@ function skyline(c, T, o = {}) {
       for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
         const hh = hash1(k * 31.7 + i * 7.3 + j * 3.1 + Ly * 101);
         const wx = x + 10 + i * 20, wy = y + 14 + j * 28;
-        if (o.lit && Ly === 2 && k === o.lit[0] && i === o.lit[1] && j === o.lit[2]) { mark = [wx + 4, wy + 6]; c.fillStyle = '#f6f2e6'; c.fillRect(wx - 1, wy - 1, 10, 14); continue; }
+        if (o.lit && Ly === 2 && k === o.lit[0] && i === o.lit[1] && j === o.lit[2]) { mark = [wx + 4, wy + 6]; c.globalAlpha = o.litA ?? 1; c.fillStyle = '#f6f2e6'; c.fillRect(wx - 1, wy - 1, 10, 14); c.globalAlpha = 1; continue; }
         if (hh < lit * (o.lights ?? 1)) { c.fillStyle = hh < lit * .4 ? '#e9e4d6' : '#9a978f'; c.fillRect(wx, wy, 8, 12); }
       }
     }
@@ -546,13 +664,28 @@ function lampRoad(c, s, o = {}) {
     c.fillStyle = `rgba(255,255,255,${.95 * fog})`; c.beginPath(); c.ellipse(hx, ty + .14 * kk, .4 * kk, .13 * kk, 0, 0, TAU); c.fill();
   }
 }
-// a full red rose seen from above
+// a full red rose seen from above: layers of cupped petals, each turned against the last, their rims edged in dark ink
 function rose(c, x, y, r, rot, seed) {
   c.save(); c.translate(x, y); c.rotate(rot);
-  for (const [n, k, off] of [[7, 1, 0], [6, .72, .45], [5, .48, .2], [3, .26, .9]]) for (let j = 0; j < n; j++) {
-    c.save(); c.rotate(j / n * TAU + off + seed); petal(c, 0, -2, r / 34 * k, 0, .35 * Math.sin(seed * 3 + j), k < .5 ? '#a50c22' : RED); c.restore();
-  }
-  c.fillStyle = '#5e0612'; c.beginPath(); c.arc(0, 0, r * .12, 0, TAU); c.fill();
+  const ink = '#1c0306';
+  [[5, 1], [5, .8], [4, .6], [4, .43], [3, .28]].forEach(([n, k], l) => {
+    const R = r * k;
+    for (let j = 0; j < n; j++) {
+      const a = seed * 1.7 + l * 2.39996 + j / n * TAU + (hash1(seed + l * 7 + j) - .5) * .4, d = R * .42, pr = R * .62, pt = R * .56;
+      c.save(); c.rotate(a); c.translate(d, 0);
+      const g = c.createRadialGradient(-pr * .8, 0, 0, -pr * .8, 0, pr * 1.9);
+      g.addColorStop(0, '#4e030d'); g.addColorStop(.55, (l + j) % 3 ? RED : '#c90c24'); g.addColorStop(1, '#ff4552');
+      c.fillStyle = g; c.beginPath(); c.ellipse(0, 0, pr, pt, 0, 0, TAU); c.fill();
+      c.strokeStyle = ink; c.lineCap = 'round';
+      c.lineWidth = Math.max(1.5, r * .03); c.beginPath(); c.ellipse(0, 0, pr, pt, 0, -1.25, 1.1); c.stroke();          // the rim
+      c.lineWidth = Math.max(1, r * .012); c.beginPath(); c.ellipse(-pr * .25, 0, pr * .6, pt * .7, 0, -.9, .6); c.stroke();  // a fold
+      c.restore();
+    }
+  });
+  c.fillStyle = '#3a020a'; c.beginPath(); c.arc(0, 0, r * .13, 0, TAU); c.fill();
+  c.strokeStyle = ink; c.lineWidth = Math.max(1.4, r * .024); c.beginPath();
+  for (let k = 0; k < 40; k++) { const u = k / 39, rr = r * .14 * (1 - u * .9), aa = seed + u * TAU * 1.8; k ? c.lineTo(Math.cos(aa) * rr, Math.sin(aa) * rr) : c.moveTo(Math.cos(aa) * rr, Math.sin(aa) * rr); }
+  c.stroke();
   c.restore();
 }
 // rings of light rushing towards the camera, painted with a dry brush
@@ -568,15 +701,9 @@ function ringTunnel(c, T, t0) {
 }
 
 // ======================================================================== shared assets
-const CV = new Image();
-let CVH = null, CVF = null, CV_WIDE = null, PAPER = null, SPECK = null, BIG = null, IMBUF = null;
+let PAPER = null, SPECK = null, BIG = null, IMBUF = null;
 const MEM = {};                                                       // small memory stills painted once from the scenes' own painters
 function prepAssets() {
-  CVH = canvas(2000, 2000); { const c = CVH.getContext('2d'); c.imageSmoothingQuality = 'high'; c.filter = 'contrast(1.12)'; c.drawImage(CV, 0, 0, 2000, 2000); }
-  // the whole cover (never a cut-out of the figure), its square edge feathered into a blurred copy of itself where it doesn't fill the frame
-  CVF = canvas(2000, 2000); { const c = CVF.getContext('2d'); c.drawImage(CVH, 0, 0); c.globalCompositeOperation = 'destination-in';
-    for (const [x0, y0, x1, y1] of [[0, 0, 240, 0], [2000, 0, 1760, 0], [0, 0, 0, 240], [0, 2000, 0, 1760]]) { const g = c.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, '#000'); c.fillStyle = g; c.fillRect(0, 0, 2000, 2000); } }
-  CV_WIDE = canvas(); { const c = CV_WIDE.getContext('2d'); c.filter = 'blur(16px) brightness(.92)'; c.drawImage(CV, -60, (H - W) / 2 - 60, W + 120, W + 120); }
   const r = mulberry(7);
   PAPER = canvas(); {
     const c = PAPER.getContext('2d'); c.fillStyle = '#e9dfc9'; c.fillRect(0, 0, W, H);
@@ -597,8 +724,8 @@ function prepAssets() {
     const s = canvas(800, 450), sc = s.getContext('2d'); sc.filter = 'brightness(1.35) contrast(1.08)'; sc.drawImage(BIG, 0, 0, 800, 450); MEM[name] = s; };
   still('sea', b => backdrop(b, 3, 12, { a: [.42, .35, 1, 0], moon: [.68, .74, .05] }));
   still('city', b => { backdrop(b, 2, 20, { a: [.55, 1, 1, 0], moon: [.3, .8, .045] }); skyline(b, 0, { base: H, pan: 400 }); });
-  still('rain', b => { bokeh(b, 3, { alpha: .6 }); glassDrops(b, 2, { n: 90 }); });
-  still('rose', b => { b.fillStyle = '#060606'; b.fillRect(0, 0, W, H); rose(b, W / 2, H / 2, 300, .4, 1.3); });
+  still('rain', b => puddle(b, 2.4));
+  still('rose', b => { b.fillStyle = '#060606'; b.fillRect(0, 0, W, H); rose(b, W / 2, H / 2, 400, .4, 1.3); });
   still('lamps', b => lampRoad(b, 30));
   still('ink', b => backdrop(b, 1, 8, { a: [1.2, .38, .78, 0], b: [.92, .06, 1, 0] }));
   still('window', b => facade(b, 9, { on: [[3, 1, 0]] }));
@@ -611,16 +738,6 @@ function drawCrop(c, img, cr, dx, dy, dw, dh) {
   c.drawImage(img, sx0, sy0, sw, sh, dx, dy, dw, dh);
 }
 const memDraw = (c, name, dx, dy, dw, dh) => drawCrop(c, MEM[name], [0, 0, 800, 450], dx, dy, dw, dh);
-// the cover drawn so that cover pixel (cx, cy) sits at (ox, oy), default the screen centre; zoom 1 = the cover's height fits the screen
-function coverView(c, cx, cy, zoom, o = {}) {
-  const s = zoom * H / 1000, x = (o.ox ?? W / 2) - cx * s, y = (o.oy ?? H / 2) - cy * s;
-  c.save(); c.globalAlpha *= o.alpha ?? 1;
-  if (x > 0 || y > 0 || x + 1000 * s < W || y + 1000 * s < H) c.drawImage(CV_WIDE, 0, 0);
-  c.drawImage(CVF, x, y, 1000 * s, 1000 * s);
-  c.restore();
-}
-const EYE = [752, 648], COLLAR = [668, 880];                          // places on the cover, in its 1000 px square
-
 // beat pulse with a short attack instead of an instant jump
 function pulse(arr, T, d = 8, a = 45, span = .8) {
   let s = 0;
@@ -676,7 +793,7 @@ function petalRain(c, T, o = {}) {
     c.restore();
   }
 }
-// a tapered ink spike like the black brush strokes on the cover
+// a tapered ink spike, a dry black brush stroke
 function spike(c, x0, y0, x1, y1, w, bend = .15, color = '#000') {
   const dx = x1 - x0, dy = y1 - y0, l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l;
   const mx = (x0 + x1) / 2 + nx * l * bend, my = (y0 + y1) / 2 + ny * l * bend;
@@ -887,13 +1004,12 @@ scene(16.401, [11], (T, lt, P) => {
   sub(11, T, { size: 64, haloColor: 'rgba(0,0,0,.95)' });
 }, (T) => ({ inv: 1, cell: 8, shift: [ringAt(NM_HITS, T, 5, 9) * .008, ring(A.kicks, T, 4, 9) * .006], zoom: 1 + .02 * pulse(A.kicks, T) }));
 
-// ---- 05b a pane of glass, rain sliding down it ----------------------------------------------------- 0:18.1 - 0:20.7
+// ---- 05b rain falling into a puddle; the street lamp is only there in the water ------------------------- 0:18.1 - 0:20.7
 scene(18.103, [12, 13], (T, lt, P) => {
-  sx.fillStyle = '#080808'; sx.fillRect(0, 0, W, H);
-  bokeh(sx, T, { alpha: .55, size: 1.3, drift: .4, seed: 33 });
-  sx.save(); const z = 1.1 + lt * .02; sx.translate(W / 2, H / 2); sx.scale(z, z); sx.translate(-W / 2, -H / 2);
-  glassDrops(sx, lt + 1, { n: 110, size: 1.6, seed: 47 });
+  sx.save(); const z = 1.04 + lt * .012; sx.translate(W / 2, H / 2); sx.scale(z, z); sx.translate(-W / 2, -H / 2);
+  puddle(sx, T);
   sx.restore();
+  rain(sx, T, { n: 90, alpha: .16, len: 60, speed: 1800, ang: .08, seed: 12 });
   shade(940, .7, 130);
   sub(12, T); sub(13, T);
 }, (T) => ({ col: .35, tint: AGED }));
@@ -999,7 +1115,7 @@ scene(31.554, [22, 23], (T, lt, P) => {
 }, (T) => { const st = [STAMP1 + .06, STAMP2 + .09];
   return { bit: 1, ht: 0, grain: .035, shift: [ringAt(st, T, 5, 10) * .012, ringAt(st, T, 6.5, 10) * .01], zoom: 1 + .02 * st.reduce((a, t) => a + (T > t ? Math.exp(-(T - t) * 9) : 0), 0) }; });
 
-// ---- 09 / 17 stillness: the eye on the cover, and the red thread ----------------------------------------------- 0:34.7 - 0:37.4, 1:30.5 - 1:33.2
+// ---- 09 / 17 stillness: one street lamp in the dark, and the red thread ------------------------------------------- 0:34.7 - 0:37.4, 1:30.5 - 1:33.2
 function thread(c, T, t0, o = {}) {
   const p = eout(clamp((T - t0) / 1.8)), sway = Math.sin(T * 1.3) * 22, yEnd = 80 + 470 * p;
   c.save(); c.strokeStyle = RED; c.lineWidth = 5; c.lineCap = 'round';
@@ -1013,11 +1129,14 @@ function thread(c, T, t0, o = {}) {
 function stillness(T, i, t0, o = {}) {
   const lt = T - t0;
   sx.fillStyle = '#020202'; sx.fillRect(0, 0, W, H);
-  const [dx, dy] = drift(T, 4, .15, 71);                             // the eye on the cover, very close and dim, pushing in
-  coverView(sx, EYE[0] + dx, EYE[1] + dy, 3.6 + lt * .14, { alpha: .42 });
-  shade(790, .6, 170);
-  dust(sx, T, { n: 110, alpha: .55 });
-  if (o.snow) snow(sx, T, { n: 220, speed: 45, r: 5, alpha: .85, wind: 4 });
+  const z = 1 + lt * .012;                                           // one street lamp, nothing else; the camera creeps in
+  sx.save(); sx.translate(W / 2, H * .45); sx.scale(z, z); sx.translate(-W / 2, -H * .45);
+  const cone = lonelyLamp(sx, T);
+  sx.restore();
+  const flakes = (a) => o.snow ? snow(sx, T, { n: 220, speed: 45, r: 5, alpha: a, wind: 4 }) : dust(sx, T, { n: 160, alpha: a });
+  flakes(.18);                                                       // barely there in the dark, bright inside the light
+  sx.save(); sx.translate(W / 2, H * .45); sx.scale(z, z); sx.translate(-W / 2, -H * .45); conePath(sx, cone); sx.restore();
+  sx.save(); sx.clip(); flakes(1); smoke(sx, T, { src: [[W / 2 - 330, H + 80], [W / 2 + 260, H + 160]], rise: 1100, alpha: .55, wind: 140, strands: 4, seed: o.snow ? 9 : 2 }); sx.restore();
   thread(sx, T, t0, { flake: o.snow });
   const l = L[i], a = lineA(i, T, .3, .1), ls = 4 + 14 * eio(clamp(lt / 2.6));
   txt(xx, '可是', W / 2, 700, { font: F.zh, size: 40, ls: 20, color: '#cfcfcf', alpha: a });
@@ -1121,14 +1240,16 @@ scene(46.016, [], (T, lt, P) => {
   const burn = clamp((T - 55.4) / .9);
   if (burn > 0) { const g = sx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, 1300 * eio(burn)); g.addColorStop(0, '#fff'); g.addColorStop(.7, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)'); sx.fillStyle = g; sx.fillRect(0, 0, W, H); }
   let y = 740;
-  for (const [t0, s, f, size] of [[47.0, 'ISOLATED', F.monob, 74], [48.3, 'YuKIluv7 / dangao_w', F.mono, 40], [49.6, 'De4thpain · 2026', F.mono, 32]]) {
+  for (const [t0, s, f, size] of [[47.0, 'ISOLATED', F.monob, 74], [48.3, 'YuKIluv7 / dangao_w', F.mono, 40], [49.6, 'De4thpain · 2026', F.mono, 32],
+    ...CREDITS.map(([k, v], i) => [50.9 + i * .5, `${k}  ${v}`, F.mono, 22])]) {
     xx.save(); xx.globalAlpha = win(T, t0, 55.3, .05, .6); revealText(xx, s, t0, t0 + 1.2, T, 130, y, { size, font: f, ls: 2, align: 'left' }); xx.restore();
     y += size * .9 + 40;
   }
 }, (T) => ({ scan: .12, grain: .06, fadeW: sstep(55.9, 56.3, T) }));
 
-// ---- 12 the cage: the cover behind bars inked one after another; the close-up is the collar it already wears ------ 0:56.5 - 1:08.3
+// ---- 12 the cage: the moon seen through bars inked one after another ---------------------------------------------- 0:56.5 - 1:08.3
 const BREAK = 56.48, CAGE = 58.766, V2 = 68.348;
+const CREDITS = [['作词', 'YuKIluv7 / dangao_w'], ['作曲', 'YuKIluv7 / dangao_w'], ['编曲', 'YuKIluv7']];
 const BARS = Array.from({ length: 10 }, (_, i) => ({ x: lerp(170, 1750, i / 9) + (hash1(i * 3.1) - .5) * 40, tilt: (hash1(i * 5.7) - .5) * 60, w: 30 + 12 * hash1(i * 2.2), t: CAGE + .05 + i * .085 + hash1(i) * .05 }));
 function inkBars(c, T, sc = 1, tremble = 0) {
   c.save(); c.translate(W / 2, H / 2); c.scale(sc, sc); c.translate(-W / 2, -H / 2);
@@ -1140,12 +1261,11 @@ function inkBars(c, T, sc = 1, tremble = 0) {
   c.restore();
 }
 function cageView(T) {
-  const close = eio(clamp((T - L[32].t + .1) / .9)), [dx, dy] = drift(T, 5, .2, 44);
-  sx.fillStyle = '#060606'; sx.fillRect(0, 0, W, H);
-  coverView(sx, lerp(690, COLLAR[0], close) + dx, lerp(700, COLLAR[1], close) + dy, lerp(1.28 + (T - BREAK) * .012, 2.5 + .25 * eio(clamp((T - L[32].t) / 6.4)), close),
-    { alpha: T < CAGE ? .35 + .65 * sstep(57.9, 58.7, T) : 1 });
-  if (T >= L[34].t) backdrop(sx, 1, T * .8, { a: [1.1, .32, .8, .4], b: [1, .25, 1.4, 0], op: 'multiply', alpha: .75 * sstep(L[34].t, L[34].t + 1.4, T) });  // something bitter: ink clouds through the water
+  const close = eio(clamp((T - L[32].t + .1) / .9)), z = lerp(1, 1.9, close) * (1 + (T - BREAK) * .004);
+  backdrop(sx, 2, T, { a: [.45, .6, 1, 0], moon: [.5, .58, .11], zoom: z });
+  if (T >= L[34].t) backdrop(sx, 1, T * .8, { a: [1.1, .32, .8, .4], b: [1, .25, 1.4, 0], op: 'multiply', alpha: .85 * sstep(L[34].t, L[34].t + 1.4, T) });  // something bitter: ink clouds swallow the moon
   if (T >= CAGE) inkBars(sx, T, lerp(1, 1.5, close), 2 + 6 * sstep(L[36].t, L[36].t + .8, T) + 4 * Math.abs(ring(A.snares, T, 6, 10)));
+  if (T < V2 + .2) smoke(sx, T, { src: [[1380, H + 40]], rise: 1150, alpha: .4 * sstep(BREAK + .8, BREAK + 2.5, T), wind: -160, strands: 5, seed: 4 });   // someone smoking just out of shot
 }
 scene(BREAK, [30, 31, 32, 33, 34, 35], (T, lt, P) => {
   cageView(T);
@@ -1197,6 +1317,7 @@ scene(71.549, [38], (T, lt, P) => {
     sx.strokeStyle = '#d0d0d0'; sx.beginPath(); sx.moveTo(0, len + h + 20); sx.lineTo(0, len + h + 60); sx.stroke(); sx.strokeRect(-7, len + h + 60, 14, 120);
     sx.restore();
   });
+  smoke(sx, T, { src: [[620, H + 60], [1500, H + 120]], rise: 1150, alpha: .3, wind: 90, strands: 4, seed: 12 });
   sub(38, T, { k: .8 });
   if (T >= CUT - .1) {
     const p0 = [140, 960], p1 = [1780, 160], lp = eout(clamp((T - CUT + .1) / .1));
@@ -1228,6 +1349,7 @@ scene(74.314, [39], (T, lt, P) => {
 // ---- 14 i don't understand ------------------------------------------------------------------------------------------- 1:17.1 - 1:19.6
 scene(77.110, [40], (T, lt, P) => {
   sx.fillStyle = '#000'; sx.fillRect(0, 0, W, H);
+  smoke(sx, T, { src: [[300, H + 100], [1100, H + 150], [1700, H + 60]], rise: 1250, alpha: .32, wind: 50, strands: 3, seed: 21 });
   const n = clamp(Math.floor(lt / (BEAT / 8)) + 1, 0, 34);
   for (let k = 0; k < n; k++) {
     const born = k * BEAT / 8, p = eout(clamp((lt - born) / .25));
@@ -1240,6 +1362,9 @@ scene(77.110, [40], (T, lt, P) => {
 // ---- 14b you don't care: clouds drift across the moon, nothing else happens --------------------------------------------- 1:19.6 - 1:22.3
 scene(79.636, [41, 42], (T, lt, P) => {
   backdrop(sx, 2, T * 3, { a: [.75, 1.4, 1, 0], moon: [.5, .6, .07], zoom: 1 + lt * .03 });
+  sx.fillStyle = '#050505'; sx.fillRect(0, 980, W, 100);                                         // a window ledge; someone left a cigarette on it
+  const tip = cigarette(sx, 1380, 966, -.16, T, 300);
+  smoke(sx, T, { src: [tip], rise: 1000, alpha: .6, wind: -120, strands: 3, seed: 31, blur: 3 });
   shade(930, .7, 140);
   sub(41, T); sub(42, T);
 }, (T) => ({ grain: .045, vig: .75 }), { wipe: .5 });
@@ -1274,24 +1399,27 @@ scene(82.276, [43, 44, 45], (T, lt, P) => {
 }, (T) => ({ ripple: T > IMPACT ? .3 * Math.exp(-(T - IMPACT) * .7) : 0, flash: T > IMPACT ? .3 * Math.exp(-(T - IMPACT) * 10) : 0,
   shift: [0, T > IMPACT ? ringAt([IMPACT], T, 5, 7) * .008 : 0] }), { wipe: .5 });
 
-// ---- 16 delete the only one: the cover, its dots shrinking away to blank paper ------------------------------------------ 1:26.3 - 1:27.9
+// ---- 16 delete the only one: the last rose, its dots shrinking away to blank paper -------------------------------------- 1:26.3 - 1:27.9
 const ERASE0 = 86.85;
 scene(86.294, [46], (T, lt, P) => {
   sx.fillStyle = '#ecebe7'; sx.fillRect(0, 0, W, H);
-  const z = 1 + .03 * eio(clamp(lt / 1.6)), sz = 640 * z, x0 = W / 2 - sz / 2, y0 = H / 2 - sz / 2 + 50;
-  sx.fillStyle = '#0a0a0a'; sx.fillRect(x0 - 8, y0 - 8, sz + 16, sz + 16);
-  drawCrop(sx, CVH, [360, 360, 1640, 1640], x0, y0, sz, sz);
+  const z = 1 + .03 * eio(clamp(lt / 1.6)), w = 900 * z, h = w * 9 / 16, x0 = W / 2 - w / 2, y0 = H / 2 - h / 2 + 60;
+  sx.fillStyle = '#0a0a0a'; sx.fillRect(x0 - 8, y0 - 8, w + 16, h + 16);
+  memDraw(sx, 'rose', x0, y0, w, h);
   const l = L[46];
   xx.save(); xx.globalAlpha = lineA(46, T);
   const r = revealText(xx, l.text, l.t, l.t + .7, T, W / 2, 150, { size: 64, ls: 14, color: '#0d0d0d', haloColor: 'rgba(245,244,240,.9)' });
   inkLine(xx, r.x0 + measure(xx, '删掉曾经的', 64, F.lyr, 14) - 10, 156, r.x0 + r.w + 6, 146, 9, eio(clamp((T - 86.9) / .3)), 81, RED);
   xx.restore();
+  bloodDrop(xx, r.x0 + r.w + 2, 152, 1010, 87.05, 87.45, T, 9);                               // the red line bleeds a single drop
   P.erode = eio(clamp((T - ERASE0) / .95));
 }, (T) => ({ grain: .04 }), { wipe: .5 });
 
 // ---- 16b nothing left / 16c yuki ---------------------------------------------------------------------------------------- 1:27.9 - 1:30.4
 scene(87.922, [47], (T, lt, P) => {
   sx.fillStyle = '#ecebe7'; sx.fillRect(0, 0, W, H);
+  pills(sx, [[1540, 860, 14, 1, .5], [1610, 905, 12, 0, 0], [1488, 935, 12, 0, .8], [1700, 820, 14, 1, -.9], [1655, 980, 11, 0, .3]]);
+  smoke(sx, T, { src: [[330, H + 40]], rise: 900, alpha: .22, wind: 80, strands: 3, seed: 41, dark: true });
   sub(47, T, { y: H / 2, size: 46, ls: 16, font: F.zh, color: '#1a1a1a', halo: false });
 }, () => ({ grain: .035, vig: .3 }));
 scene(89.294, [48], (T, lt, P) => {
@@ -1327,23 +1455,28 @@ scene(MONT, [], (T, lt, P) => {
   const k = kickShake(T, .004); P.shift = [P.shift[0] + k[0], P.shift[1] + k[1]];
 }, () => ({}));
 
-// ---- 19b outro: from the eye on the cover, pulling all the way back to the album sleeve standing in the snow ------------------- 1:53.0 - end
+// ---- 19b outro: snow on the city; its windows go out one by one, the circled one last ---------------------------------------------- 1:53.0 - end
 scene(OUTRO, [], (T, lt, P) => {
-  backdrop(sx, 2, T, { a: [.4, .6, 1, 0], moon: [.25, .75, .05] });
-  const p = eio(clamp(lt / 5.5)), s1 = 600, side = 3.6 * H * Math.pow(s1 / (3.6 * H), p);       // zoom out at a constant rate
-  const ex = lerp(W / 2 + 140, W * .66 - s1 / 2 + EYE[0] * s1 / 1000, p), ey = lerp(H / 2, H / 2 - s1 / 2 + EYE[1] * s1 / 1000, p);  // the eye sits off centre so the cover still fills the frame
-  const x = ex - EYE[0] * side / 1000, y = ey - EYE[1] * side / 1000;
-  sx.save(); sx.globalAlpha = .6 * sstep(.6, 1, p); sx.fillStyle = '#000'; sx.fillRect(x + 18, y + 18, side, side); sx.restore();
-  sx.drawImage(CVH, x, y, side, side);
-  snow(sx, T, { n: 260, speed: 55, r: 6, alpha: .95, wind: 8, seed: 5 });
-  const ca = win(T, OUTRO + 5, DUR - 1.2, .9, 1.4);
-  if (ca > 0) {
-    txt(xx, 'ISOLATED', 170, 440, { font: F.big, size: 132, ls: 30, align: 'left', color: '#f2f0ea', alpha: ca });   // cold, upright, widely tracked
-    xx.fillStyle = RED; xx.globalAlpha = ca; xx.fillRect(176, 510, 220 * eio(clamp((T - OUTRO - 5.2) / .8)), 8); xx.globalAlpha = 1;
-    txt(xx, 'YuKIluv7 / dangao_w', 176, 580, { font: F.mono, size: 34, align: 'left', ls: 2, color: '#e6e4de', alpha: ca });
-    txt(xx, 'De4thpain · 2026', 176, 640, { font: F.mono, size: 26, align: 'left', ls: 4, color: '#a8a6a0', alpha: ca });
+  backdrop(sx, 2, T, { a: [.4, .6, 1, 0], moon: [.78, .74, .045] });
+  const base = H + 120 - 40 * eio(clamp(lt / 9)), pan = 500 + lt * 4, off = 1 - eio(clamp((lt - 1) / 6));
+  const lastOut = DUR - 3 - OUTRO, litA = 1 - sstep(lastOut, lastOut + .5, lt);
+  skyline(sx, T, { base, pan, lights: off, lit: FAR, litA });
+  if (litA > 0) {                                                     // the window from "tell me what's ur target" keeps its light the longest
+    const [mx, my] = skyMark(FAR[0], FAR[1], FAR[2], base, pan), g = sx.createRadialGradient(mx, my, 0, mx, my, 70);
+    g.addColorStop(0, `rgba(255,255,255,${.25 * litA})`); g.addColorStop(1, 'rgba(255,255,255,0)'); sx.fillStyle = g; sx.fillRect(mx - 70, my - 70, 140, 140);
   }
-}, (T) => { const lt = T - OUTRO; return { ht: lerp(1, .35, eio(clamp((lt - 2) / 6))), grain: .035, vig: .6, fade: sstep(DUR - 2.4, DUR - .25, T) }; });
+  smoke(sx, T, { src: [[400, H + 200], [1300, H + 260]], rise: 900, alpha: .14, wind: 120, strands: 3, seed: 51, blur: 6 });
+  snow(sx, T, { n: 260, speed: 55, r: 6, alpha: .95, wind: 8, seed: 5 });
+  const ca = win(T, OUTRO + 2.5, DUR - 1.2, .9, 1.4);
+  if (ca > 0) {
+    txt(xx, 'ISOLATED', 170, 250, { font: F.big, size: 132, ls: 30, align: 'left', color: '#f2f0ea', alpha: ca });   // cold, upright, widely tracked
+    xx.fillStyle = RED; xx.globalAlpha = ca; xx.fillRect(176, 330, 220 * eio(clamp((T - OUTRO - 2.7) / .8)), 8); xx.globalAlpha = 1;
+    txt(xx, 'YuKIluv7 / dangao_w', 176, 400, { font: F.mono, size: 34, align: 'left', ls: 2, color: '#e6e4de', alpha: ca });
+    txt(xx, 'De4thpain · 2026', 176, 460, { font: F.mono, size: 26, align: 'left', ls: 4, color: '#a8a6a0', alpha: ca });
+    CREDITS.forEach(([k, v], i) => { txt(xx, k, 176, 540 + i * 40, { font: F.zh, size: 22, align: 'left', ls: 6, color: '#8f8d88', alpha: ca });
+      txt(xx, v, 260, 540 + i * 40, { font: F.mono, size: 22, align: 'left', ls: 2, color: '#c9c7c1', alpha: ca }); });
+  }
+}, (T) => ({ grain: .035, vig: .6, fade: sstep(DUR - 2.4, DUR - .25, T) }));
 
 // ======================================================================== frame
 const sceneAt = t => { let s = SC[0]; for (const c of SC) if (t >= c.t0) s = c; return s; };
@@ -1354,8 +1487,14 @@ function frame(T) {
   sx.fillStyle = '#000'; sx.fillRect(0, 0, W, H); xx.clearRect(0, 0, W, H);
   const sc = sceneAt(T), lt = T - sc.t0;
   const P = { ...POST0, ...(sc.post ? sc.post(T, lt) : {}) };
+  if (isDangao(T)) { const k = sstep(56.48, 57.3, T) * (1 - sstep(89.6, 90.4, T)); P.col = Math.max(P.col, .5 * k); P.tint = TOBACCO; P.grain += .02 * k; }
   sc.draw(T, lt, P);
   xx.setTransform(1, 0, 0, 1, 0, 0); xx.globalAlpha = 1; xx.globalCompositeOperation = 'source-over';
+  for (const [t0, who] of VOICES) {
+    const d = T - t0 - (t0 ? .3 : 1.0), a = sstep(0, .6, d) * (1 - sstep(3.2, 4.2, d)); if (a <= 0) continue;
+    xx.save(); xx.globalAlpha = a; xx.fillStyle = RED; xx.fillRect(84, 64, 34 * eout(clamp(d / .6)), 3); xx.restore();
+    txt(xx, who, 132, 66, { font: F.mono, size: 26, ls: 6, align: 'left', color: '#d9d7d1', alpha: a });
+  }
   for (const s of SC) if (s.wipe) { const p = (T - s.t0) / s.wipe + .5; if (p > 0 && p < 1) inkWipe(xx, p, s.t0 * 7.3); }
   for (const d of DROPS) if (T >= d && T < d + 1) P.flash = Math.max(P.flash, .85 * Math.exp(-(T - d) * 7));
   render(T, P);
@@ -1367,7 +1506,6 @@ const FAMILIES = { 'Noto Serif SC': 'NSC', 'Noto Serif SC Black': 'NSCB', 'Zhi M
 const b64buf = s => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u.buffer; };
 const loading = Promise.all([
   ...Object.entries(FAMILIES).map(([k, fam]) => new FontFace(fam, b64buf(A.fonts[k])).load().then(f => document.fonts.add(f))),
-  new Promise((res, rej) => { CV.onload = res; CV.onerror = rej; CV.src = A.cover; }),
 ]).then(() => { prepAssets(); ready = true; frame(EXPORT ? 0 : 7.6); const l = document.getElementById('load'); if (l) l.textContent = '建议全屏观看（F）· 空格暂停'; })
   .catch(e => console.error('asset load failed', e));
 

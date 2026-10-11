@@ -12,7 +12,7 @@
 // ?export=1 hooks and returned as a PNG (canvas.toDataURL('image/png'), lossless). Frames are handed out one
 // at a time and written to FFmpeg strictly in order, so the result does not depend on the worker count.
 // Needs Node 22+, FFmpeg on PATH, and Chrome / Edge / Chromium (or set CHROME=path). No network needed:
-// fonts, cover and audio analysis are embedded in assets.js.
+// fonts and audio analysis are embedded in assets.js.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { EventEmitter, once } from 'node:events';

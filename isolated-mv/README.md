@@ -2,13 +2,13 @@
 
 YuKIluv7 / dangao_w《Isolated》（专辑《De4thpain》，2026）的歌词 MV。时长 2:04，1920 × 1080，30 fps。
 
-画面全部由 HTML Canvas + WebGL 逐帧绘制：雨夜的城市、亮灯的楼、路灯长路、稿纸、月亮、海和玫瑰都由程序画出来，再被印成黑白网点漫画，封面只在片尾作为专辑封套出现一次；唱到「我内心早已变黑白」时颜色被一条线扫掉，之后全片只剩黑、白和一种红；前半首下雨，唱到「back to you, yuki」以后雨变成雪。画面跟着鼓点走——鼓的起止、底鼓、军鼓的时间都来自分轨音频分析。分镜见 [脚本.md](脚本.md)。
+画面全部由 HTML Canvas + WebGL 逐帧绘制：雨夜的城市、亮灯的楼、路灯长路、稿纸、月亮、海和玫瑰都由程序画出来，再被印成黑白网点漫画，全片不使用封面画；唱到「我内心早已变黑白」时颜色被一条线扫掉，之后全片只剩黑、白和一种红；前半首下雨，唱到「back to you, yuki」以后雨变成雪。画面跟着鼓点走——鼓的起止、底鼓、军鼓的时间都来自分轨音频分析。分镜见 [脚本.md](脚本.md)。
 
 ![片名卡](poster.jpg)
 
 ## 观看
 
-- 打开 `Isolated_MV.html`：单文件播放器，内嵌音乐、字体和封面，离线可用。
+- 打开 `Isolated_MV.html`：单文件播放器，内嵌音乐和字体，离线可用。
 - 或在本目录打开 `mv.html`（需要 `assets.js` 和 `Isolated.mp3` 在同一目录）。
 - 空格暂停，F 全屏，← → 快退快进 5 秒。
 - MP4 是生成文件，不纳入 Git，按下面的步骤导出。
@@ -19,7 +19,7 @@ YuKIluv7 / dangao_w《Isolated》（专辑《De4thpain》，2026）的歌词 MV�
 | --- | --- |
 | `脚本.md` | 分镜脚本：每句歌词的画面、时间码和节奏点 |
 | `mv.html` | 动画与播放器源码（所有分镜、网点着色器、歌词排版） |
-| `assets.js` | 由 `prepare.py` 生成：节拍与鼓点、各分轨包络、歌词与翻译、封面、字体子集 |
+| `assets.js` | 由 `prepare.py` 生成：节拍与鼓点、各分轨包络、歌词与翻译、字体子集 |
 | `prepare.py` | 分析 `Isolated.mp3` 与 `stems/` 分轨，读取 LRC 和 MP3 内嵌的翻译歌词，裁剪字体，写出 `assets.js` |
 | `export.mjs` | 用无头 Chrome 逐帧渲染，PNG 无损交给 FFmpeg 编码 |
 | `build.py` | 把 `mv.html`、`assets.js`、`Isolated.mp3` 合成单文件 `Isolated_MV.html` |
