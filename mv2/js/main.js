@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================================
-// 渲染：2D 层（场景）→ GL（镜头 + 网点 + 纸）→ 多个子帧累加成运动模糊
+// 渲染：2D 层（场景）→ GL（背景 + 镜头 + 辉光 + 颗粒 + 黑边）→ 多个子帧累加成运动模糊
 // ============================================================================
 const OUT = document.getElementById('cv'), ox = OUT.getContext('2d');
 const LAY = mk(), lx = LAY.getContext('2d');
@@ -10,18 +10,17 @@ let DEBUG = !EXPORT && Q.has('debug');
 
 function drawLayer(t) {
   const s = sceneAt(t), lt = t - s.t0;
-  lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over';
-  lx.fillStyle = C.paper; lx.fillRect(0, 0, W, H);
+  lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.filter = 'none';
+  lx.clearRect(0, 0, W, H);
   const fx = { ...FX0, ...(s.fx ? s.fx.call(s, t, lt) : {}) };
-  // 底鼓：整页往下顿一下（像漫画的"定格"），越到后面越轻
-  const kj = fx.jolt * M.hit('kick', t, 16);
-  lx.save(); lx.translate(0, kj * 7);
   s.draw.call(s, lx, t, lt);
-  lx.restore();
-  // 镜头一直在呼吸：很轻很慢的漂移，像读者的视线
-  fx.shift = [(fx.shift?.[0] ?? 0) + Math.sin(t * .21) * .002, (fx.shift?.[1] ?? 0) + Math.cos(t * .17) * .0018];
+  lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.filter = 'none';
+  for (const k of ['zoom', 'rot', 'barrel']) if (!Number.isFinite(fx[k])) fx[k] = FX0[k];
+  // 镜头一直在呼吸：很轻很慢的漂移，像手持
+  fx.shift = [(fx.shift?.[0] ?? 0) + Math.sin(t * .21) * .003, (fx.shift?.[1] ?? 0) + Math.cos(t * .17) * .0025];
   fx.rot = fx.rot + Math.sin(t * .09) * .003;
-  return { s, fx };
+  fx.bz = fx.bz ?? 1; fx.boff = fx.boff ?? [0, 0];
+  return { s, fx, bg: s.bg ? s.bg.call(s, t, lt) : { mode: 'solid', a: '#000000' } };
 }
 
 // samples：子帧数（1 = 不做运动模糊）；shutter：快门占一帧的比例
@@ -30,7 +29,7 @@ function render(t, samples = 1, shutter = .5) {
   for (let k = 0; k < samples; k++) {
     const ts = samples > 1 ? t + ((k + .5) / samples - .5) * shutter / 30 : t;
     last = drawLayer(ts);
-    GLX.frame(LAY, ts, last.fx, 1 / samples, k === 0);
+    GLX.frame(LAY, ts, last.bg, last.fx, 1 / samples, k === 0);
   }
   ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalAlpha = 1;
   ox.drawImage(GLX.present(), 0, 0);
@@ -47,7 +46,7 @@ function drawDebug(t, s) {
     .forEach((s2, i) => ox.fillText(s2, 36, 34 + i * 38));
   const y0 = H - 54, sx = x => x / MV_END * W;
   SCENES.forEach((s2, i) => { ox.fillStyle = `hsla(${i * 37},60%,50%,.6)`; ox.fillRect(sx(s2.t0), y0, sx(Math.min(s2.t1, MV_END)) - sx(s2.t0) - 1, 10); });
-  ox.fillStyle = '#000'; D.kicks.forEach(x => ox.fillRect(sx(x), y0 + 12, 1, 8));
+  ox.fillStyle = '#fff'; D.kicks.forEach(x => ox.fillRect(sx(x), y0 + 12, 1, 8));
   ox.fillStyle = '#06c'; D.snares.forEach(x => ox.fillRect(sx(x), y0 + 22, 1, 6));
   ox.fillStyle = '#f55'; D.gaps.forEach(g => ox.fillRect(sx(g[0]), y0 + 30, Math.max(2, sx(g[1]) - sx(g[0])), 5));
   ox.fillStyle = '#c80'; D.lyrics.forEach(l => ox.fillRect(sx(l.t), y0 + 37, Math.max(2, sx(l.end) - sx(l.t) - 2), 5));
@@ -56,8 +55,8 @@ function drawDebug(t, s) {
 }
 
 // ---------------------------------------------------------------- 导出接口（export.mjs 调用）
-const FONTS = [`500 20px "${SANS}"`, `900 20px "${SANS}"`, `300 20px "${SERIF}"`, `900 20px "${SERIF}"`, `700 20px "${COMIC}"`, `20px "${BANG}"`, `20px "${BRUSH}"`, `600 20px "${HAND}"`, `20px "${HANDZH}"`];
-const fontsReady = Promise.all([coverReady, ...FONTS.map(f => document.fonts.load(f, '我A'))]).then(() => document.fonts.ready).then(() => true);
+const FONTS = [`300 20px "${SANS}"`, `900 20px "${SANS}"`, `900 20px "${SERIF}"`, `20px "${ANTON}"`, `300 20px "${GROT}"`, `700 20px "${GROT}"`, `20px "${MONO}"`];
+const fontsReady = Promise.all(FONTS.map(f => document.fonts.load(f, '我A'))).then(() => document.fonts.ready).then(() => true);
 window.__ready = () => fontsReady;
 window.__info = () => ({ duration: MV_END, title: D.title });
 window.__frame = (t, samples = 3, png = false) => { render(t, samples); return png ? OUT.toDataURL('image/png') : OUT.toDataURL('image/jpeg', .93); };

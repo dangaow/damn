@@ -8,12 +8,12 @@ const W = 1920, H = 1080;
 const STEP = D.step, BEAT = STEP * 4, BAR = STEP * 16;
 const bar = k => D.bar0 + k * BAR;                                                  // 第 k 小节开始的时间
 
-// 配色：纸 / 墨 / 铅笔，唯一的颜色是勿忘我的蓝
+// 配色：黑 / 钢灰 / 冰白，唯一的颜色是冰蓝
 const C = {
-  paper: '#f4f1ea', ink: '#111014', pencil: '#8c8a86', tone: '#9a9894', light: '#d8d5ce',
-  blue: '#5b8fd6', blueDeep: '#2f5fae', blueLight: '#a9c6ef',
+  black: '#030405', ink: '#08090b', steel: '#5d6772', fog: '#b9c2cb', white: '#eef3f7',
+  ice: '#7fd4ff', iceDeep: '#2a78c8', navy: '#050b18', night: '#0a1630',
 };
-const SANS = 'Noto Sans SC', SERIF = 'Noto Serif SC', COMIC = 'Comic Neue', BRUSH = 'Ma Shan Zheng', BANG = 'Bangers', HAND = 'Caveat', HANDZH = 'Long Cang';
+const SANS = 'Noto Sans SC', SERIF = 'Noto Serif SC', ANTON = 'Anton', GROT = 'Space Grotesk', MONO = 'Space Mono';
 const fnt = (size, w = 700, fam = SANS) => `${w} ${size}px "${fam}", "${SANS}", "WenQuanYi Zen Hei", sans-serif`;
 
 // ---------------------------------------------------------------- 工具
