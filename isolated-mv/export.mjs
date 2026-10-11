@@ -5,6 +5,7 @@
 //   node export.mjs --lossless               -> Isolated_MV_lossless.mkv (RGB, bit-exact to the PNG frames; very large)
 //   node export.mjs --frames frames          (also keep every PNG frame in frames/)
 //   node export.mjs --shots 7.2,30.5,40.4    (write single PNG frames to shots/ for checking)
+//   node export.mjs --smoke                  (draw every frame without encoding and report any script error, with its time)
 //   options: --workers 4  --fps 30  --from 0  --to <end>  --crf 16  --share-crf 24  --preset slow  --out <file>
 //
 // Every worker is its own headless Chrome; frame i is drawn at exactly t = from + i / fps through the page's
@@ -101,6 +102,19 @@ const gpu = await workers[0].evaluate(`(() => { const g = document.createElement
 console.log(`${WORKERS} worker${WORKERS > 1 ? 's' : ''} ready in ${((Date.now() - tLoad) / 1000).toFixed(1)}s   renderer: ${gpu}`);
 const problems = await workers[0].evaluate('window.__check ? window.__check() : []');
 for (const p of problems) console.warn(`check: ${p}`);
+
+if (args.smoke) {
+  const dur = await workers[0].evaluate('window.__duration'), n = Math.ceil(dur * FPS), errors = [];
+  for (let i0 = 0; i0 < n; i0 += 300) {
+    errors.push(...await workers[0].evaluate(`(() => { const bad = [];
+      for (let i = ${i0}; i < Math.min(${n}, ${i0 + 300}); i++) { try { frame(i / ${FPS}); } catch (e) { bad.push((i / ${FPS}).toFixed(3) + 's: ' + e.message); } }
+      return bad; })()`));
+    process.stdout.write(`\rsmoke ${Math.min(n, i0 + 300)}/${n} frames, ${errors.length} errors`);
+  }
+  console.log();
+  for (const e of errors.slice(0, 40)) console.error(`  ${e}`);
+  process.exit(errors.length || problems.length ? 1 : 0);
+}
 
 if (args.shots) {
   const dir = join(here, 'shots'); mkdirSync(dir, { recursive: true });
