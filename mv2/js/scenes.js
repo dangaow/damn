@@ -9,16 +9,19 @@ const scene = o => (SCENES.push(o), o);
 function sceneAt(t) { for (let i = SCENES.length - 1; i >= 0; i--) if (t >= SCENES[i].t0) return SCENES[i]; return SCENES[0]; }
 const MV_END = D.duration;
 scene({ name: 'test', t0: 0, t1: 999,
-  bg: () => ({ mode: 'fog', a: '#050607', b: '#2a3038', c: '#9fb0c4', amt: .9, speed: 1 }),
+  bg: t => t < 2 ? ({ mode: 'fog', a: '#050607', b: '#2a3038', c: '#9fb0c4', amt: .9 }) : t < 4 ? ({ mode: 'city', a: '#02040a', b: '#0b1c3c', c: '#7fd4ff', amt: 1 }) : ({ mode: 'solid', a: '#000000' }),
   draw(c, t) {
-    const lx = W / 2, ly = 150;
-    tubeLamp(c, lx, ly, 260, 1);
-    lightCone(c, lx, ly + 8, 240, 1100, 800, 1);
-    let p = POSE_ALL.stand; const k = Math.floor(t) % 6;
-    if (k === 1) p = POSE_ALL.rap; if (k === 2) p = POSE_ALL.rap2; if (k === 3) p = walkPose(POSE_ALL.stand, t, 1); if (k === 4) p = POSE_ALL.sit; if (k === 5) p = POSE_ALL.pockets;
-    p = liven(blendPose(p, p, 0), t, { nod: M.hit('kick', t, 6) });
-    const yaw = k === 3 ? Math.PI / 2 : (k === 0 ? Math.PI * .5 + t % 1 * Math.PI : Math.PI);
-    figure(c, p, lx, 940, .62, { yaw: k === 4 ? Math.PI / 2 : yaw, rim: '#e8f2ff', light: [lx, ly], back: true, sheen: .15 }); fogLayer(c, t, .25);
-    c.save(); coneClip(c, lx, ly + 8, 240, 1100, 800); rain(c, t, { n: 200, spd: 1400, len: 60, wind: .05, alpha: .5 }); c.restore();
+    if (t < 2) {
+      const lx = W / 2, ly = 150; tubeLamp(c, lx, ly, 260, 1); lightCone(c, lx, ly + 8, 240, 1100, 800, 1);
+      bigWord(c, 'MEMORY', t, 0, { size: 230, y: 520, a: .9 });
+      c.save(); coneClip(c, lx, ly + 8, 240, 1100, 800); rain(c, t, { n: 220, spd: 1400, len: 60, wind: .05, alpha: .5 }); c.restore();
+      fogLayer(c, t, .25);
+    } else if (t < 4) {
+      underpass(c, t); headlights(c, .55, 760, 1, '200,225,255'); rain(c, t, { n: 500, spd: 1900, len: 90, wind: .12, alpha: .45, col: 'rgb(150,200,255)' });
+      vLine(c, LN(58.766), t, 1500, 200, 72, { all: true });
+    } else {
+      corridor(c, t, i => i > 6 ? 0 : 1, { z: t * .5, blue: 1 });
+      vLine(c, LN(30.091), t, 1560, 220, 78, { all: true, fam: SERIF });
+    }
   },
 });
