@@ -33,6 +33,7 @@ function render(t, samples = 1, shutter = .5) {
   }
   ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalAlpha = 1;
   ox.drawImage(GLX.present(), 0, 0);
+  overlay(ox, t, last.s, last.fx);                                                // 字幕、名牌：画在后期之后，清楚、不发光，可以落在黑边里
   if (DEBUG) drawDebug(t, last.s);
 }
 

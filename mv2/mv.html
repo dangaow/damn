@@ -20,12 +20,6 @@
 </head>
 <body class="paused">
 <!-- 快捷键：空格 播放/暂停，← → 快退/快进 5 秒（Shift 1 秒），, . 逐帧，D 调试信息（鼓点、静音、歌词时间线） -->
-<!-- 人的剪影先糊开再收紧边缘：四肢和身体融成一个自然的轮廓（metaball） -->
-<svg width="0" height="0" style="position:absolute"><defs>
-  <filter id="goo4"><feGaussianBlur stdDeviation="4"/><feComponentTransfer><feFuncA type="linear" slope="16" intercept="-7"/></feComponentTransfer></filter>
-  <filter id="goo8"><feGaussianBlur stdDeviation="8"/><feComponentTransfer><feFuncA type="linear" slope="16" intercept="-7"/></feComponentTransfer></filter>
-  <filter id="goo14"><feGaussianBlur stdDeviation="14"/><feComponentTransfer><feFuncA type="linear" slope="16" intercept="-7"/></feComponentTransfer></filter>
-</defs></svg>
 <div id="stage"><canvas id="cv" width="1920" height="1080"></canvas></div>
 <div id="bar">
   <button id="pp">▶</button>
@@ -38,7 +32,6 @@
 <script src="js/core.js"></script>
 <script src="js/gl.js"></script>
 <script src="js/draw.js"></script>
-<script src="js/figure.js"></script>
 <script src="js/scenes.js"></script>
 <script src="js/main.js"></script>
 </body>

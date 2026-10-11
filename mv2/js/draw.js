@@ -197,7 +197,9 @@ function polaroid(c, x, y, s, rot, seed, o = {}) {
   c.filter = 'none';
   // 划掉的脸
   const r = rand(seed); c.strokeStyle = 'rgba(240,244,247,.95)'; c.lineWidth = s * .012; c.lineCap = 'round';
-  for (let i = 0; i < 14; i++) { const a = r() * 6.283, L = pw * (.08 + r() * .1); c.beginPath(); c.moveTo(hx - Math.cos(a) * L, hy - Math.sin(a) * L); c.lineTo(hx + Math.cos(a) * L, hy + Math.sin(a) * L); c.stroke(); }
+  c.beginPath(); c.moveTo(hx - pw * .16, hy - pw * .14);
+  for (let i = 0; i < 16; i++) c.lineTo(hx + (i % 2 ? 1 : -1) * pw * (.12 + r() * .06), hy - pw * .14 + i * pw * .019 + r() * 4);
+  c.stroke();
   c.restore(); c.restore();
 }
 // 手机：竖着，屏幕亮；screen(c, w, h) 在屏幕坐标里画内容
