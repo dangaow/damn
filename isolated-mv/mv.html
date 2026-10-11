@@ -361,27 +361,217 @@ function render(T, P) {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
+// ======================================================================== procedural backdrops (a second, half-resolution WebGL canvas)
+// 1 ink clouds in water, 2 night sky with clouds and a moon, 3 the sea under the moon, 4 a pale empty plain
+const BGC = canvas(960, 540), bgl = BGC.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false });
+const BG_FS = `#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 o;
+uniform vec2 uRes, uPan; uniform float uTime, uMode, uZoom; uniform vec4 uA, uB; uniform vec3 uMoon;
+float h21(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
+float fbm(vec2 p){ float s = 0., a = .5; for (int i = 0; i < 5; i++) { s += a * noise(p); p = mat2(1.6, 1.2, -1.2, 1.6) * p + 7.3; a *= .5; } return s; }
+float sky(vec2 p, vec2 uv, float t, float cover, float speed, float stars){
+  vec2 mp = (uMoon.xy - .5) * vec2(uRes.x / uRes.y, 1.);
+  float d = length(p - mp);
+  float cl = fbm(p * 1.7 + vec2(t * .03 * speed, 0.)) * .65 + fbm(p * 4.1 + vec2(t * .05 * speed, 3.)) * .35;
+  cl = smoothstep(.66 - cover * .5, 1. - cover * .25, cl);
+  float glow = exp(-d * 3.) * .5 + exp(-d * 11.) * .35;
+  float v = mix(.03, .1, 1. - uv.y) + glow * (1. - cl * .6);
+  v = mix(v, .1 + glow * 1.2, cl * .85);
+  float moon = smoothstep(uMoon.z + .003, uMoon.z - .003, d) * (.9 + .1 * noise(p * 30.));
+  v = max(v, moon * (1. - cl * .9));
+  v += step(.9968, h21(floor(uv * uRes * .5))) * stars * (1. - cl) * .8;
+  return v;
+}
+void main(){
+  vec2 uv = vUv, p = (uv - .5) * vec2(uRes.x / uRes.y, 1.) / uZoom + uPan;
+  float t = uTime, v = 0.;
+  int m = int(uMode + .5);
+  if (m == 1) {                                   // ink: uA = scale, lo, hi, swirl;  uB = paper, ink, speed
+    float r = length(p), ang = uA.w * exp(-r * 1.2);
+    p = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * p;
+    vec2 q = vec2(fbm(p * uA.x + vec2(0., t * .06 * uB.z)), fbm(p * uA.x + vec2(5.2, 1.3) - t * .05 * uB.z));
+    vec2 w = vec2(fbm(p * uA.x + 3.2 * q + vec2(1.7, 9.2) + t * .04 * uB.z), fbm(p * uA.x + 3.2 * q + vec2(8.3, 2.8) - t * .03 * uB.z));
+    v = mix(uB.x, uB.y, smoothstep(uA.y, uA.z, fbm(p * uA.x + 3.6 * w)));
+  } else if (m == 2) {                            // sky: uA = cover, speed, stars
+    v = sky(p, uv, t, uA.x, uA.y, uA.z);
+  } else if (m == 3) {                            // sea: uA = horizon, cover, speed;  the moon lays a path of light on the water
+    float hz = uA.x;
+    if (uv.y > hz) v = sky(p, uv, t, uA.y, uA.z, 1.);
+    else {
+      float dep = hz - uv.y, z = 1. / (dep * 5. + .04);
+      float rip = noise(vec2(uv.x * 7. * z + t * .15, dep * 230. - t * 1.6)) * .7 + noise(vec2(uv.x * 19. * z - t * .1, dep * 520. - t * 2.3)) * .3;
+      float path = exp(-pow((uv.x - uMoon.x) / (.025 + dep * .55), 2.));
+      float spark = smoothstep(.6, .85, rip) * (.12 + path * 1.1) * clamp(dep * 14. + .25, 0., 1.);
+      v = .035 + spark * .85 + path * .05 * (1. - dep);
+      v = mix(v, .2, exp(-dep * 90.) * .6);         // haze where the sea meets the sky
+    }
+  } else if (m == 4) {                            // plain: uA = horizon
+    float hz = uA.x;
+    if (uv.y > hz) v = mix(.86, .97, smoothstep(hz, 1., uv.y)) - fbm(p * 1.5 + t * .01) * .06;
+    else { float dep = hz - uv.y; v = .95 - .05 * fbm(vec2(uv.x * 30. / (dep * 4. + .05), dep * 60.)) - .04 * dep; }
+    v = mix(v, .62, exp(-abs(uv.y - hz) * 900.) * .8);
+  }
+  o = vec4(vec3(clamp(v, 0., 1.)), 1.);
+}`;
+const BGP = (() => {
+  const sh = (t, src) => { const s = bgl.createShader(t); bgl.shaderSource(s, src); bgl.compileShader(s); if (!bgl.getShaderParameter(s, bgl.COMPILE_STATUS)) console.error(bgl.getShaderInfoLog(s)); return s; };
+  const pr = bgl.createProgram(); bgl.attachShader(pr, sh(bgl.VERTEX_SHADER, VS)); bgl.attachShader(pr, sh(bgl.FRAGMENT_SHADER, BG_FS));
+  bgl.bindAttribLocation(pr, 0, 'p'); bgl.linkProgram(pr); bgl.useProgram(pr);
+  bgl.bindVertexArray(bgl.createVertexArray());
+  bgl.bindBuffer(bgl.ARRAY_BUFFER, bgl.createBuffer()); bgl.bufferData(bgl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), bgl.STATIC_DRAW);
+  bgl.enableVertexAttribArray(0); bgl.vertexAttribPointer(0, 2, bgl.FLOAT, false, 0, 0);
+  const u = {}; for (const n of ['uRes', 'uPan', 'uTime', 'uMode', 'uZoom', 'uA', 'uB', 'uMoon']) u[n] = bgl.getUniformLocation(pr, n);
+  return u;
+})();
+// paint a procedural backdrop over the whole of c
+function backdrop(c, mode, T, o = {}) {
+  const u = BGP, a = o.a || [0, 0, 0, 0], b = o.b || [0, 0, 0, 0], m = o.moon || [.5, .62, .06], pn = o.pan || [0, 0];
+  bgl.viewport(0, 0, 960, 540);
+  bgl.uniform2f(u.uRes, 960, 540); bgl.uniform2f(u.uPan, pn[0], pn[1]); bgl.uniform1f(u.uTime, T); bgl.uniform1f(u.uMode, mode); bgl.uniform1f(u.uZoom, o.zoom ?? 1);
+  bgl.uniform4f(u.uA, ...a); bgl.uniform4f(u.uB, ...b); bgl.uniform3f(u.uMoon, ...m);
+  bgl.drawArrays(bgl.TRIANGLES, 0, 3);
+  c.save(); c.globalAlpha *= o.alpha ?? 1; if (o.op) c.globalCompositeOperation = o.op; c.drawImage(BGC, 0, 0, W, H); c.restore();
+}
+const INK_DARK = { a: [1.3, .35, .75, 0], b: [.03, .62, 1, 0] }, INK_PAPER = { a: [1.3, .42, .78, 0], b: [.93, .08, 1, 0] };
+
+// ======================================================================== painters: each draws a whole W×H picture on c
+// out-of-focus city lights
+function bokeh(c, T, o = {}) {
+  const n = o.n ?? 34, seed = o.seed ?? 31;
+  c.save();
+  for (let i = 0; i < n; i++) {
+    const z = hash1(i * 3.3 + seed), r = (30 + 100 * z * z) * (o.size ?? 1);
+    const x = ((hash1(i * 7.1 + seed) * W * 1.3 + T * (5 + 9 * z) * (o.drift ?? 1)) % (W * 1.3)) - W * .15, y = H * (.12 + .72 * hash1(i * 5.9 + seed)) + Math.sin(T * .3 + i) * 10;
+    const a = (o.alpha ?? .5) * (.35 + .65 * hash1(i * 2.2 + seed)) * (.85 + .15 * Math.sin(T * .7 + i * 1.7));
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(255,255,255,${a * .5})`); g.addColorStop(.8, `rgba(255,255,255,${a * .65})`); g.addColorStop(.93, `rgba(255,255,255,${a})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+  }
+  c.restore();
+}
+// rain drops on a window pane, a few of them sliding
+function glassDrops(c, T, o = {}) {
+  const n = o.n ?? 80, seed = o.seed ?? 41, sc = o.size ?? 1;
+  c.save();
+  for (let i = 0; i < n; i++) {
+    const z = hash1(i * 4.3 + seed), r = (4 + 20 * z * z) * sc, x = hash1(i * 1.9 + seed) * W;
+    const slides = hash1(i * 6.7 + seed) < .25, t0 = hash1(i * 8.8 + seed) * 4, sl = slides ? Math.max(0, T - t0) ** 1.3 * (30 + 90 * z) : 0;
+    const y = hash1(i * 3.1 + seed) * H + sl, fa = 1 - sstep(H * .8, H + 20, y);
+    if (fa <= 0) continue;
+    if (sl > 0) { c.globalAlpha = .22 * fa; c.fillStyle = '#e8e8e8'; c.fillRect(x - r * .22, y - Math.min(sl, 320), r * .44, Math.min(sl, 320)); }
+    c.globalAlpha = .55 * fa; c.fillStyle = '#151515'; c.beginPath(); c.ellipse(x, y, r * .9, r, 0, 0, TAU); c.fill();
+    c.globalAlpha = .95 * fa; c.strokeStyle = '#f3f3f3'; c.lineWidth = Math.max(1.5, r * .2); c.lineCap = 'round'; c.beginPath(); c.arc(x - r * .1, y - r * .12, r * .6, PI * 1.05, PI * 1.62); c.stroke();
+    c.globalAlpha = .6 * fa; c.strokeStyle = '#000'; c.lineWidth = Math.max(1, r * .14); c.beginPath(); c.arc(x, y, r * .9, PI * .1, PI * .85); c.stroke();
+  }
+  c.restore();
+}
+// a city skyline in three depths; o.lit picks one window (layer 2) to glow; returns that window's position
+function skyline(c, T, o = {}) {
+  const base = o.base ?? H, pan = o.pan ?? 0, zm = o.zoom ?? 1;
+  let mark = null;
+  const fo = o.focus || [W / 2, base, 0], ox = lerp(fo[0], W / 2, fo[2]), oy = lerp(fo[1], H * .42, fo[2]);
+  c.save(); c.translate(ox, oy); c.scale(zm, zm); c.translate(-fo[0], -fo[1]);
+  [[0, '#3c3c3c', .2, .42, 120, .25, .1], [1, '#1d1d1d', .28, .6, 150, .55, .22], [2, '#070707', .14, .36, 210, 1, .3]].forEach(([Ly, col, h0, h1, slot, par, lit]) => {
+    const off = pan * par, k0 = Math.floor((off - W) / slot), k1 = Math.ceil((off + W * 2) / slot);
+    for (let k = k0; k <= k1; k++) {
+      const hs = hash2(k, Ly * 13 + 1), bw = slot * (.62 + .38 * hash2(k, Ly * 13 + 2)), bh = H * (h0 + (h1 - h0) * hs), x = k * slot - off - W * .5, y = base - bh;
+      c.fillStyle = col; c.fillRect(x, y, bw, bh + 2);
+      if (hash2(k, Ly * 13 + 3) < .35) { c.fillRect(x + bw * .3, y - 18, bw * .25, 18); }
+      if (hash2(k, Ly * 13 + 4) < .3) inkLine(c, x + bw * .7, y, x + bw * .7, y - 40 - 50 * hs, 3, 1, k + Ly, col);
+      if (Ly === 0) continue;
+      const cols = Math.floor((bw - 12) / 20), rows = Math.floor((bh - 20) / 28);
+      for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+        const hh = hash1(k * 31.7 + i * 7.3 + j * 3.1 + Ly * 101);
+        const wx = x + 10 + i * 20, wy = y + 14 + j * 28;
+        if (o.lit && Ly === 2 && k === o.lit[0] && i === o.lit[1] && j === o.lit[2]) { mark = [wx + 4, wy + 6]; c.fillStyle = '#f6f2e6'; c.fillRect(wx - 1, wy - 1, 10, 14); continue; }
+        if (hh < lit * (o.lights ?? 1)) { c.fillStyle = hh < lit * .4 ? '#e9e4d6' : '#9a978f'; c.fillRect(wx, wy, 8, 12); }
+      }
+    }
+  });
+  c.restore();
+  return mark && [ox + (mark[0] - fo[0]) * zm, oy + (mark[1] - fo[1]) * zm];
+}
+// where a window of the front layer of skyline() sits before any zoom
+function skyMark(k, i, j, base, pan) {
+  const slot = 210, bh = H * (.14 + .22 * hash2(k, 27)), x = k * slot - pan - W * .5;
+  return [x + 10 + i * 20 + 4, base - bh + 14 + j * 28 + 6];
+}
+// the facade of an apartment block at night; o.on = [[col, row, t0], ...] windows that light up
+function facade(c, T, o = {}) {
+  c.fillStyle = '#101010'; c.fillRect(0, 0, W, H);
+  c.fillStyle = 'rgba(255,255,255,.035)'; for (let y = 6; y < H; y += 14) c.fillRect(0, y, W, 2);
+  const cols = 7, rows = 4, ww = 170, wh = 200, gx = (W - cols * ww) / (cols + 1), gy = (H - rows * wh) / (rows + 1);
+  for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+    const x = gx + i * (ww + gx), y = gy + j * (wh + gy), on = (o.on || []).find(w => w[0] === i && w[1] === j);
+    let lit = hash2(i * 7 + 3, j * 5 + 1) < .18 ? .45 : 0;
+    if (on) lit = Math.max(lit, eout(clamp((T - on[2]) / .45)));
+    c.fillStyle = '#050505'; c.fillRect(x, y, ww, wh);
+    if (lit > 0) {
+      const g = c.createLinearGradient(x, y, x, y + wh); g.addColorStop(0, `rgba(240,234,220,${lit})`); g.addColorStop(1, `rgba(200,195,180,${lit * .8})`);
+      c.fillStyle = g; c.fillRect(x, y, ww, wh);
+      c.fillStyle = `rgba(20,20,20,${.5 * lit})`; c.beginPath(); c.moveTo(x, y); c.quadraticCurveTo(x + ww * .3, y + wh * .5, x + ww * .18, y + wh); c.lineTo(x, y + wh); c.closePath(); c.fill();   // a curtain
+      if (on) { const gl = c.createRadialGradient(x + ww / 2, y + wh / 2, 0, x + ww / 2, y + wh / 2, ww * 1.4); gl.addColorStop(0, `rgba(255,255,255,${.22 * lit})`); gl.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = gl; c.fillRect(x - ww, y - wh, ww * 3, wh * 3); }
+    }
+    c.strokeStyle = '#2b2b2b'; c.lineWidth = 12; c.strokeRect(x, y, ww, wh);
+    c.fillStyle = '#2b2b2b'; c.fillRect(x + ww / 2 - 4, y, 8, wh); c.fillRect(x, y + wh * .38, ww, 7);
+    c.fillStyle = '#1f1f1f'; c.fillRect(x - 14, y + wh + 6, ww + 28, 14);           // sill
+  }
+}
+// a long road at night lined with street lamps; s = metres travelled along it
+function lampRoad(c, s, o = {}) {
+  const hz = o.hz ?? 480, f = 1150, camH = 1.6, cx = W / 2 + (o.dx || 0);
+  const g = c.createLinearGradient(0, 0, 0, hz); g.addColorStop(0, '#040404'); g.addColorStop(1, '#2a2a2a'); c.fillStyle = g; c.fillRect(0, 0, W, hz);
+  c.fillStyle = '#060606'; c.fillRect(0, hz, W, H - hz);
+  inkLine(c, cx - 3, hz, cx - 1100, H + 40, 4, 1, 7, 'rgba(210,210,210,.3)'); inkLine(c, cx + 3, hz, cx + 1100, H + 40, 4, 1, 8, 'rgba(210,210,210,.3)');
+  const sp = 16, k0 = Math.floor(s / sp), items = [];
+  for (let k = k0; k <= k0 + 12; k++) for (const side of [-1, 1]) { const z = k * sp - s + (side > 0 ? sp / 2 : 0); if (z > 1 && z < 190) items.push([z, side, k]); }
+  items.sort((a, b) => b[0] - a[0]);
+  for (const [z, side, k] of items) {
+    const X = side * 6, kk = f / z, gx = cx + X * kk, gy = hz + camH * kk, ty = hz - (6.4 - camH) * kk, hx = gx - side * 1.4 * kk, fog = clamp(1.15 - z / 170);
+    c.save(); c.translate(hx, gy); c.scale(1, .26);                              // the pool of light on the wet road
+    const pg = c.createRadialGradient(0, 0, 0, 0, 0, 5 * kk); pg.addColorStop(0, `rgba(255,255,255,${.45 * fog})`); pg.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = pg; c.beginPath(); c.arc(0, 0, 5 * kk, 0, TAU); c.fill(); c.restore();
+    const rg = c.createLinearGradient(0, gy, 0, gy + 7 * kk); rg.addColorStop(0, `rgba(255,255,255,${.28 * fog})`); rg.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = rg; c.fillRect(hx - .25 * kk, gy, .5 * kk, 7 * kk);             // its reflection
+    const cg = c.createLinearGradient(0, ty, 0, gy); cg.addColorStop(0, `rgba(255,255,255,${.12 * fog})`); cg.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = cg; c.beginPath(); c.moveTo(hx - .2 * kk, ty); c.lineTo(hx + .2 * kk, ty); c.lineTo(hx + 1.7 * kk, gy); c.lineTo(hx - 1.7 * kk, gy); c.closePath(); c.fill();
+    const hg = c.createRadialGradient(hx, ty, 0, hx, ty, 1.4 * kk); hg.addColorStop(0, `rgba(255,255,255,${.55 * fog})`); hg.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = hg; c.fillRect(hx - 1.4 * kk, ty - 1.4 * kk, 2.8 * kk, 2.8 * kk);
+    inkLine(c, gx, gy, gx, ty - .1 * kk, Math.max(1.5, .17 * kk), 1, 3 + k, '#000');
+    inkLine(c, gx, ty, hx, ty + .05 * kk, Math.max(1.2, .1 * kk), 1, 9 + k, '#000');
+    c.fillStyle = `rgba(255,255,255,${.95 * fog})`; c.beginPath(); c.ellipse(hx, ty + .14 * kk, .4 * kk, .13 * kk, 0, 0, TAU); c.fill();
+  }
+}
+// a full red rose seen from above
+function rose(c, x, y, r, rot, seed) {
+  c.save(); c.translate(x, y); c.rotate(rot);
+  for (const [n, k, off] of [[7, 1, 0], [6, .72, .45], [5, .48, .2], [3, .26, .9]]) for (let j = 0; j < n; j++) {
+    c.save(); c.rotate(j / n * TAU + off + seed); petal(c, 0, -2, r / 34 * k, 0, .35 * Math.sin(seed * 3 + j), k < .5 ? '#a50c22' : RED); c.restore();
+  }
+  c.fillStyle = '#5e0612'; c.beginPath(); c.arc(0, 0, r * .12, 0, TAU); c.fill();
+  c.restore();
+}
+// rings of light rushing towards the camera, painted with a dry brush
+function ringTunnel(c, T, t0) {
+  const f = (T - t0) / BEAT;
+  for (let k = 13; k >= 0; k--) {
+    const kk = k - (f % 1), s = 1.5 * Math.pow(.68, kk); if (s < .025 || s > 2.6) continue;
+    const idx = Math.floor(f) + k, cxr = W / 2 + Math.sin(idx * .7) * 40 * s, cyr = H / 2 + Math.cos(idx * .5) * 26 * s;
+    c.save(); c.globalAlpha = clamp((2.6 - s) * 1.4) * clamp(s * 8);
+    brush(c, circlePts(cxr, cyr, 560 * s, idx, idx + TAU * 1.02, 40, .03, idx), Math.max(3, 30 * s), 1, idx, idx % 4 === 0 ? RED : '#efefef', 12);
+    c.restore();
+  }
+}
+
 // ======================================================================== shared assets
 const CV = new Image();
-let CV_DARK = null, CVH = null, CVF = null, CVDF = null, CV_WIDE = null, CV_WIDE_DARK = null, PAPER = null, SPECK = null, FIG = null, FIG_SIL = null, FIGBUF = null;
-// the figure on the cover, traced by hand (cover pixels): lets it be lifted off its background as its own layer
-const FIG_POLY = [[575, 335], [620, 318], [680, 312], [740, 320], [795, 345], [840, 385], [875, 435], [900, 490], [918, 555], [928, 625], [932, 700], [945, 770],
-  [968, 820], [990, 850], [1000, 870], [1000, 1000], [468, 1000], [474, 945], [484, 880], [481, 800], [482, 720], [486, 640], [490, 560], [500, 495], [518, 440], [545, 385]];
-const figPath = c => { c.beginPath(); FIG_POLY.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath(); };
+let CVH = null, PAPER = null, SPECK = null, BIG = null, IMBUF = null;
+const MEM = {};                                                       // small memory stills painted once from the scenes' own painters
 function prepAssets() {
-  CV_DARK = canvas(1000, 1000); { const c = CV_DARK.getContext('2d'); c.filter = 'brightness(.5) contrast(1.45)'; c.drawImage(CV, 0, 0); }
-  // the cover redrawn at 2x with high-quality resampling, so close-ups print crisp lines instead of soft stair-steps
   CVH = canvas(2000, 2000); { const c = CVH.getContext('2d'); c.imageSmoothingQuality = 'high'; c.filter = 'contrast(1.12)'; c.drawImage(CV, 0, 0, 2000, 2000); }
-  // and with its square edge feathered away, so wherever the frame shows beyond it there is no hard seam
-  const feather = (src, f) => { const o = canvas(2000, 2000), c = o.getContext('2d'); if (f) c.filter = f; c.drawImage(src, 0, 0); c.filter = 'none'; c.globalCompositeOperation = 'destination-in';
-    for (const [x0, y0, x1, y1] of [[0, 0, 240, 0], [2000, 0, 1760, 0], [0, 0, 0, 240], [0, 2000, 0, 1760]]) { const g = c.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, '#000'); c.fillStyle = g; c.fillRect(0, 0, 2000, 2000); }
-    return o; };
-  CVF = feather(CVH); CVDF = feather(CVH, 'brightness(.5) contrast(1.45)');
-  const wide = (img, f) => { const w = canvas(), c = w.getContext('2d'); c.filter = f; c.drawImage(img, -60, (H - W) / 2 - 60, W + 120, W + 120); return w; };
-  CV_WIDE = wide(CV, 'blur(16px) brightness(.92)'); CV_WIDE_DARK = wide(CV_DARK, 'blur(16px)');
-  FIG = canvas(1000, 1000); { const c = FIG.getContext('2d'); c.drawImage(CV, 0, 0); c.globalCompositeOperation = 'destination-in'; c.filter = 'blur(2.5px)'; figPath(c); c.fill(); }
-  FIG_SIL = canvas(1000, 1000); { const c = FIG_SIL.getContext('2d'); c.filter = 'blur(2px)'; c.fillStyle = '#000'; figPath(c); c.fill(); }
-  FIGBUF = canvas(1000, 1000);
   const r = mulberry(7);
   PAPER = canvas(); {
     const c = PAPER.getContext('2d'); c.fillStyle = '#e9dfc9'; c.fillRect(0, 0, W, H);
@@ -397,23 +587,25 @@ function prepAssets() {
     for (let i = 0; i < 2600; i++) { c.globalAlpha = .4 + r() * .6; c.beginPath(); c.arc(r() * 800, r() * 400, .6 + r() * r() * 4.5, 0, TAU); c.fill(); }
     for (let i = 0; i < 40; i++) { c.globalAlpha = .9; c.fillRect(r() * 800, r() * 400, 20 + r() * 90, 1 + r() * 2.5); }
   }
-
+  BIG = canvas(); IMBUF = canvas(800, 450);
+  const still = (name, paint) => { const b = BIG.getContext('2d'); b.setTransform(1, 0, 0, 1, 0, 0); b.globalAlpha = 1; b.fillStyle = '#000'; b.fillRect(0, 0, W, H); paint(b);
+    const s = canvas(800, 450), sc = s.getContext('2d'); sc.filter = 'brightness(1.35) contrast(1.08)'; sc.drawImage(BIG, 0, 0, 800, 450); MEM[name] = s; };
+  still('sea', b => backdrop(b, 3, 12, { a: [.42, .35, 1, 0], moon: [.68, .74, .05] }));
+  still('city', b => { backdrop(b, 2, 20, { a: [.55, 1, 1, 0], moon: [.3, .8, .045] }); skyline(b, 0, { base: H, pan: 400 }); });
+  still('rain', b => { bokeh(b, 3, { alpha: .6 }); glassDrops(b, 2, { n: 90 }); });
+  still('rose', b => { b.fillStyle = '#060606'; b.fillRect(0, 0, W, H); rose(b, W / 2, H / 2, 300, .4, 1.3); });
+  still('lamps', b => lampRoad(b, 30));
+  still('ink', b => backdrop(b, 1, 8, { a: [1.2, .38, .78, 0], b: [.92, .06, 1, 0] }));
+  still('window', b => facade(b, 9, { on: [[3, 1, 0]] }));
+  still('snow', b => { backdrop(b, 2, 4, { a: [.3, 1, 1, 0], moon: [.5, .66, .05] }); snow(b, 3, { n: 260, r: 7 }); });
 }
-// draw the cover so that cover pixel (cx, cy) sits at the screen centre, zoom 1 = cover height fits the screen
-function coverView(c, cx, cy, zoom, o = {}) {
-  const s = zoom * H / 1000, dark = o.img === CV_DARK, x = (o.ox ?? W / 2) - cx * s, y = (o.oy ?? H / 2) - cy * s;
-  c.save(); c.globalAlpha = o.alpha ?? 1;
-  if (o.fill !== false && (x > 0 || y > 0 || x + 1000 * s < W || y + 1000 * s < H)) c.drawImage(dark ? CV_WIDE_DARK : CV_WIDE, 0, 0);
-  c.drawImage(dark ? CVDF : CVF, x, y, 1000 * s, 1000 * s);
-  c.restore();
-}
+const MEMS = ['sea', 'city', 'rain', 'rose', 'lamps', 'ink', 'window', 'snow'];
 function drawCrop(c, img, cr, dx, dy, dw, dh) {
   let [sx0, sy0, sw, sh] = cr; const a = dw / dh;
   if (sw / sh > a) { const n = sh * a; sx0 += (sw - n) / 2; sw = n; } else { const n = sw / a; sy0 += (sh - n) / 2; sh = n; }
-  if (img === CV && Math.abs(dw / sw) > 1.1) { img = CVH; sx0 *= 2; sy0 *= 2; sw *= 2; sh *= 2; }     // enlarged crops come from the 2x cover
   c.drawImage(img, sx0, sy0, sw, sh, dx, dy, dw, dh);
 }
-const CROPS = [[520, 500, 400, 400], [650, 545, 210, 210], [540, 720, 320, 300], [460, 300, 460, 460], [0, 0, 520, 520], [0, 480, 520, 520], [0, 0, 1000, 1000], [560, 0, 440, 440]];
+const memDraw = (c, name, dx, dy, dw, dh) => drawCrop(c, MEM[name], [0, 0, 800, 450], dx, dy, dw, dh);
 
 // beat pulse with a short attack instead of an instant jump
 function pulse(arr, T, d = 8, a = 45, span = .8) {
@@ -518,117 +710,100 @@ function tracking(c, T, a = 1) {
   }
   c.restore();
 }
-// the lifted-off cover figure; (fx, fy) is where cover pixel (cx, cy) lands, s = screen px per cover px
-function drawFig(c, img, fx, fy, s, cx = 735, cy = 1000, o = {}) {
-  c.save(); c.globalAlpha *= o.alpha ?? 1; c.translate(fx, fy); if (o.rot) c.rotate(o.rot); c.scale(s * (o.flip ? -1 : 1), s);
-  c.drawImage(img, -cx, -cy); c.restore();
-}
-// the figure crumbling away from its left edge (prog 0..1); the specks fly off to the right
-function crumble(c, prog, fx, fy, s, seed = 1) {
-  const g = FIGBUF.getContext('2d'), front = lerp(430, 1060, prog);
-  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'copy'; g.drawImage(FIG, 0, 0); g.globalCompositeOperation = 'destination-out';
-  const gr = g.createLinearGradient(front - 70, 0, front + 30, 0); gr.addColorStop(0, '#000'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = gr; g.fillRect(0, 0, front + 30, 1000);
-  g.drawImage(SPECK, front - 10, 0, 220, 1000);
+// circle of points for brush strokes
+const circlePts = (cx, cy, r, a0, a1, n = 40, wob = 0, seed = 1) => Array.from({ length: n + 1 }, (_, k) => { const a = lerp(a0, a1, k / n), rr = r * (1 + wob * vnoise(k * .4, seed)); return [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]; });
+// an image crumbling away from its left edge (prog 0..1); the specks blow off to the right
+function crumbleImg(c, img, x, y, w, h, prog, seed = 1) {
+  const g = IMBUF.getContext('2d'), front = lerp(-.05, 1.08, prog) * 800;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'copy'; g.drawImage(img, 0, 0, 800, 450); g.globalCompositeOperation = 'destination-out';
+  const gr = g.createLinearGradient(front - 60, 0, front + 20, 0); gr.addColorStop(0, '#000'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, front + 20, 450); g.drawImage(SPECK, front - 10, 0, 200, 450);
   g.globalCompositeOperation = 'source-over';
-  drawFig(c, FIGBUF, fx, fy, s);
-  c.save(); c.fillStyle = '#0a0a0a';
-  for (let i = 0; i < 240; i++) {
+  c.drawImage(IMBUF, x, y, w, h);
+  c.save(); c.fillStyle = o_speck;
+  for (let i = 0; i < 220; i++) {
     const born = hash1(i * 2.7 + seed), age = prog - born; if (age < 0 || age > .35) continue;
-    const y0 = lerp(330, 1000, hash1(i * 5.9 + seed)), x0 = lerp(430, 1060, born), k = age / .35;
-    const x = fx + (x0 - 735 + k * (200 + 500 * hash1(i * 1.3 + seed))) * s, y = fy + (y0 - 1000 - k * 80 * hash1(i * 8.1 + seed)) * s;
-    c.globalAlpha = 1 - k; c.beginPath(); c.arc(x, y, (2 + 5 * hash1(i * 3.9 + seed)) * (1 - k * .5), 0, TAU); c.fill();
+    const k = age / .35, px = x + w * born + k * (160 + 420 * hash1(i * 1.3 + seed)), py = y + h * hash1(i * 5.9 + seed) - k * 60 * hash1(i * 8.1 + seed);
+    c.globalAlpha = 1 - k; c.beginPath(); c.arc(px, py, (2 + 4 * hash1(i * 3.9 + seed)) * (1 - k * .5), 0, TAU); c.fill();
   }
   c.restore();
 }
-// a panel of a manga page: black-bordered window onto a slowly drifting cover crop
-function panel(c, x, y, w, h, cr, T, o = {}) {
-  const p = o.p ?? 1; if (p <= 0) return;
-  const e = eout(p), dx = (o.from?.[0] ?? 0) * (1 - e), dy = (o.from?.[1] ?? 0) * (1 - e);
-  c.save(); c.globalAlpha *= clamp(p * 1.6); c.translate(dx, dy);
-  c.beginPath(); c.rect(x, y, w, h); c.clip();
-  const [dxn, dyn] = drift(T, cr[2] * .03, .25, o.seed ?? 1), z = 1 + (o.zoom ?? .05) * clamp((T - (o.t0 ?? T)) / 4);
-  const cw = cr[2] / z, ch = cr[3] / z;
-  drawCrop(c, o.img || CV, [cr[0] + (cr[2] - cw) / 2 + dxn, cr[1] + (cr[3] - ch) / 2 + dyn, cw, ch], x, y, w, h);
+const o_speck = '#d8d8d8';
+// a photo print with a white border
+function polaroid(c, name, cx, cy, w, rot, o = {}) {
+  const h = w * 9 / 16;
+  c.save(); c.translate(cx, cy); c.rotate(rot);
+  c.fillStyle = '#ece9e1'; c.fillRect(-w / 2 - 26, -h / 2 - 26, w + 52, h + 110);
+  if (o.draw) o.draw(-w / 2, -h / 2, w, h); else memDraw(c, name, -w / 2, -h / 2, w, h);
   c.restore();
-  c.save(); c.globalAlpha *= clamp(p * 1.6); c.translate(dx, dy); c.strokeStyle = '#050505'; c.lineWidth = 7; c.strokeRect(x, y, w, h); c.restore();
 }
-// circle of points for brush strokes
-const circlePts = (cx, cy, r, a0, a1, n = 40, wob = 0, seed = 1) => Array.from({ length: n + 1 }, (_, k) => { const a = lerp(a0, a1, k / n), rr = r * (1 + wob * vnoise(k * .4, seed)); return [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]; });
 
 // ======================================================================== scenes
 // draw(T, lt, P) paints S (halftoned) and X (sharp); post(T, lt) sets the print / grade for the frame.
 // o.wipe: a black brush stroke sweeps over the cut, centred on t0, lasting o.wipe seconds.
 const SC = [];
 function scene(t0, lines, draw, post, o = {}) { SC.push({ t0, lines, draw, post, ...o }); }
-const AGED = [1.07, 1.0, .88];                                       // the faded colour of the first half
+const AGED = [1.04, 1.0, .93];                                       // the faded paper of the first half
 
-// ---- 01 intro: the photo that can't be held ------------------------------------------------- 0:00 - 0:05.6
+// ---- 01 intro: rain on a window; a photo of the sea that can't be held -------------------------- 0:00 - 0:05.6
 scene(0, [0, 1, 2], (T, lt, P) => {
   sx.fillStyle = '#060606'; sx.fillRect(0, 0, W, H);
-  rain(sx, T, { n: 150, alpha: .26, speed: 1500, len: 60, seed: 4 });
+  bokeh(sx, T, { alpha: .32, drift: .6 });
+  glassDrops(sx, T, { n: 50, seed: 44 });
   const rew = win(T, 2.80, 4.16, .12, .12);
-  const s = 520 * lerp(.92, 1.06, eio(clamp(T / 5.5))) * (1 + .03 * pulse(A.kicks, T));
-  const [dxp, dyp] = drift(T, 10, .2, 3), rot = -.05 + .012 * vnoise(T * .3, 8);
-  sx.save(); sx.translate(W / 2 + dxp, H / 2 - 40 + dyp); sx.rotate(rot);
-  // the print sheds its dots: they lift off the edges and drift away
-  sx.fillStyle = '#e9e6de';
-  for (let i = 0; i < 240; i++) {
+  const w = 640 * lerp(.92, 1.04, eio(clamp(T / 5.5))) * (1 + .02 * pulse(A.kicks, T));
+  const [dxp, dyp] = drift(T, 10, .2, 3), rot = -.04 + .012 * vnoise(T * .3, 8), h = w * 9 / 16;
+  sx.save(); sx.translate(W / 2 + dxp, H / 2 - 60 + dyp); sx.rotate(rot);
+  sx.fillStyle = '#e9e6de';                                           // the print sheds dots off its edges
+  for (let i = 0; i < 220; i++) {
     const b = hash1(i * 3.3) * 5.4, age = T - b; if (age < 0 || age > 2.6) continue;
     const side = Math.floor(hash1(i * 1.1) * 4), u = hash1(i * 7.7) - .5, k = age / 2.6;
-    let x = side < 2 ? u * (s + 60) : (side === 2 ? -1 : 1) * (s / 2 + 30), y = side >= 2 ? u * (s + 130) : (side === 0 ? -1 : 1) * (s / 2 + 30) + 25;
-    x += age * (60 + 110 * hash1(i * 2.9)) + age * age * 30 + Math.sin(age * 2 + i) * 12; y -= age * (35 + 80 * hash1(i * 4.1));
-    sx.globalAlpha = (1 - k) * .9; sx.beginPath(); sx.arc(x, y, (2 + 5 * hash1(i * 5.5)) * (1 - k * .6), 0, TAU); sx.fill();
-  }
-  sx.globalAlpha = 1;
-  sx.fillStyle = '#ece9e1'; sx.fillRect(-s / 2 - 30, -s / 2 - 30, s + 60, s + 140);
-  if (rew > 0) {                                                    // history rewinds: the print slides apart in bands
-    for (let k = 0; k < 8; k++) { const off = vnoise(T * 5 + k * 1.7, 5) * 60 * rew; drawCrop(sx, CV, [380, 260 + k * 620 / 8, 620, 620 / 8], -s / 2 + off, -s / 2 + k * s / 8, s, s / 8 + 1); }
-  } else drawCrop(sx, CV, [380, 260, 620, 620], -s / 2, -s / 2, s, s);
-  // a black marker scrubs the face out, one stroke per beat
-  const k = s / 620, fx = (690 - 380) * k - s / 2, fy = (690 - 260) * k - s / 2;
-  for (let j = 0; j < 3; j++) {
-    const t0 = 4.22 + j * BEAT * .5, p = eio(clamp((T - t0) / .32)); if (p <= 0) continue;
-    const y = fy + (j - 1) * 46 * k, pts = [[fx - 150 * k, y + 10 * k], [fx - 40 * k, y - 8 * k], [fx + 60 * k, y + 6 * k], [fx + 160 * k, y - 10 * k]];
-    brush(sx, j % 2 ? pts.reverse() : pts, 70 * k, p, 11 + j, '#060606', 22);
+    let x = side < 2 ? u * (w + 60) : (side === 2 ? -1 : 1) * (w / 2 + 30), y = side >= 2 ? u * (h + 130) : (side === 0 ? -1 : 1) * (h / 2 + 30) + 30;
+    x += age * (60 + 110 * hash1(i * 2.9)) + age * age * 30; y -= age * (35 + 80 * hash1(i * 4.1));
+    sx.globalAlpha = (1 - k) * .9 * sstep(0, .15, age); sx.beginPath(); sx.arc(x, y, (2 + 5 * hash1(i * 5.5)) * (1 - k * .6), 0, TAU); sx.fill();
   }
   sx.restore();
-  recHud(xx, T, { time: rew > 0 ? 2.8 - (T - 2.8) * 3.2 * eio(clamp((T - 2.8) / .3)) : T, label: rew > 0 ? '◀◀ REWIND' : 'REC', alpha: sstep(.1, .6, T) });
-  if (rew > 0) tracking(xx, T, rew * .8);
-  for (const i of [0, 1, 2]) sub(i, T, { y: 930 });
-}, (T) => ({ col: .45, tint: AGED, scan: .25 + .3 * win(T, 2.8, 4.16, .12, .12), glitch: .12 * win(T, 2.8, 4.16, .1, .2),
-  fade: 1 - sstep(0, .7, T), cell: 6, shift: kickShake(T, .004) }));
+  polaroid(sx, 'sea', W / 2 + dxp, H / 2 - 60 + dyp, w, rot, { draw: (x, y, ww, hh) => {
+    if (rew > 0) for (let k = 0; k < 8; k++) { const off = vnoise(T * 5 + k * 1.7, 5) * 50 * rew; drawCrop(sx, MEM.sea, [0, k * 450 / 8, 800, 450 / 8], x + off, y + k * hh / 8, ww, hh / 8 + 1); }
+    else memDraw(sx, 'sea', x, y, ww, hh);
+    for (let j = 0; j < 3; j++) {                                    // replace me: a black marker crosses the memory out, one stroke per half beat
+      const p = eio(clamp((T - 4.22 - j * BEAT * .5) / .32)); if (p <= 0) continue;
+      const yy = y + hh * (.3 + j * .2), pts = [[x + ww * .08, yy + 8], [x + ww * .4, yy - 10], [x + ww * .65, yy + 6], [x + ww * .93, yy - 8]];
+      brush(sx, j % 2 ? pts.reverse() : pts, 46, p, 11 + j, '#060606', 22);
+    }
+  } });
+  recHud(xx, T, { time: rew > 0 ? 2.8 - (T - 2.8) * 3.2 * eio(clamp((T - 2.8) / .3)) : T, label: rew > 0 ? '◀◀ REWIND' : 'REC', alpha: sstep(.1, .6, T) * .8 });
+  if (rew > 0) tracking(xx, T, rew * .7);
+  shade(930, .7, 130);
+  for (const i of [0, 1, 2]) sub(i, T);
+}, (T) => ({ col: .45, tint: AGED, scan: .15 + .25 * win(T, 2.8, 4.16, .12, .12), glitch: .12 * win(T, 2.8, 4.16, .1, .2), fade: 1 - sstep(0, .7, T), shift: kickShake(T, .004) }));
 
-// ---- 02 rain ------------------------------------------------------------------------------- 0:05.6 - 0:07.0
+// ---- 02 rain over the city ---------------------------------------------------------------------- 0:05.6 - 0:07.0
+const RAIN = { n: 420, alpha: .55, speed: 2600, len: 100, w: 2.4, seed: 2 };
 scene(5.570, [3], (T, lt, P) => {
-  const g = sx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0d0e10'); g.addColorStop(1, '#202225'); sx.fillStyle = g; sx.fillRect(0, 0, W, H);
-  const [dx, dy] = drift(T, 8, .25, 4);
-  coverView(sx, 620 - lt * 10 + dx, 600 + dy, 1.2 + lt * .02, { img: CV_DARK, ox: W * .7 });
-  rain(sx, T, { n: 420, alpha: .55, speed: 2600, len: 100, w: 2.4, seed: 2 });
-  sx.save(); sx.strokeStyle = '#d0d0d0'; sx.lineWidth = 2;               // drops crawling down the glass
-  for (let i = 0; i < 70; i++) { const x = hash1(i * 2.1) * W, y = (hash1(i * 5.3) * H + lt * 70 * hash1(i * 8.1) ** 4) % H, r = 4 + 14 * hash1(i * 3.7) ** 2;
-    sx.globalAlpha = .5; sx.beginPath(); sx.arc(x, y, r, 0, TAU); sx.stroke(); }
-  sx.restore();
+  backdrop(sx, 2, T, { a: [.85, 1.6, 0, 0], moon: [.72, .86, .04] });
+  skyline(sx, T, { base: H + 40, pan: 300 + lt * 40, zoom: 1.05 });
+  rain(sx, T, RAIN);
   const l = L[3], a = lineA(3, T);
   xx.save(); xx.globalAlpha = a;
-  const r1 = revealText(xx, '我心里下起', l.t, l.t + .9, T, 170, 470, { size: 104, ls: 14, align: 'left' });
+  const r1 = revealText(xx, '我心里下起', l.t, l.t + .9, T, 170, 430, { size: 104, ls: 14, align: 'left' });
   xx.restore();
   [...'rain'].forEach((ch, k) => {                                   // the four letters run down like water
     const tk = l.t + .55 + k * .1, d = T - tk; if (d < 0) return;
     const drip = Math.max(0, d - .15) ** 2 * (230 + 110 * k), x = r1.x0 + r1.w + 30 + k * 66, fa = a * clamp(d / .15) * (1 - clamp((drip - 60) / 380));
     xx.save(); xx.globalAlpha = fa * .8; xx.strokeStyle = '#f4f2ec'; xx.lineWidth = 3; xx.lineCap = 'round';
-    xx.beginPath(); xx.moveTo(x + 24, 470); xx.lineTo(x + 24, 470 + drip); xx.stroke(); xx.restore();
-    txt(xx, ch, x, 470 + drip, { font: F.it, size: 120, align: 'left', color: '#f4f2ec', alpha: fa });
+    xx.beginPath(); xx.moveTo(x + 24, 430); xx.lineTo(x + 24, 430 + drip); xx.stroke(); xx.restore();
+    txt(xx, ch, x, 430 + drip, { font: F.it, size: 120, align: 'left', color: '#f4f2ec', alpha: fa });
   });
-  txt(xx, l.tr, 176, 580, { font: F.zh, size: 32, align: 'left', ls: 8, color: 'rgba(236,234,228,.82)', alpha: a * sstep(l.t + .4, l.t + .8, T) });
-}, (T, lt) => ({ col: .45, tint: AGED, cell: 6, ripple: .3 }));
+  txt(xx, l.tr, 176, 540, { font: F.zh, size: 32, align: 'left', ls: 8, color: 'rgba(236,234,228,.82)', alpha: a * sstep(l.t + .4, l.t + .8, T) });
+}, (T, lt) => ({ col: .45, tint: AGED, ripple: .25 }));
 
 // ---- 02b title card: ISOLATED, one letter per cell --------------------------------------------- 0:07.0 - 0:08.2
 function titleCard(T, t0, o = {}) {
   const lt = T - t0, word = 'ISOLATED', bw = 168, bh = 216, gap = 34, tot = word.length * bw + (word.length - 1) * gap;
   for (let k = 0; k < word.length; k++) {
     const ap = clamp((lt - k * .045) / .18); if (ap <= 0) continue;
-    const bob = ring(A.snares, T, 4.5, 9) * 26 * (k % 2 ? 1 : -1) * (o.jit ?? 1);       // the cells rock on the snare and settle
+    const bob = ring(A.snares, T, 4.5, 9) * 26 * (k % 2 ? 1 : -1) * (o.jit ?? 1);
     const x = W / 2 - tot / 2 + k * (bw + gap), y = H / 2 - bh / 2 - 30 + bob + (1 - eout(ap)) * 40;
     xx.save(); xx.globalAlpha *= eout(ap);
     xx.strokeStyle = '#f2f0ea'; xx.lineWidth = 5; xx.strokeRect(x, y, bw, bh);
@@ -643,108 +818,85 @@ function titleCard(T, t0, o = {}) {
 }
 scene(7.046, [4], (T, lt, P) => {
   sx.fillStyle = '#000'; sx.fillRect(0, 0, W, H);
-  rain(sx, T, { n: 200, alpha: .2, speed: 2400, len: 90, seed: 2 });
+  rain(sx, T, { ...RAIN, n: 200, alpha: .2 });
   titleCard(T, 7.046);
   txt(xx, L[4].tr, W / 2, H / 2 + 200, { font: F.zh, size: 34, ls: 18, color: 'rgba(236,234,228,.85)', alpha: sstep(.35, .7, lt) });
-}, (T) => ({ ht: 1, tca: .002 + .003 * pulse(A.snares, T), zoom: 1 + .012 * pulse(A.kicks, T) }));
+}, (T) => ({ ht: 1, zoom: 1 + .012 * pulse(A.kicks, T) }));
 
-// ---- 03 a manga page; every question is a speech balloon --------------------------------------- 0:08.2 - 0:12.2
-const PAGE = [
-  { i: 5, r: [60, 60, 1000, 500], cr: [560, 500, 420, 210], from: [-80, 0], b: [350, 190, 580, 190], tail: [480, 340] },
-  { i: 6, r: [1090, 60, 770, 960], cr: [520, 330, 440, 548], from: [0, -80], b: [1475, 250, 600, 210], tail: [1430, 520] },
-  { i: 7, r: [60, 590, 1000, 430], cr: [540, 760, 420, 180], from: [-80, 0], b: [770, 765, 600, 190], tail: [520, 720] },
-];
+// ---- 03 windows of a sleeping block light up, one for every question ------------------------------- 0:08.2 - 0:12.2
+const WINS = [[1, 1, 5], [4, 2, 6], [5, 0, 7]];
 scene(8.185, [5, 6, 7], (T, lt, P) => {
-  sx.fillStyle = '#050505'; sx.fillRect(0, 0, W, H);
-  const z = 1 + .03 * eio(clamp(lt / 4)), [dx, dy] = drift(T, 6, .2, 6);
-  for (const c of [sx, xx]) c.setTransform(z, 0, 0, z, W / 2 * (1 - z) + dx, H / 2 * (1 - z) + dy);
-  for (const pg of PAGE) {
-    const l = L[pg.i], p = clamp((T - l.t + .05) / .45);
-    panel(sx, ...pg.r, pg.cr, T, { p, from: pg.from, t0: l.t, seed: pg.i });
-  }
-  rain(sx, T, { n: 140, alpha: .16, speed: 2300, len: 80, seed: 5 });
-  for (const c of [sx, xx]) c.setTransform(1, 0, 0, 1, 0, 0);
+  const z = 1.06 + .05 * eio(clamp(lt / 4)), [dx, dy] = drift(T, 10, .2, 6);
+  sx.save(); sx.translate(W / 2 + dx, H / 2 + dy); sx.scale(z, z); sx.translate(-W / 2, -H / 2);
+  facade(sx, T, { on: WINS.map(([c0, r0, i]) => [c0, r0, L[i].t]) });
+  sx.restore();
+  rain(sx, T, { ...RAIN, n: 160, alpha: .22 });
   shade(930, .8, 140);
-  for (const pg of PAGE) sub(pg.i, T);
-}, (T) => ({ col: .45, tint: AGED, cell: 6, shift: kickShake(T, .003) }));
+  for (const [, , i] of WINS) sub(i, T);
+}, (T) => ({ col: .45, tint: AGED, shift: kickShake(T, .003) }));
 
-// ---- 04 the face, the target, painted over ------------------------------------------------------- 0:12.2 - 0:16.4
+// ---- 04 smoke; a red circle round one window far away; then white paint ---------------------------- 0:12.2 - 0:16.4
+const FAR = [11, 2, 1];                                               // the one lit window: building 11, column 2, row 1
 scene(12.181, [8, 9, 10], (T, lt, P) => {
-  sx.fillStyle = '#0b0b0b'; sx.fillRect(0, 0, W, H);
-  const l9 = L[9], l10 = L[10], [dx, dy] = drift(T, 6, .22, 9);
+  const l9 = L[9], l10 = L[10];
   if (T < l9.t) {
-    coverView(sx, 690 + dx, 700 + dy, lerp(1.55, 1.72, eio(clamp((T - 12.181) / 1.3))));
-    shade(950, .75);
-    sub(8, T, {});
-  } else if (T < l10.t) {                                           // concentration lines and a red ink circle round the eye
-    const z = lerp(2.45, 2.75, eio(clamp((T - l9.t) / 1.7)));
-    coverView(sx, 752 + dx * .5, 652 + dy * .5, z);
-    sx.save(); sx.globalAlpha = .9 * sstep(l9.t, l9.t + .25, T); focusLines(sx, W / 2, H / 2, 330, Math.floor(beatAt(T)), { n: 180, w: 8 }); sx.restore();
-    const p = eout(clamp((T - l9.t - .1) / .55));
-    brush(sx, circlePts(W / 2, H / 2, 205, -2.2, -2.2 + TAU * 1.04, 48, .06, 3), 26, p, 5, RED, 18);
-    shade(950, .75);
-    sub(9, T, {});
-  } else {                                                          // u like the fresh: white paint swallows the face
-    coverView(sx, 700 + dx, 690 + dy, 1.5 + (T - l10.t) * .04);
-    const strokes = [[[480, 330], [960, 300], [1480, 360]], [[420, 560], [980, 520], [1520, 600]], [[520, 800], [1000, 760], [1440, 820]]];
-    strokes.forEach((pts, j) => brush(sx, pts, 250, eio(clamp((T - l10.t - j * BEAT * .5) / .32)), 30 + j, '#f1f0ec', 34));
-    shade(950, .6);
-    sub(10, T, {});
+    backdrop(sx, 1, T, { ...INK_DARK, a: [1.25, .35, .78, .3 * eio(clamp(lt / 1.3))] });
+    shade(930, .7);
+    sub(8, T);
+    return;
   }
-}, (T) => ({ col: .4, tint: AGED, cell: 6.5, zoom: 1 + .015 * pulse(A.kicks, T) }), { wipe: .5 });
+  backdrop(sx, 2, T, { a: [.5, 1, 1, 0], moon: [.18, .82, .035] });
+  const u = T < l10.t ? eio(clamp((T - l9.t) / 1.1)) : 1 - .15 * eio(clamp((T - l10.t) / 1.2)), z = lerp(1, 2.2, u);
+  const mk = skyline(sx, T, { base: H + 20, pan: 520, zoom: z, lit: FAR, focus: [...skyMark(FAR[0], FAR[1], FAR[2], H + 20, 520), u] });
+  if (T < l10.t && mk) {                                              // concentration lines close on it, a red pen circles it
+    sx.save(); sx.globalAlpha = .6 * sstep(l9.t + .3, l9.t + .7, T); focusLines(sx, mk[0], mk[1], 240, Math.floor(beatAt(T)), { n: 170, w: 7, color: '#f0f0f0' }); sx.restore();
+    brush(sx, circlePts(mk[0], mk[1], 90, -2.2, -2.2 + TAU * 1.04, 40, .07, 3), 16, eout(clamp((T - l9.t - .5) / .5)), 5, RED, 14);
+  }
+  if (T >= l10.t) {                                                   // u like the fresh: white paint goes over the whole view
+    const strokes = [[[200, 300], [960, 260], [1720, 330]], [[160, 560], [980, 520], [1780, 600]], [[220, 820], [1000, 780], [1700, 840]]];
+    strokes.forEach((pts, j) => brush(sx, pts, 300, eio(clamp((T - l10.t - j * BEAT * .5) / .34)), 30 + j, '#f1f0ec', 36));
+  }
+  shade(930, .7);
+  sub(9, T); sub(10, T);
+}, (T) => ({ col: .4, tint: AGED, zoom: 1 + .012 * pulse(A.kicks, T) }), { wipe: .5 });
 
-// ---- 05 nightmare (negative) ---------------------------------------------------------------------- 0:16.4 - 0:18.1
+// ---- 05 nightmare: ink storms in negative, black spikes on every hit -------------------------------- 0:16.4 - 0:18.1
 const NM_HITS = [...A.snares, ...A.kicks].filter(h => h[0] > 16.38 && h[0] < 18.1).map(h => h[0]).sort((a, b) => a - b);
 scene(16.401, [11], (T, lt, P) => {
-  sx.fillStyle = '#e8e6e0'; sx.fillRect(0, 0, W, H);
-  coverView(sx, 690, 640, 1.25 + eio(clamp(lt / 1.7)) * .08);
+  backdrop(sx, 1, T * 2.2, { a: [1.6, .3, .7, 1.2 + lt * .8], b: [.88, .08, 1.5, 0] });
   NM_HITS.forEach((t, k) => {
     const p = eout(clamp((T - t) / .14)); if (p <= 0) return;
     const a = hash1(k * 3.1) * TAU, cx = W / 2 + (hash1(k * 1.7) - .5) * 1300, cy = H / 2 + (hash1(k * 5.3) - .5) * 700, l = 600 + 700 * hash1(k * 7.1);
     const x0 = cx - Math.cos(a) * l / 2, y0 = cy - Math.sin(a) * l / 2;
     spike(sx, x0, y0, x0 + Math.cos(a) * l * p, y0 + Math.sin(a) * l * p, 22 + 30 * hash1(k * 2.2), (hash1(k * 9.9) - .5) * .3);
   });
-  sub(11, T, { haloColor: 'rgba(0,0,0,.95)' });
-}, (T) => ({ inv: 1, cell: 8, tca: .003 + .003 * pulse(A.snares, T),
-  shift: [ringAt(NM_HITS, T, 5, 9) * .008, ring(A.kicks, T, 4, 9) * .006], zoom: 1 + .02 * pulse(A.kicks, T) }));
+  sub(11, T, { size: 64, haloColor: 'rgba(0,0,0,.95)' });
+}, (T) => ({ inv: 1, cell: 8, shift: [ringAt(NM_HITS, T, 5, 9) * .008, ring(A.kicks, T, 4, 9) * .006], zoom: 1 + .02 * pulse(A.kicks, T) }));
 
-// ---- 05b a tear ------------------------------------------------------------------------------------ 0:18.1 - 0:20.7
+// ---- 05b a pane of glass, rain sliding down it ----------------------------------------------------- 0:18.1 - 0:20.7
 scene(18.103, [12, 13], (T, lt, P) => {
-  sx.fillStyle = '#ddd'; sx.fillRect(0, 0, W, H);
-  const z = 1.6 + lt * .04, [dx, dy] = drift(T, 4, .2, 12);
-  coverView(sx, 700 + dx, 720 + dy, z);
-  const s = z * H / 1000, ex = W / 2 + (742 - 700 - dx) * s, ey = H / 2 + (668 - 720 - dy) * s;
-  const p = clamp((lt - .4) / 2), ty = ey + eio(p) * 150 * s / 1.6;
-  sx.save(); sx.globalAlpha = sstep(.3, .6, lt); sx.fillStyle = '#fff'; sx.strokeStyle = '#111'; sx.lineWidth = 4;
-  sx.beginPath(); sx.moveTo(ex, ty - 34); sx.quadraticCurveTo(ex + 18, ty, ex, ty + 14); sx.quadraticCurveTo(ex - 18, ty, ex, ty - 34); sx.fill(); sx.stroke();
+  sx.fillStyle = '#080808'; sx.fillRect(0, 0, W, H);
+  bokeh(sx, T, { alpha: .55, size: 1.3, drift: .4, seed: 33 });
+  sx.save(); const z = 1.1 + lt * .02; sx.translate(W / 2, H / 2); sx.scale(z, z); sx.translate(-W / 2, -H / 2);
+  glassDrops(sx, lt + 1, { n: 110, size: 1.6, seed: 47 });
   sx.restore();
-  shade(960, .7, 130);
-  for (const i of [12, 13]) sub(i, T, { y: 940, size: 46, trSize: 26 });
-}, (T) => ({ col: .35, tint: AGED, cell: 6 }));
+  shade(940, .7, 130);
+  sub(12, T); sub(13, T);
+}, (T) => ({ col: .35, tint: AGED }));
 
-// ---- 06 following in your shadow --------------------------------------------------------------------- 0:20.7 - 0:23.4
-// the figure stands against a lit wall; its shadows trail behind it on a delay, and when it runs the shadows are left behind
+// ---- 06 following in your shadow: down a long road of street lamps, then running ------------------- 0:20.7 - 0:23.4
 scene(20.675, [14, 15], (T, lt, P) => {
-  const g = sx.createLinearGradient(0, 0, W, 0); g.addColorStop(0, '#9c9a96'); g.addColorStop(.55, '#dcdad5'); g.addColorStop(1, '#efede8');
-  sx.fillStyle = g; sx.fillRect(0, 0, W, H);
-  const l15 = L[15], s = 1.04 * H / 1000;
-  const run = t => eio(clamp((t - l15.t - .35) / .95));
-  const pos = t => { const [dx, dy] = drift(t, 18, .35, 21); return [1260 + dx + run(t) * 1100, H + 6 + dy * .4]; };
-  for (let k = 14; k >= 1; k--) {                                    // the shadow trails behind on a delay, one smooth smear
-    const d = .045 * k, [x, y] = pos(T - d), u = k / 14;
-    drawFig(sx, FIG_SIL, x - k * (34 + 10 * lt), y + k * 3, s * (1 + .012 * k), 735, 1000, { alpha: .2 * (1 - u * .8) * (1 - .6 * run(T - .5)) });
+  const t15 = L[15].t - 20.675, run = Math.max(0, lt - t15 - .2);
+  const s = 7 * lt + 26 * run * run;                                  // walking pace, then it breaks into a run
+  lampRoad(sx, s, { dx: drift(T, 30, .25, 61)[0] });
+  if (run > 0) {                                                      // speed lines from the vanishing point
+    const a = sstep(0, .3, run);
+    for (let i = 0; i < 26; i++) { const ang = hash1(i * 2.3) * TAU, r0 = 260 + 200 * hash1(i * 4.4), r1 = r0 + 500 + 400 * hash1(i * 6.1);
+      inkLine(sx, W / 2 + Math.cos(ang) * r0, 480 + Math.sin(ang) * r0 * .6, W / 2 + Math.cos(ang) * r1, 480 + Math.sin(ang) * r1 * .6, 3 + 4 * hash1(i), 1, i + 70, `rgba(235,235,235,${.45 * a})`); }
   }
-  const [fx, fy] = pos(T), r = run(T);
-  if (r > .02) for (let m = 6; m >= 1; m--) drawFig(sx, FIG, fx - m * 26 * r * (1 - r) * 4, fy, s, 735, 1000, { alpha: .12 });   // motion smear
-  drawFig(sx, FIG, fx, fy, s);
-  if (r > 0 && r < 1) {                                              // speed lines while it runs
-    for (let i = 0; i < 26; i++) { const y = 140 + hash1(i * 4.1) * 760, x0 = hash1(i * 2.3) * 900 + 200, len = 300 + 700 * hash1(i * 7.7);
-      inkLine(sx, x0 + r * 600, y, x0 + r * 600 + len, y, 3 + 5 * hash1(i * 3.3), 1, i + 3, `rgba(10,10,10,${.55 * Math.sin(PI * r)})`); }
-  }
-  shade(930, .55, 130);
-  sub(14, T, { x: 600, y: 925 });
-  sub(15, T, { x: 600, y: 925 });
-}, (T) => ({ col: .45, tint: AGED, cell: 6 }), { wipe: .5 });
+  shade(930, .6, 130);
+  sub(14, T); sub(15, T);
+}, (T, lt) => ({ col: .45, tint: AGED, zoom: 1 + .04 * sstep(L[15].t + .2, L[15].t + 1.2, T) }), { wipe: .5 });
 
 // ---- 07 writing the future on manuscript paper ------------------------------------------------------------- 0:23.4 - 0:30.1
 const GRID = { x0: 260, y0: 150, cell: 100, cols: 14, rows: 8 };
@@ -796,10 +948,11 @@ scene(23.359, [16, 17, 18, 19, 20], (T, lt, P) => {
   }
 }, (T) => ({ ht: .6, cell: 5, col: .75, tint: AGED, grain: .045, paper: [.95, .93, .89] }), { wipe: .5 });
 
+
 // ---- 08 everything turns black and white ------------------------------------------------------------------------ 0:30.1 - 0:31.6
 scene(30.091, [21], (T, lt, P) => {
-  sx.fillStyle = '#cfcfcf'; sx.fillRect(0, 0, W, H);
-  coverView(sx, 560, 520, 1.08 + lt * .03);
+  backdrop(sx, 2, T, { a: [.6, 1, 1, 0], moon: [.66, .8, .05] });
+  skyline(sx, T, { base: H + 30, pan: 900 + lt * 30 });
   const split = eio(clamp(lt / 1.25)) * 1.04 - .02;
   P.split = split;
   const xs = split * W, by = H / 2 - 100, l = L[21];
@@ -809,7 +962,7 @@ scene(30.091, [21], (T, lt, P) => {
     revealText(xx, l.text, l.t, l.t + .6, T, W / 2, H / 2, { size: 100, ls: 18, color: col, halo: false }); xx.restore();
   }
   if (split > 0 && split < 1) { xx.fillStyle = '#fff'; xx.fillRect(xs - 3, 0, 6, H); }
-}, (T, lt) => ({ col: .7, tint: AGED, cell: 6, tca: .002 }));
+}, (T, lt) => ({ col: .7, tint: AGED }));
 
 // ---- 08b stamps ------------------------------------------------------------------------------------------- 0:31.6 - 0:34.7
 function stamp(c, s, x, y, size, rot, t0, T, o = {}) {
@@ -824,11 +977,10 @@ function stamp(c, s, x, y, size, rot, t0, T, o = {}) {
 }
 const STAMP1 = 31.554, STAMP2 = 32.770;
 scene(31.554, [22, 23], (T, lt, P) => {
-  sx.fillStyle = '#f3f3f3'; sx.fillRect(0, 0, W, H);
-  coverView(sx, 640, 600, 1.15 + lt * .02, { alpha: .45 });
+  sx.drawImage(PAPER, 0, 0);
   stamp(xx, '我像是', 430, 260, 70, -.08, STAMP1, T, { box: false });
   stamp(xx, '无赖', 640, 400, 170, -.08, STAMP1 + .02, T);
-  stamp(xx, '我现在', 880, 468, 80, .1, STAMP2, T, { box: false });
+  stamp(xx, '我现在', 905, 520, 80, .1, STAMP2, T, { box: false });
   stamp(xx, '活该', 1260, 720, 270, .1, STAMP2 + .03, T);
 }, (T) => { const st = [STAMP1 + .06, STAMP2 + .09];
   return { bit: 1, ht: 0, grain: .035, shift: [ringAt(st, T, 5, 10) * .012, ringAt(st, T, 6.5, 10) * .01], zoom: 1 + .02 * st.reduce((a, t) => a + (T > t ? Math.exp(-(T - t) * 9) : 0), 0) }; });
@@ -838,7 +990,8 @@ function thread(c, T, t0, o = {}) {
   const p = eout(clamp((T - t0) / 1.8)), sway = Math.sin(T * 1.3) * 22, yEnd = 80 + 470 * p;
   c.save(); c.strokeStyle = RED; c.lineWidth = 5; c.lineCap = 'round';
   c.beginPath(); c.moveTo(W / 2 + 6, -10); c.quadraticCurveTo(W / 2 + sway * .5, yEnd * .5, W / 2 + sway, yEnd); c.stroke();
-  c.fillStyle = RED; c.beginPath(); c.arc(W / 2 + sway, yEnd + 8, 9, 0, TAU); c.fill();
+  c.lineWidth = 2;                                                    // a frayed end
+  for (const k of [-1, 0, 1]) { c.beginPath(); c.moveTo(W / 2 + sway, yEnd); c.quadraticCurveTo(W / 2 + sway + k * 8, yEnd + 12, W / 2 + sway + k * 14, yEnd + 24 - Math.abs(k) * 4); c.stroke(); }
   if (o.flake) { const fp = clamp((T - (t0 + 1.4)) / 1.2), fx = lerp(W / 2 + 240, W / 2 + sway + 10, eio(fp)), fy = lerp(-30, yEnd - 40, eio(fp));
     c.fillStyle = '#fff'; c.beginPath(); c.arc(fx, fy, 7, 0, TAU); c.fill(); }
   c.restore();
@@ -846,7 +999,7 @@ function thread(c, T, t0, o = {}) {
 function stillness(T, i, t0, o = {}) {
   const lt = T - t0;
   sx.fillStyle = '#020202'; sx.fillRect(0, 0, W, H);
-  coverView(sx, 752, 648, 3.6 + lt * .14, { alpha: .42 });
+  backdrop(sx, 1, T * .5, { a: [1, .45, .85, 0], b: [.02, .2, .6, 0], alpha: .9 });
   dust(sx, T, { n: 110, alpha: .55 });
   if (o.snow) snow(sx, T, { n: 220, speed: 45, r: 5, alpha: .85, wind: 4 });
   thread(sx, T, t0, { flake: o.snow });
@@ -855,31 +1008,26 @@ function stillness(T, i, t0, o = {}) {
   xx.save(); xx.globalAlpha = a; revealText(xx, 'i want u know that', l.t + .5, l.e, T, W / 2, 790, { size: 92, font: F.it, ls, k: .6, dur: .3 }); xx.restore();
   txt(xx, l.tr, W / 2, 880, { font: F.zh, size: 28, ls: 10, color: 'rgba(236,234,228,.8)', alpha: a * sstep(l.t + 1, l.t + 1.5, T) });
 }
-scene(34.671, [24], (T, lt, P) => stillness(T, 24, 34.671), () => ({ cell: 5.5, vig: .85, grain: .06 }));
+scene(34.671, [24], (T, lt, P) => stillness(T, 24, 34.671), () => ({ vig: .85, grain: .06 }));
 
 // ---- 10 / 18 choruses ----------------------------------------------------------------------------------------------
-function cardFlip(T, t0, tDrop, v) {
-  const ang = PI * eio(clamp((T - tDrop - .05) / .75)) + .25 * Math.sin(clamp((T - t0) / (tDrop - t0 + .001)) * PI) * (T < tDrop ? 1 : 0);
-  const k = Math.cos(ang), sz = 560 * (1 + .04 * pulse(A.kicks, T));
-  sx.save(); sx.translate(W / 2, H / 2 - 50); sx.scale(k, 1 + .07 * Math.abs(Math.sin(ang)));
-  sx.fillStyle = '#f1efe9'; sx.fillRect(-sz / 2 - 26, -sz / 2 - 26, sz + 52, sz + 52);
-  drawCrop(sx, CV, v === 2 ? [470, 380, 520, 520] : [380, 260, 620, 620], -sz / 2, -sz / 2, sz, sz);
-  if (k < 0) { sx.fillStyle = 'rgba(0,0,0,.25)'; sx.fillRect(-sz / 2, -sz / 2, sz, sz); }
-  sx.restore();
-}
 function chorus(T, b, v) {
   const [l0, l1, l2, l3, l4] = [0, 1, 2, 3, 4].map(k => L[b + k]);
   const tDrop = v === 1 ? 37.651 : 93.46;
   sx.fillStyle = '#030303'; sx.fillRect(0, 0, W, H);
-  if (T < l1.t) {                                                     // u turn around
-    if (T < tDrop + .4) {                                             // the red thread snaps on the drop
-      const d = Math.max(0, T - tDrop), sway = Math.sin(T * 1.3) * 22;
-      sx.save(); sx.strokeStyle = RED; sx.lineWidth = 5; sx.lineCap = 'round';
-      sx.beginPath(); sx.moveTo(W / 2 + 6, -10); sx.lineTo(W / 2 + sway, T < tDrop ? 550 : Math.max(-10, 550 - eout(d / .4) * 560)); sx.stroke();
-      if (T >= tDrop) { sx.beginPath(); sx.moveTo(W / 2 + sway, 560 + d * d * 4000); sx.lineTo(W / 2 + sway + d * 200, 760 + d * d * 4200); sx.stroke(); }
-      sx.restore();
+  if (T < l1.t) {                                                     // u turn around: the whole night swirls round
+    if (T < tDrop) stillness(T, b - 1, v === 1 ? 34.671 : 90.4, { snow: v === 2 });
+    else {
+      const d = T - tDrop;
+      backdrop(sx, 1, T, { a: [1.3, .36, .78, 5.5 * eio(clamp(d / 1.1)) - 1.2], b: [.04, .75, 1.5, 0] });
+      if (d < .5) {                                                  // the red thread snaps
+        const sway = Math.sin(T * 1.3) * 22;
+        sx.save(); sx.strokeStyle = RED; sx.lineWidth = 5; sx.lineCap = 'round';
+        sx.beginPath(); sx.moveTo(W / 2 + 6, -10); sx.lineTo(W / 2 + sway, Math.max(-10, 320 * (1 - ein(d / .35)))); sx.stroke();
+        sx.beginPath(); sx.moveTo(W / 2 + sway, 320 + d * d * 4200); sx.lineTo(W / 2 + sway + d * 160, 550 + d * d * 4400); sx.stroke();
+        sx.restore();
+      }
     }
-    if (T >= tDrop - .01) cardFlip(T, l0.t, tDrop, v);
     const word = 'U TURN AROUND', a = lineA(b, T, .05, .12), tw = measure(xx, word, 210, F.big, 10);
     let x = W / 2 - tw / 2;
     [...word].forEach((ch, k) => {
@@ -888,26 +1036,16 @@ function chorus(T, b, v) {
       x += w;
     });
     txt(xx, l0.tr, W / 2, 1010, { font: F.zh, size: 28, ls: 10, color: 'rgba(236,234,228,.85)', alpha: a });
-  } else if (T < l2.t) {                                             // i following about u: a tunnel of frames
-    const f = (T - l1.t) / BEAT;
-    for (let k = 11; k >= 0; k--) {
-      const kk = k - (f % 1), s = 1.45 * Math.pow(.66, kk); if (s < .03 || s > 3.2) continue;
-      const idx = Math.floor(f) + k, w = 820 * s, h = 560 * s, rot = (hash1(idx * 1.3) - .5) * .3;
-      sx.save(); sx.translate(W / 2 + Math.sin(idx) * 30 * s, H / 2 + Math.cos(idx * 1.7) * 20 * s); sx.rotate(rot); sx.globalAlpha = clamp((3.2 - s) * 1.5) * clamp(s * 6);
-      sx.fillStyle = '#f1efe9'; sx.fillRect(-w / 2 - 20 * s, -h / 2 - 20 * s, w + 40 * s, h + 40 * s);
-      drawCrop(sx, CV, CROPS[idx % CROPS.length], -w / 2, -h / 2, w, h);
-      sx.restore();
-    }
-    const a = lineA(b + 1, T);
-    for (let k = 3; k >= 1; k--) { xx.save(); xx.globalAlpha = a * .55 ** k; revealText(xx, l1.text, l1.t, l1.e, T - k * .05, W / 2 + k * 26, 900 + k * 4, { size: 130, font: F.big, ls: 4, color: '#7a7a7a', halo: false }); xx.restore(); }
-    xx.save(); xx.globalAlpha = a; revealText(xx, l1.text, l1.t, l1.e, T, W / 2, 900, { size: 130, font: F.big, ls: 4, stroke: '#000', lw: 10, color: '#f2f0ea', halo: false }); xx.restore();
-    txt(xx, l1.tr, W / 2, 1012, { font: F.zh, size: 28, ls: 10, color: 'rgba(236,234,228,.85)', alpha: a });
-  } else if (T < l3.t) {                                             // please dont let me forget: one word per screen
+  } else if (T < l2.t) {                                             // i following about u: rings of light, one per beat
+    dust(sx, T, { n: 80, alpha: .5 });
+    ringTunnel(sx, T, l1.t);
+    sub(b + 1, T, { size: 110, font: F.big, ls: 4, y: 905, trGap: 40 });
+  } else if (T < l3.t) {                                             // please dont let me forget: one word per memory
     const words = ['PLEASE', 'DONT', 'LET', 'ME', 'FORGET'], tot = words.join('').length, d = (l3.t - l2.t) * .86;
     let acc = 0, wi = 0, wt = l2.t;
     for (let k = 0; k < words.length; k++) { const t = l2.t + d * acc / tot; if (T >= t) { wi = k; wt = t; } acc += words[k].length + (k === 3 ? 2 : 0); }
-    const cr = CROPS[(wi * 3 + v) % CROPS.length], zz = 1 + .06 * eout(clamp((T - wt) / .6));
-    sx.save(); sx.globalAlpha = .9; sx.translate(W / 2, H / 2); sx.scale(zz, zz); sx.translate(-W / 2, -H / 2); drawCrop(sx, CV, cr, 0, 0, W, H); sx.restore();
+    const zz = 1 + .06 * eout(clamp((T - wt) / .6));
+    sx.save(); sx.translate(W / 2, H / 2); sx.scale(zz, zz); sx.translate(-W / 2, -H / 2); memDraw(sx, MEMS[(wi * 3 + v * 2) % MEMS.length], 0, 0, W, H); sx.restore();
     sx.fillStyle = 'rgba(0,0,0,.35)'; sx.fillRect(0, 0, W, H); shade(1000, .7, 90);
     const w = words[wi], p = clamp((T - wt) / .16), size = wi === 4 ? 360 : 400, tw = measure(xx, w, size, F.big, 12);
     let x = W / 2 - tw / 2;
@@ -917,40 +1055,43 @@ function chorus(T, b, v) {
       x += cw;
     });
     txt(xx, l2.tr, W / 2, 1000, { font: F.zh, size: 30, ls: 10, color: 'rgba(236,234,228,.9)', alpha: lineA(b + 2, T) });
-  } else if (T < l4.t) {                                             // u love: the first red
+  } else if (T < l4.t) {                                             // u love: the first red, ink clouds moving through it
     sx.fillStyle = RED; sx.fillRect(0, 0, W, H);
-    sx.save(); sx.globalCompositeOperation = 'multiply'; coverView(sx, 640, 600, 1.1 + (T - l3.t) * .06); sx.restore();
+    backdrop(sx, 1, T * 1.5, { a: [1.1, .3, .8, .6], b: [1, .25, 1.4, 0], op: 'multiply' });
     const p = clamp((T - l3.t) / .2);
     txt(xx, 'U LOVE', W / 2, H / 2 + 10, { font: F.big, size: 330, ls: 20, color: '#f2f0ea', sc: (1.25 - .25 * eout(p)) * (1 + .04 * pulse(A.kicks, T)), stroke: '#000', lw: 12 });
     txt(xx, l3.tr, W / 2, 900, { font: F.zh, size: 34, ls: 14, color: '#f2f0ea', alpha: lineA(b + 3, T) });
   } else {                                                           // u love me onemore, stuck like a record
     const lt = T - l4.t, kk = pulse(A.kicks, T);
-    if (kk > .2) { sx.save(); sx.globalAlpha = .55 * clamp((kk - .2) * 1.5); drawCrop(sx, CV, CROPS[Math.floor(beatAt(T)) % CROPS.length], 0, 0, W, H); sx.restore(); }
+    if (kk > .2) { sx.save(); sx.globalAlpha = .5 * clamp((kk - .2) * 1.5); memDraw(sx, MEMS[Math.floor(beatAt(T)) % MEMS.length], 0, 0, W, H); sx.restore(); }
     [110, 262, 862, 1014].forEach((y, r) => {
-      const dir = r % 2 ? 1 : -1, tile = measure(xx, 'ONE MORE · ', 150, F.big, 6), off = ((dir * lt * 520) % tile + tile) % tile;
+      const dir = r % 2 ? 1 : -1, tile = measure(xx, 'ONE MORE · ', 150, F.big, 6), off = ((dir * lt * 220) % tile + tile) % tile;
       for (let x = -tile + off; x < W + tile; x += tile) txt(xx, 'ONE MORE · ', x, y, { font: F.big, size: 150, ls: 6, align: 'left', color: 'none', stroke: r % 3 ? '#f2f0ea' : RED, lw: 3, alpha: .75 * sstep(0, .3, lt) });
     });
-    const st = Math.floor(lt / (BEAT / 4)) % 4 === 3 && lt < 1.2;
+    const tw = measure(xx, 'ONE MORE', 250, F.big, 10), w1 = measure(xx, 'ONE ', 250, F.big, 10), x0 = W / 2 - tw / 2;
+    const st = lt < 1.2 ? win(lt % BEAT, BEAT * .75, BEAT, .03, .03) : 0;        // the needle skips: MORE becomes ONE again
     txt(xx, 'U LOVE ME', W / 2, 400, { font: F.big, size: 110, ls: 14, color: '#f2f0ea', alpha: sstep(0, .15, lt) });
-    txt(xx, st ? 'ONE ONE' : 'ONE MORE', W / 2 + (st ? 14 : 0), 578, { font: F.big, size: 250, ls: 10, color: RED, alpha: sstep(.22, .34, lt), sc: 1 + .04 * kk });
+    const al = sstep(.22, .34, lt), sc = 1 + .04 * kk;
+    txt(xx, 'ONE', x0, 578, { font: F.big, size: 250, ls: 10, align: 'left', color: RED, alpha: al, sc });
+    txt(xx, 'MORE', x0 + w1, 578, { font: F.big, size: 250, ls: 10, align: 'left', color: RED, alpha: al * (1 - st), sc });
+    if (st > 0) txt(xx, 'ONE', x0 + w1, 578, { font: F.big, size: 250, ls: 10, align: 'left', color: RED, alpha: al * st, sc });
     txt(xx, l4.tr, W / 2, 722, { font: F.zh, size: 32, ls: 12, color: '#f2f0ea', alpha: sstep(.4, .7, lt) * win(T, l4.t, l4.e, .1, .5) });
   }
-  if (v === 2) snow(xx, T, { n: 170, speed: 160, r: 6, alpha: .9, wind: 30, seed: 8 });
+  if (v === 2) snow(sx, T, { n: 170, speed: 160, r: 6, alpha: .9, wind: 30, seed: 8 });
 }
-const chorusPost = v => T => ({ cell: v === 2 ? 8.5 : 7, shift: kickShake(T, v === 2 ? .007 : .005), zoom: 1 + .03 * pulse(A.kicks, T),
-  tca: .0015 + .004 * pulse(A.snares, T) + (v === 2 ? .002 : 0) });
+const chorusPost = v => T => ({ cell: v === 2 ? 8.5 : 7, shift: kickShake(T, v === 2 ? .007 : .005), zoom: 1 + .03 * pulse(A.kicks, T), tca: .004 * pulse(A.snares, T) });
 scene(37.415, [25, 26, 27, 28, 29], (T) => chorus(T, 25, 1), chorusPost(1));
 
 // ---- 11 interlude: film strip of memories --------------------------------------------------------------------------- 0:46.0 - 0:56.5
 function filmStrip(c, T, t0, o = {}) {
-  const fw = 640, fh = 440, gap = 46, per = fh + gap, scroll = (T - t0) * (o.speed ?? 240), off = scroll % per, base = Math.floor(scroll / per);
+  const fw = 640, fh = 400, gap = 46, per = fh + gap, scroll = (T - t0) * (o.speed ?? 240), off = scroll % per, base = Math.floor(scroll / per);
   c.save(); c.translate(W / 2 + (o.dx || 0), H / 2); c.rotate(o.rot ?? -.07);
   c.fillStyle = '#121212'; c.fillRect(-fw / 2 - 80, -H, fw + 160, H * 2);
   c.fillStyle = '#d9d9d9';
   for (let y = -H - (scroll % 64); y < H; y += 64) { roundRect(c, -fw / 2 - 58, y, 26, 38, 6); c.fill(); roundRect(c, fw / 2 + 32, y, 26, 38, 6); c.fill(); }
   for (let k = -3; k <= 3; k++) {
     const y = k * per - off, idx = base + k;
-    drawCrop(c, CV, CROPS[((idx % CROPS.length) + CROPS.length) % CROPS.length], -fw / 2, y - fh / 2, fw, fh);
+    memDraw(c, MEMS[((idx % MEMS.length) + MEMS.length) % MEMS.length], -fw / 2, y - fh / 2, fw, fh);
     txt(c, `${String(((idx % 36) + 36) % 36).padStart(2, '0')}A`, fw / 2 + 45, y - fh / 2 + 20, { font: F.mono, size: 16, color: '#aaa', rot: PI / 2 });
   }
   c.restore();
@@ -958,9 +1099,9 @@ function filmStrip(c, T, t0, o = {}) {
 scene(46.016, [], (T, lt, P) => {
   sx.fillStyle = '#060606'; sx.fillRect(0, 0, W, H);
   filmStrip(sx, T, 46.016, { dx: drift(T, 14, .2, 33)[0] });
-  petalRain(sx, T, { n: 34 });
-  const bs = barStart(T), tb = beatT(bs), fl = 1 - clamp((T - tb) / .22);
-  if (fl > 0 && T < 55.5) { sx.save(); sx.globalAlpha = eout(fl); drawCrop(sx, CV, CROPS[(bs * 5) % CROPS.length], 0, 0, W, H); sx.restore(); P.flash = Math.max(P.flash, .2 * fl); }
+  petalRain(sx, T, { n: 30 });
+  const bs = barStart(T), tb = beatT(bs), fa = sstep(tb, tb + .05, T) * (1 - sstep(tb + .12, tb + .4, T));
+  if (fa > 0 && T < 55.5) { sx.save(); sx.globalAlpha = fa; memDraw(sx, MEMS[(bs * 5) % MEMS.length], 0, 0, W, H); sx.restore(); }
   const burn = clamp((T - 55.4) / .9);
   if (burn > 0) { const g = sx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, 1300 * eio(burn)); g.addColorStop(0, '#fff'); g.addColorStop(.7, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)'); sx.fillStyle = g; sx.fillRect(0, 0, W, H); }
   let y = 740;
@@ -968,10 +1109,9 @@ scene(46.016, [], (T, lt, P) => {
     xx.save(); xx.globalAlpha = win(T, t0, 55.3, .05, .6); revealText(xx, s, t0, t0 + 1.2, T, 130, y, { size, font: f, ls: 2, align: 'left' }); xx.restore();
     y += size * .9 + 40;
   }
-}, (T) => ({ cell: 6, scan: .15, grain: .06, fadeW: clamp((T - 56.1) / .3) * (1 - clamp((T - 56.45) / .03)) }));
+}, (T) => ({ scan: .12, grain: .06, fadeW: sstep(55.9, 56.3, T) }));
 
-// ---- 12 the cage, drawn in ink ------------------------------------------------------------------------------------- 0:56.5 - 1:08.3
-// bars are hand-inked strokes hatched over the drawing one after another; the close-up is the collar, the cage it already wears
+// ---- 12 the cage: the moon seen through bars inked one after another --------------------------------------------- 0:56.5 - 1:08.3
 const BREAK = 56.48, CAGE = 58.766, V2 = 68.348;
 const BARS = Array.from({ length: 10 }, (_, i) => ({ x: lerp(170, 1750, i / 9) + (hash1(i * 3.1) - .5) * 40, tilt: (hash1(i * 5.7) - .5) * 60, w: 30 + 12 * hash1(i * 2.2), t: CAGE + .05 + i * .085 + hash1(i) * .05 }));
 function inkBars(c, T, sc = 1, tremble = 0) {
@@ -983,99 +1123,89 @@ function inkBars(c, T, sc = 1, tremble = 0) {
   }
   c.restore();
 }
+function cageView(T) {
+  const close = eio(clamp((T - L[32].t + .1) / .5)), z = lerp(1, 1.9, close);
+  if (T < L[34].t) backdrop(sx, 2, T, { a: [.45, .6, 1, 0], moon: [.5, .58, .11], zoom: z });
+  else backdrop(sx, 1, T, { ...INK_DARK, a: [1.3, .36, .8, .2], zoom: z });          // something bitter: ink clouds through the water
+  if (T >= CAGE) inkBars(sx, T, lerp(1, 1.5, close), 2 + 6 * sstep(L[36].t, L[36].t + .8, T) + 4 * Math.abs(ring(A.snares, T, 6, 10)));
+}
 scene(BREAK, [30, 31, 32, 33, 34, 35], (T, lt, P) => {
-  sx.fillStyle = '#060606'; sx.fillRect(0, 0, W, H);
-  const close = T >= L[32].t, [dx, dy] = drift(T, 5, .2, 44);
-  if (close) coverView(sx, 668 + dx, 880 + dy, lerp(2.5, 2.75, eio(clamp((T - L[32].t) / 6.4))));
-  else coverView(sx, 690 + dx, 700 + dy, 1.28 + lt * .012, { alpha: T < CAGE ? .35 + .65 * sstep(57.9, 58.7, T) : 1 });
-  if (T >= L[34].t) {                                                // something bitter: ink clouds sink through the water
-    sx.save();
-    for (let i = 0; i < 7; i++) {
-      const t0 = L[34].t + i * .3, d = T - t0; if (d < 0) continue;
-      const x = 260 + hash1(i * 2.7) * 1400, y = -80 + d * (70 + 40 * hash1(i)), r = 60 + d * 150;
-      const g = sx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(0,0,0,${.55 * clamp(d)})`); g.addColorStop(1, 'rgba(0,0,0,0)');
-      sx.fillStyle = g; sx.fillRect(x - r, y - r, r * 2, r * 2);
-    }
-    sx.restore();
-  }
-  if (T >= CAGE) inkBars(sx, T, close ? 1.5 : 1, 2 + 6 * sstep(L[36].t, L[36].t + .8, T) + 4 * Math.abs(ring(A.snares, T, 6, 10)));
+  cageView(T);
   shade(930, .8, 140);
   if (T < L[31].t) {                                                 // I try to forget you once more: a black brush paints the line out
     sub(30, T, { y: H / 2, size: 72, ls: 14, fo: .05 });
     brush(xx, [[300, H / 2 + 6], [960, H / 2 - 6], [1640, H / 2 + 4]], 170, eio(clamp((T - 57.8) / .75)), 61, '#060606', 40);
   }
-  for (const i of [31, 32, 33, 34]) sub(i, T, { y: 930, size: 56 });
+  for (const i of [31, 32, 33, 34]) sub(i, T);
   if (T >= L[35].t) {
     const l35 = L[35], a = lineA(35, T);
-    xx.save(); xx.globalAlpha = a; revealText(xx, '苦涩的像', l35.t, l35.t + .6, T, 860, 930, { size: 56, ls: 8, align: 'right' }); xx.restore();
+    xx.save(); xx.globalAlpha = a; revealText(xx, '苦涩的像', l35.t, l35.t + .6, T, 860, 925, { size: 58, ls: 8, align: 'right' }); xx.restore();
     [...'mojo'].forEach((ch, k) => { const p = eout(clamp((T - l35.t - .5 - k * .08) / .3)); if (p <= 0) return;
-      txt(xx, ch, 920 + k * 92, 915 + Math.sin(T * 3 + k * 1.3) * 14 + (1 - p) * 20, { font: F.it, size: 150, color: '#f4f2ec', alpha: a * p, rot: Math.sin(T * 2.4 + k) * .1 }); });
+      txt(xx, ch, 920 + k * 92, 910 + vnoise(T * .4, k) * 6 + (1 - p) * 20, { font: F.it, size: 150, color: '#f4f2ec', alpha: a * p, rot: vnoise(T * .3, k + 5) * .04 }); });
   }
-  sub(36, T, {});
-}, (T) => ({ cell: 6, vig: .7, grain: .055, ripple: T >= L[34].t ? .45 * sstep(L[34].t, L[34].t + .8, T) * (1 + .3 * Math.sin(T * 1.7)) : 0,
+  sub(36, T);
+}, (T) => ({ vig: .7, grain: .055, ripple: T >= L[34].t ? .4 * sstep(L[34].t, L[34].t + 1.2, T) : 0, fadeW: 1 - sstep(BREAK, BREAK + .6, T),
   shift: T >= CAGE ? [ring(A.snares, T, 5, 10) * .003, ring(A.kicks, T, 4, 9) * .003] : [0, 0] }));
 
-// ---- 13 the page breaks; then nothing ahead ----------------------------------------------------------------------- 1:08.3 - 1:11.5
+// ---- 13 the page breaks; then a white plain with nothing on it ------------------------------------------------------ 1:08.3 - 1:11.5
 const BREAK_CUTS = [[[0, 260], [1920, 520]], [[760, 0], [1010, 1080]], [[0, 880], [1920, 610]], [[1480, 0], [1330, 1080]]];
 scene(V2, [36, 37], (T, lt, P) => {
-  if (T < L[37].t) {                                                // the caged close-up shatters into manga panels that drift apart
-    sx.fillStyle = '#060606'; sx.fillRect(0, 0, W, H);
-    coverView(sx, 668, 880, 2.75);
-    inkBars(sx, T, 1.5, 8);
-    sub(36, T, {});
+  if (T < L[37].t) {
+    cageView(T);
+    sub(36, T);
     panelBreak(BREAK_CUTS, 14 + 60 * eout(clamp(lt / .5)) + lt * 30, .012 * eout(clamp(lt / .6)));
-  } else {                                                          // the future without you: a blank page, the figure very small
-    const d = T - L[37].t, z = lerp(1.1, 1, eio(clamp(d / 2.2)));
-    const g = sx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#f0eee9'); g.addColorStop(.7, '#e6e4df'); g.addColorStop(1, '#bfbdb8'); sx.fillStyle = g; sx.fillRect(0, 0, W, H);
-    sx.save(); sx.translate(W / 2, H / 2); sx.scale(z, z); sx.translate(-W / 2, -H / 2);
-    drawFig(sx, FIG, 380, H + 4, .33 * H / 1000);
-    sx.restore();
-    sub(37, T, { x: 1180, y: 905, size: 62, ls: 12, color: '#0d0d0d', haloColor: 'rgba(245,244,240,.9)' });
-    txt(xx, '未来', 1560, 250, { font: F.zh, size: 38, ls: 16, color: '#7a7a7a', alpha: sstep(.9, 1.6, d) * lineA(37, T) });
+  } else {                                                           // the future without you: an empty plain, one lamp a long way off
+    const d = T - L[37].t, z = lerp(1.12, 1, eio(clamp(d / 2.2)));
+    backdrop(sx, 4, T, { a: [.48, 0, 0, 0], zoom: z });
+    const k = z, hx = W * .7, hy = H * .52;
+    inkLine(sx, hx, hy + 2, hx, hy - 70 * k, 3, 1, 5, '#151515'); inkLine(sx, hx, hy - 70 * k, hx - 18 * k, hy - 70 * k, 2, 1, 6, '#151515');
+    sub(37, T, { color: '#0d0d0d', haloColor: 'rgba(245,244,240,.9)', trColor: 'rgba(30,30,30,.85)' });
+    txt(xx, '未来', hx, hy - 120 * k, { font: F.zh, size: 38, ls: 16, color: '#5a5a5a', alpha: sstep(.9, 1.6, d) * lineA(37, T) });
   }
-}, (T) => ({ cell: 6, grain: .05, fadeW: T < L[37].t ? sstep(L[37].t - .35, L[37].t, T) : 0 }));
+}, (T) => ({ grain: .05, fadeW: T < L[37].t ? sstep(L[37].t - .35, L[37].t, T) : 0 }));
 
 // ---- 13b memories hang like a wind chime; then the cut --------------------------------------------------------------- 1:11.5 - 1:14.3
 const CUT = beatT(104);
-const CHIME = [[400, 150, 0, 230, 300], [660, 260, 3, 220, 290], [930, 120, 1, 250, 330], [1200, 230, 2, 220, 290], [1470, 170, 7, 230, 300]];
+const CHIME = [[400, 150, 'sea', 300], [660, 260, 'rose', 280], [930, 120, 'city', 320], [1200, 230, 'lamps', 280], [1470, 170, 'snow', 300]];
 scene(71.549, [38], (T, lt, P) => {
-  sx.fillStyle = '#050505'; sx.fillRect(0, 0, W, H);
-  coverView(sx, 640, 620, 1.2 + lt * .03, { img: CV_DARK, alpha: .45 });
+  backdrop(sx, 1, T * .6, { a: [1, .45, .85, 0], b: [.02, .22, .6, 0] });
   inkLine(sx, 260, 82, 1660, 78, 7, 1, 71, '#d8d8d8');
-  CHIME.forEach(([x, len, ci, w, h], i) => {
-    const a = .06 * Math.sin(T * 2.5 + i * 1.3) + .03 * Math.sin(T * 4.1 + i * 2.1) + .05 * ring(A.hats, T, 2.5, 3);
+  CHIME.forEach(([x, len, nm, w], i) => {
+    const h = w * 9 / 16, a = .06 * Math.sin(T * 2.5 + i * 1.3) + .03 * Math.sin(T * 4.1 + i * 2.1) + .05 * ring(A.hats, T, 2.5, 3);
     sx.save(); sx.translate(x, 80); sx.rotate(a);
     sx.strokeStyle = '#cfcfcf'; sx.lineWidth = 2; sx.beginPath(); sx.moveTo(0, 0); sx.lineTo(0, len); sx.stroke();
     sx.fillStyle = '#f1efe9'; sx.fillRect(-w / 2 - 10, len, w + 20, h + 20);
-    drawCrop(sx, CV, CROPS[ci], -w / 2, len + 10, w, h);
-    sx.lineWidth = 2; sx.strokeStyle = '#d0d0d0';                    // a thin glass rod under each panel
-    sx.beginPath(); sx.moveTo(0, len + h + 20); sx.lineTo(0, len + h + 60); sx.stroke();
-    sx.strokeRect(-7, len + h + 60, 14, 120);
+    memDraw(sx, nm, -w / 2, len + 10, w, h);
+    sx.strokeStyle = '#d0d0d0'; sx.beginPath(); sx.moveTo(0, len + h + 20); sx.lineTo(0, len + h + 60); sx.stroke(); sx.strokeRect(-7, len + h + 60, 14, 120);
     sx.restore();
   });
-  sub(38, T, { ls: 14, k: .8 });
+  sub(38, T, { k: .8 });
   if (T >= CUT - .1) {
     const p0 = [140, 960], p1 = [1780, 160], lp = eout(clamp((T - CUT + .1) / .1));
     if (T < CUT + .02) { xx.save(); xx.strokeStyle = '#fff'; xx.lineWidth = 10; xx.lineCap = 'round'; xx.beginPath(); xx.moveTo(p0[0], p0[1]); xx.lineTo(lerp(p0[0], p1[0], lp), lerp(p0[1], p1[1], lp)); xx.stroke(); xx.restore(); }
     else sliceLayers(p0, p1, 70 * eout(clamp((T - CUT) / .6)), RED);
   }
-}, (T) => ({ cell: 6, flash: T > CUT ? .55 * Math.exp(-(T - CUT) * 12) : 0, shift: [0, T > CUT ? ringAt([CUT], T, 6, 8) * .01 : 0] }));
+}, (T) => ({ flash: T > CUT ? .55 * Math.exp(-(T - CUT) * 12) : 0, shift: [0, T > CUT ? ringAt([CUT], T, 6, 8) * .01 : 0] }));
 
-// ---- 13c replay: it leaves, rewinds, leaves again ------------------------------------------------------------------- 1:14.3 - 1:17.1
+// ---- 13c replay: the memory crumbles, rewinds, crumbles again ------------------------------------------------------- 1:14.3 - 1:17.1
 scene(74.314, [39], (T, lt, P) => {
-  const g = sx.createLinearGradient(0, 0, W, 0); g.addColorStop(0, '#a7a5a1'); g.addColorStop(.6, '#dddbd6'); g.addColorStop(1, '#ecebe6'); sx.fillStyle = g; sx.fillRect(0, 0, W, H);
-  const s = 1.04 * H / 1000, fx = 1180, fy = H + 6;
+  sx.fillStyle = '#070707'; sx.fillRect(0, 0, W, H);
+  bokeh(sx, T, { alpha: .25, drift: .3, seed: 52 });
   let prog, rew = 0;
   if (lt < .95) prog = eio(lt / .95);
   else if (lt < 1.35) { rew = 1; prog = 1 - eio((lt - .95) / .4); }
   else if (lt < 2.4) prog = eio((lt - 1.35) / 1.05);
   else prog = 1;
-  if (prog < 1) crumble(sx, prog, fx, fy, s, rew ? 7 : 3);
-  if (rew) { sx.save(); sx.fillStyle = '#fff'; for (let i = 0; i < 14; i++) { const y = ((i * 97 + lt * 900) % H); sx.globalAlpha = .35; sx.fillRect(0, y, W, 3 + 6 * hash1(i)); } sx.restore(); tracking(xx, T, .7); }
-  recHud(xx, T, { label: rew ? '◀◀ REWIND' : `▶ REPLAY ×${lt < 1.35 ? 1 : 2}`, time: rew ? 74.314 + .95 - (lt - .95) * 3 : 74.314 + (lt < 1.35 ? lt : lt - 1.35) });
+  const w = 900, h = w * 9 / 16, x = W / 2 - w / 2, y = H / 2 - h / 2 - 50;
+  if (prog < 1) {
+    sx.save(); sx.globalAlpha = 1 - prog; sx.fillStyle = '#ece9e1'; sx.fillRect(x - 24, y - 24, w + 48, h + 100); sx.restore();
+    crumbleImg(sx, MEM.sea, x, y, w, h, prog, rew ? 7 : 3);
+  }
+  if (rew) { sx.save(); sx.fillStyle = '#fff'; for (let i = 0; i < 14; i++) { const yy = ((i * 97 + lt * 900) % H); sx.globalAlpha = .3; sx.fillRect(0, yy, W, 3 + 6 * hash1(i)); } sx.restore(); tracking(xx, T, .6); }
+  recHud(xx, T, { label: rew ? '◀◀ REWIND' : `▶ REPLAY ×${lt < 1.35 ? 1 : 2}`, time: rew ? 74.314 + .95 - (lt - .95) * 3 : 74.314 + (lt < 1.35 ? lt : lt - 1.35), alpha: .8 });
   shade(925, .55, 120);
-  sub(39, T, {});
-}, (T, lt) => { const r = lt > .95 && lt < 1.35 ? 1 : 0; return { cell: 6, scan: .15 + .4 * r, glitch: .12 * r, tca: .002 + .004 * r }; });
+  sub(39, T);
+}, (T, lt) => { const r = lt > .95 && lt < 1.35 ? 1 : 0; return { scan: .1 + .35 * r, glitch: .12 * r }; });
 
 // ---- 14 i don't understand ------------------------------------------------------------------------------------------- 1:17.1 - 1:19.6
 scene(77.110, [40], (T, lt, P) => {
@@ -1087,134 +1217,112 @@ scene(77.110, [40], (T, lt, P) => {
     txt(xx, '不懂', x, y, { font: F.zhb, size, rot, sc: 1.15 - .15 * p, color: k % 3 === 0 ? 'none' : (k % 3 === 1 ? '#f2f0ea' : '#777'), stroke: k % 3 === 0 ? '#f2f0ea' : undefined, lw: 3, alpha: p * .85 });
   }
   sub(40, T, { y: H / 2, size: 84, ls: 10, stroke: '#000', lw: 18 });
-}, (T) => ({ ht: 0, tca: .002 + .003 * pulse(A.snares, T) }));
+}, (T) => ({ ht: 0 }));
 
-// ---- 14b you don't care: the figure alone in the dark, pushing in very slowly ------------------------------------------- 1:19.6 - 1:22.3
+// ---- 14b you don't care: clouds drift across the moon, nothing else happens --------------------------------------------- 1:19.6 - 1:22.3
 scene(79.636, [41, 42], (T, lt, P) => {
-  sx.fillStyle = '#050505'; sx.fillRect(0, 0, W, H);
-  const [dx, dy] = drift(T, 6, .2, 77), z = lerp(1.0, 1.08, eio(clamp(lt / 2.6)));
-  drawFig(sx, FIG, W / 2 + 120 + dx, H + 60 + dy, z * H / 1000, 735, 1000, { alpha: .55 });
-  shade(930, .8, 140);
+  backdrop(sx, 2, T * 3, { a: [.75, 1.4, 1, 0], moon: [.5, .6, .07], zoom: 1 + lt * .03 });
+  shade(930, .7, 140);
   sub(41, T); sub(42, T);
-}, (T) => ({ cell: 6, grain: .045, vig: .8 }), { wipe: .5 });
+}, (T) => ({ grain: .045, vig: .75 }), { wipe: .5 });
 
-// ---- 15 the bouquet thrown into the sea: red petals into black water -------------------------------------------------- 1:22.3 - 1:26.3
+// ---- 15 the bouquet thrown into the sea --------------------------------------------------------------------------------- 1:22.3 - 1:26.3
 const IMPACT = beatT(119), HZ = 600;
-function rose(c, x, y, r, rot, seed) {
-  c.save(); c.translate(x, y); c.rotate(rot);
-  for (const [n, k, off] of [[7, 1, 0], [6, .72, .45], [5, .48, .2], [3, .26, .9]]) for (let j = 0; j < n; j++) {
-    const a = j / n * TAU + off + seed, sc = r / 34 * k;
-    c.save(); c.rotate(a); petal(c, 0, -2, sc, 0, .35 * Math.sin(seed * 3 + j), k < .5 ? '#a50c22' : RED); c.restore();
-  }
-  c.fillStyle = '#5e0612'; c.beginPath(); c.arc(0, 0, r * .12, 0, TAU); c.fill();
-  c.restore();
-}
 const ROSES = [[0, 0, 70], [-95, -30, 60], [92, -38, 62], [-50, 62, 58], [60, 66, 56], [-8, -96, 54], [130, 40, 46], [-135, 45, 44]];
 const BQ = Array.from({ length: 56 }, (_, i) => { const a = hash1(i * 2.3) * TAU, r = Math.sqrt(hash1(i * 4.7)) * 120; return { x: Math.cos(a) * r, y: Math.sin(a) * r * .8, s: .9 + .8 * hash1(i * 1.9), rot: hash1(i * 6.1) * TAU, sp: hash1(i * 8.3) * TAU }; });
 scene(82.276, [43, 44, 45], (T, lt, P) => {
-  const g = sx.createLinearGradient(0, 0, 0, HZ); g.addColorStop(0, '#050505'); g.addColorStop(1, '#2c2c2c'); sx.fillStyle = g; sx.fillRect(0, 0, W, HZ);
-  sx.fillStyle = '#0b0b0b'; sx.fillRect(0, HZ, W, H - HZ);
-  for (let i = 0; i < 70; i++) {                                    // water drawn as long thin ink lines
-    const z = hash1(i * 3.1), y = HZ + 8 + (H - HZ) * z * z, len = 60 + 420 * z, x = ((hash1(i * 7.3) * W + T * (12 + 30 * z)) % (W + 400)) - 200;
-    inkLine(sx, x, y, x + len, y, 1.5 + 3.5 * z, 1, i + 90, `rgba(225,225,225,${.25 + .45 * z})`);
-  }
+  backdrop(sx, 3, T, { a: [1 - HZ / H, .35, 1, 0], moon: [.62, .78, .045] });
   const ix = 960;
-  if (T < IMPACT) {                                                 // the bouquet tumbles down as one cluster
+  if (T < IMPACT) {
     const p = clamp((T - 82.276) / (IMPACT - 82.276)), by = lerp(-260, HZ - 10, p * p), bx = ix + Math.sin(p * 2) * 70, rot = p * 1.6;
-    for (const [i, [qx, qy, r]] of ROSES.entries()) { const x = qx * Math.cos(rot) - qy * Math.sin(rot), y = qx * Math.sin(rot) + qy * Math.cos(rot);
-      rose(sx, bx + x, by + y, r, rot + i, i * 1.7); }
+    for (const [i, [qx, qy, r]] of ROSES.entries()) { const x = qx * Math.cos(rot) - qy * Math.sin(rot), y = qx * Math.sin(rot) + qy * Math.cos(rot); rose(sx, bx + x, by + y, r, rot + i, i * 1.7); }
   } else {
     const d = T - IMPACT;
-    sx.save(); sx.strokeStyle = '#eeeeee';                            // rings spreading out from where it went in
-    for (let k = 0; k < 6; k++) { const rk = (d - k * .22) * 380 * (1 - .12 * d); if (rk <= 0) continue; sx.globalAlpha = .8 * clamp(1 - rk / 1400); sx.lineWidth = 2.5;
+    sx.save(); sx.strokeStyle = '#eeeeee';
+    for (let k = 0; k < 6; k++) { const rk = 1400 * eout(clamp((d - k * .22) / 2.6)); if (rk <= 0) continue; sx.globalAlpha = .75 * clamp(1 - rk / 1400); sx.lineWidth = 2.5;
       sx.beginPath(); sx.ellipse(ix, HZ + 16, rk, rk * .1, 0, 0, TAU); sx.stroke(); }
     sx.restore();
-    for (const [i, q] of BQ.entries()) {                             // petals scatter on the surface, then go under
+    for (const [i, q] of BQ.entries()) {
       const a = Math.atan2(q.y, q.x), sp = 260 + 380 * hash1(i * 5.5), r = sp * (1 - Math.exp(-d * 1.6)) / 1.6;
-      const x = ix + q.x * .6 + Math.cos(a) * r * 1.8, y = HZ + 14 + Math.sin(a) * r * .22 + d * 18 * hash1(i);
-      const sink = clamp((d - .6 - hash1(i * 3.7) * 1.5) / 1.2);
+      const x = ix + q.x * .6 + Math.cos(a) * r * 1.8, y = HZ + 14 + Math.sin(a) * r * .22 + d * 18 * hash1(i), sink = clamp((d - .6 - hash1(i * 3.7) * 1.5) / 1.2);
       sx.save(); sx.globalAlpha = 1 - sink * .85; petal(sx, x, y + sink * 40, q.s * 1.2 * (1 - sink * .3), q.rot + d * .3, q.sp + d * .8, sink > .3 ? '#8c0b1d' : RED); sx.restore();
     }
-    if (d < 1.1) { sx.save(); sx.fillStyle = '#f2f2f2';               // the splash
+    if (d < 1.1) { sx.save(); sx.fillStyle = '#f2f2f2';
       for (let i = 0; i < 40; i++) { const vx = (hash1(i * 2.1) - .5) * 800, vy = -(360 + 700 * hash1(i * 4.9)), x = ix + vx * d, y = HZ + vy * d + 1500 * d * d;
-        if (y > HZ + 16) continue; sx.beginPath(); sx.ellipse(x, y, 3 + 3 * hash1(i * 6.6), 5 + 6 * hash1(i * 6.6), Math.atan2(vy + 3000 * d, vx), 0, TAU); sx.fill(); }
+        if (y > HZ + 16) continue; sx.globalAlpha = 1 - d / 1.1; sx.beginPath(); sx.ellipse(x, y, 3 + 3 * hash1(i * 6.6), 5 + 6 * hash1(i * 6.6), Math.atan2(vy + 3000 * d, vx), 0, TAU); sx.fill(); }
       sx.restore(); }
   }
-  sub(43, T, { y: 170, size: 62, ls: 12 });
-  sub(44, T, { ls: 12 });
-  sub(45, T, { ls: 16 });
-}, (T) => ({ cell: 6, ripple: T > IMPACT ? .3 * Math.exp(-(T - IMPACT) * .7) : 0, flash: T > IMPACT ? .3 * Math.exp(-(T - IMPACT) * 10) : 0,
+  sub(43, T); sub(44, T); sub(45, T);
+}, (T) => ({ ripple: T > IMPACT ? .3 * Math.exp(-(T - IMPACT) * .7) : 0, flash: T > IMPACT ? .3 * Math.exp(-(T - IMPACT) * 10) : 0,
   shift: [0, T > IMPACT ? ringAt([IMPACT], T, 5, 7) * .008 : 0] }), { wipe: .5 });
 
-// ---- 16 delete the only one: the print's dots shrink away to blank paper ------------------------------------------------ 1:26.3 - 1:27.9
+// ---- 16 delete the only one: the last rose, its dots shrinking away to blank paper -------------------------------------- 1:26.3 - 1:27.9
 const ERASE0 = 86.85;
 scene(86.294, [46], (T, lt, P) => {
   sx.fillStyle = '#ecebe7'; sx.fillRect(0, 0, W, H);
-  const z = 1 + .03 * eio(clamp(lt / 1.6)), sz = 640 * z, x0 = W / 2 - sz / 2, y0 = H / 2 - sz / 2 + 50;
-  sx.fillStyle = '#0a0a0a'; sx.fillRect(x0 - 8, y0 - 8, sz + 16, sz + 16);
-  drawCrop(sx, CV, [180, 180, 820, 820], x0, y0, sz, sz);
+  const z = 1 + .03 * eio(clamp(lt / 1.6)), w = 900 * z, h = w * 9 / 16, x0 = W / 2 - w / 2, y0 = H / 2 - h / 2 + 60;
+  sx.fillStyle = '#0a0a0a'; sx.fillRect(x0 - 8, y0 - 8, w + 16, h + 16);
+  memDraw(sx, 'rose', x0, y0, w, h);
   const l = L[46];
   xx.save(); xx.globalAlpha = lineA(46, T);
   const r = revealText(xx, l.text, l.t, l.t + .7, T, W / 2, 150, { size: 64, ls: 14, color: '#0d0d0d', haloColor: 'rgba(245,244,240,.9)' });
-  const wy = measure(xx, '删掉曾经的', 64, F.lyr, 14);
-  inkLine(xx, r.x0 + wy - 10, 156, r.x0 + r.w + 6, 146, 9, eio(clamp((T - 86.9) / .3)), 81, RED);
+  inkLine(xx, r.x0 + measure(xx, '删掉曾经的', 64, F.lyr, 14) - 10, 156, r.x0 + r.w + 6, 146, 9, eio(clamp((T - 86.9) / .3)), 81, RED);
   xx.restore();
   P.erode = eio(clamp((T - ERASE0) / .95));
-}, (T) => ({ cell: 6, grain: .04 }), { wipe: .5 });
+}, (T) => ({ grain: .04 }), { wipe: .5 });
 
 // ---- 16b nothing left / 16c yuki ---------------------------------------------------------------------------------------- 1:27.9 - 1:30.4
 scene(87.922, [47], (T, lt, P) => {
   sx.fillStyle = '#ecebe7'; sx.fillRect(0, 0, W, H);
   sub(47, T, { y: H / 2, size: 46, ls: 16, font: F.zh, color: '#1a1a1a', halo: false });
-}, () => ({ cell: 5, grain: .035, vig: .3 }));
+}, () => ({ grain: .035, vig: .3 }));
 scene(89.294, [48], (T, lt, P) => {
   const b = 1 - eio(clamp(lt / .7)), v = Math.round(lerp(10, 236, b));
   sx.fillStyle = `rgb(${v},${v},${v - 2})`; sx.fillRect(0, 0, W, H);
   const fc = Math.round(lerp(255, 120, b));
-  snow(sx, T, { n: Math.round(40 + 160 * clamp(lt / 1)), speed: 70, r: 6, color: `rgb(${fc},${fc},${fc})`, alpha: .95, wind: 6 });
-  const col = b > .5 ? '#151515' : '#f2f0ea', a = lineA(48, T, .1, .05);
+  snow(sx, T, { n: 200, speed: 45, r: 5, color: `rgb(${fc},${fc},${fc})`, alpha: .95 * sstep(0, .6, lt), wind: 4 });
+  const k = sstep(.35, .65, b), tc = Math.round(lerp(242, 21, k)), col = `rgb(${tc},${tc},${tc})`, a = lineA(48, T, .1, .05);
   txt(xx, '下段', W / 2 - 300, 400, { font: F.zh, size: 34, ls: 14, color: col, alpha: a * sstep(0, .2, lt) });
   txt(xx, 'back to you,', W / 2 - 40, 470, { font: F.it, size: 96, color: col, alpha: a * sstep(.15, .35, lt) });
   txt(xx, 'yuki', W / 2 - 40, 650, { font: F.it, size: 250, color: col, alpha: a * sstep(.4, .65, lt) });
   txt(xx, '雪', W / 2 + 290, 600, { font: F.brush, size: 120, color: RED, alpha: a * sstep(.55, .8, lt) });
-}, () => ({ cell: 5.5, grain: .04 }));
-scene(90.400, [49], (T, lt, P) => stillness(T, 49, 90.4, { snow: true }), () => ({ cell: 5.5, vig: .85, grain: .06 }));
+}, () => ({ grain: .04 }));
+scene(90.400, [49], (T, lt, P) => stillness(T, 49, 90.4, { snow: true }), () => ({ vig: .85, grain: .06 }));
 scene(93.237, [50, 51, 52, 53, 54], (T) => chorus(T, 50, 2), chorusPost(2));
 
 // ---- 19 montage: everything again, one beat each -------------------------------------------------------------------------------- 1:41.8 - 1:53.0
 const MONT = 101.83, OUTRO = beatT(161);
-const MOTIFS = [5.9, 9.5, 14.2, 16.9, 21.2, 24.8, 28.0, 32.95, 39.2, 43.5, 48.5, 60.4, 66.3, 68.6, 73.5, 75.6, 78.0, 80.6, 84.0, 87.2];  // each sample stays inside its scene for the whole cut
+const MOTIFS = [5.9, 9.5, 14.2, 16.9, 19.2, 21.2, 24.8, 32.95, 39.2, 43.5, 48.5, 60.4, 66.3, 68.6, 73.5, 75.6, 78.0, 80.6, 84.0, 87.2];  // each sample stays inside its scene for the whole cut
 scene(MONT, [], (T, lt, P) => {
   const b = (T - MONT) / BEAT, slot = b < 8 ? Math.floor(b) : b < 14 ? 8 + Math.floor((b - 8) * 2) : -1;
   if (slot < 0) {                                                     // the last two beats: the title again
     sx.fillStyle = '#000'; sx.fillRect(0, 0, W, H); snow(sx, T, { n: 160, speed: 120, r: 5, alpha: .8 });
     titleCard(T, MONT + 14 * BEAT, { credits: false, jit: 1.5 });
-    Object.assign(P, { ht: 1, tca: .004, zoom: 1 + .02 * pulse(A.kicks, T) });
+    Object.assign(P, { ht: 1, zoom: 1 + .02 * pulse(A.kicks, T) });
     return;
   }
   const t0 = b < 8 ? MONT + slot * BEAT : MONT + 8 * BEAT + (slot - 8) * BEAT / 2;
   const ts = MOTIFS[slot % MOTIFS.length] + (T - t0) * .7, sc = sceneAt(ts);
   Object.assign(P, POST0, sc.post ? sc.post(ts, ts - sc.t0) : {}, { col: 0, split: -1, fade: 0, fadeW: 0 });
   sc.draw(ts, ts - sc.t0, P);
-  P.flash = Math.max(P.flash, .4 * Math.exp(-(T - t0) * 14), .2 * pulse(A.kicks, T));
+  P.flash = Math.max(P.flash, .2 * Math.exp(-(T - t0) * 14));
   const k = kickShake(T, .004); P.shift = [P.shift[0] + k[0], P.shift[1] + k[1]];
 }, () => ({}));
 
-// ---- 19b outro: snow on the real drawing ------------------------------------------------------------------------------------------- 1:53.0 - end
+// ---- 19b outro: snow, and the album sleeve at last -------------------------------------------------------------------------------- 1:53.0 - end
 scene(OUTRO, [], (T, lt, P) => {
-  sx.fillStyle = '#d8d8d8'; sx.fillRect(0, 0, W, H);
-  const p = eio(clamp(lt / 8.5));
-  coverView(sx, lerp(752, 520, p), lerp(648, 520, p), lerp(3.3, 1.0, p));
-  snow(xx, T, { n: 220, speed: 70, r: 6, color: '#fbfbfb', stroke: 'rgba(30,30,30,.55)', alpha: 1, wind: 10, seed: 5 });
-  const a = win(T, OUTRO + 3.4, DUR - 1.2, .9, 1.4);
-  if (a > 0) {
-    xx.save(); xx.globalAlpha = a * .82; xx.fillStyle = '#f2f0ea'; xx.fillRect(140, 330, 700, 410); xx.restore();
-    txt(xx, 'Isolated', 190, 450, { font: F.it, size: 150, align: 'left', color: '#111', alpha: a });
-    xx.fillStyle = RED; xx.globalAlpha = a; xx.fillRect(196, 530, 220 * eio(clamp((T - OUTRO - 3.6) / .8)), 8); xx.globalAlpha = 1;
-    txt(xx, 'YuKIluv7 / dangao_w', 196, 600, { font: F.mono, size: 34, align: 'left', ls: 2, color: '#111', alpha: a });
-    txt(xx, 'De4thpain · 2026', 196, 660, { font: F.mono, size: 26, align: 'left', ls: 4, color: '#444', alpha: a });
+  backdrop(sx, 2, T, { a: [.4, .6, 1, 0], moon: [.25, .75, .05] });
+  snow(sx, T, { n: 260, speed: 55, r: 6, alpha: .95, wind: 8, seed: 5 });
+  const p = eio(clamp(lt / 6)), sz = lerp(560, 640, p), x = W * .66 - sz / 2, y = H / 2 - sz / 2, a = sstep(.5, 2.5, lt);
+  sx.save(); sx.globalAlpha = a; sx.fillStyle = '#000'; sx.fillRect(x + 18, y + 18, sz, sz); sx.drawImage(CVH, x, y, sz, sz); sx.restore();
+  const ca = win(T, OUTRO + 3.4, DUR - 1.2, .9, 1.4);
+  if (ca > 0) {
+    txt(xx, 'Isolated', 170, 430, { font: F.it, size: 150, align: 'left', color: '#f2f0ea', alpha: ca });
+    xx.fillStyle = RED; xx.globalAlpha = ca; xx.fillRect(176, 510, 220 * eio(clamp((T - OUTRO - 3.6) / .8)), 8); xx.globalAlpha = 1;
+    txt(xx, 'YuKIluv7 / dangao_w', 176, 580, { font: F.mono, size: 34, align: 'left', ls: 2, color: '#e6e4de', alpha: ca });
+    txt(xx, 'De4thpain · 2026', 176, 640, { font: F.mono, size: 26, align: 'left', ls: 4, color: '#a8a6a0', alpha: ca });
   }
-}, (T) => { const lt = T - OUTRO; return { ht: lerp(1, .1, eio(clamp((lt - 1) / 7))), cell: lerp(7, 4, clamp(lt / 8)), grain: .035, vig: .5, fade: sstep(DUR - 2.4, DUR - .25, T) }; });
+}, (T) => { const lt = T - OUTRO; return { ht: lerp(1, .35, eio(clamp((lt - 2) / 6))), grain: .035, vig: .6, fade: sstep(DUR - 2.4, DUR - .25, T) }; });
 
 // ======================================================================== frame
 const sceneAt = t => { let s = SC[0]; for (const c of SC) if (t >= c.t0) s = c; return s; };
