@@ -1167,7 +1167,7 @@ scene(93.237, [50, 51, 52, 53, 54], (T) => chorus(T, 50, 2), chorusPost(2));
 
 // ---- 19 montage: everything again, one beat each -------------------------------------------------------------------------------- 1:41.8 - 1:53.0
 const MONT = 101.83, OUTRO = beatT(161);
-const MOTIFS = [5.9, 9.5, 14.2, 16.9, 21.2, 24.8, 28.0, 32.95, 39.2, 43.5, 48.5, 60.4, 66.3, 68.6, 73.5, 75.5, 78.0, 81.6, 84.0, 87.8];
+const MOTIFS = [5.9, 9.5, 14.2, 16.9, 21.2, 24.8, 28.0, 32.95, 39.2, 43.5, 48.5, 60.4, 66.3, 68.6, 73.5, 75.5, 78.0, 81.6, 84.0, 87.64];  // each sample stays inside its scene for the whole cut
 scene(MONT, [], (T, lt, P) => {
   const b = (T - MONT) / BEAT, slot = b < 8 ? Math.floor(b) : b < 14 ? 8 + Math.floor((b - 8) * 2) : -1;
   if (slot < 0) {                                                     // the last two beats: the title again
