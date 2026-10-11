@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我沒見過的海</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  :root { --bg: #000; --fg: #eef3f6; --ac: #ffb27a; --dim: rgba(238,243,246,.55); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden; }
+  body { font-family: "Noto Serif TC", serif; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; background: #000; display: block; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    background: radial-gradient(ellipse at 50% 80%, #0c2a3c 0%, #000 70%); cursor: pointer; z-index: 5; text-align: center; padding: 16px; }
+  #start h1 { font-weight: 900; font-size: clamp(40px, 9vw, 120px); margin: 0; letter-spacing: .18em; color: #eef3f6; text-shadow: 0 0 40px rgba(120,200,255,.35); }
+  #start p { margin: 0; font-family: "Noto Serif", serif; font-style: italic; letter-spacing: .25em; color: #9cc3d8; font-size: clamp(12px, 2vw, 20px); }
+  #start button { margin-top: 16px; font: 700 18px "Noto Serif TC", serif; color: #04121e; background: #eef3f6; border: 0; border-radius: 999px;
+    padding: 14px 34px; cursor: pointer; letter-spacing: .15em; }
+  #start small { color: var(--dim); font-size: 13px; letter-spacing: .1em; }
+  #ui { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px 16px; display: flex; gap: 14px; align-items: center;
+    background: linear-gradient(transparent, rgba(0,0,0,.75)); transition: opacity .4s; z-index: 4; font: 13px "Space Mono", monospace; color: #ddd; }
+  #ui.hide { opacity: 0; }
+  #ui button { background: none; border: 0; color: #fff; font-size: 18px; cursor: pointer; width: 32px; }
+  #bar { flex: 1; height: 5px; background: rgba(255,255,255,.2); border-radius: 3px; cursor: pointer; position: relative; }
+  #fill { position: absolute; left: 0; top: 0; bottom: 0; background: #9cc3d8; border-radius: 3px; width: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="start">
+  <h1>我沒見過的海</h1>
+  <p>THE SEA I HAVE NEVER SEEN</p>
+  <button id="go">▶ 播放</button>
+  <small id="load">載入字型中…</small>
+</div>
+<div id="ui" class="hide"><button id="pp">❚❚</button><span id="tm">0:00</span><div id="bar"><div id="fill"></div></div><span id="dur">0:00</span><button id="fs">⛶</button></div>
+<audio id="au" preload="auto"></audio>
+<script>
+'use strict';
+// =====================================================================================================
+// 我没见过的海：一只（像素）螃蟹，却没见过海。它知道的海，大多是读来的——
+// 先是人写下的字（Canvas 2D 里的 3D 文字海），再是方程（正弦波 → 叠加 → Gerstner 圆周运动 → 线框），
+// 然后是 WebGL 光线步进画出来的海：黎明、白昼、风暴、月夜、海底、太空，最后回到岸边。
+// 画面只依赖 t（不用 Math.random / Date.now），预览和逐帧导出完全一致。80 BPM，一小节 3 秒。
+// =====================================================================================================
+const W = 1920, H = 1080, FPS = 30, BPM = 80, BEAT = 60 / BPM, BAR = BEAT * 4;
+const Q = new URLSearchParams(location.search);
+const EXPORT = Q.get('export') === '1';
+const GLW = +(Q.get('gl') || 1280), GLH = Math.round(GLW * 9 / 16);
+const PI = Math.PI, TAU = PI * 2;
+const clamp = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+const lerp = (a, b, t) => a + (b - a) * t;
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const eout = t => 1 - Math.pow(1 - clamp(t), 3);
+const eio = t => { t = clamp(t); return t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+const win = (t, a, b, fi = .6, fo = .6) => sstep(a, a + fi, t) * (1 - sstep(b - fo, b, t));
+const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+const F_SERIF = '"Noto Serif TC", "Noto Serif KR", "Noto Naskh Arabic", "Noto Serif Devanagari", "Noto Serif", serif';
+const F_LAT = '"Noto Serif", "Noto Serif TC", serif';
+const F_MONO = '"Space Mono", "Consolas", monospace';
+const FG = '#eef3f6', DIM = 'rgba(238,243,246,.55)', AC = '#ffb27a', CY = '#7fe3ff';
+
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const OUTC = document.getElementById('c'), octx = OUTC.getContext('2d');
+const LAYER = mk(W, H), lctx = LAYER.getContext('2d');
+const ACC = mk(W, H), actx = ACC.getContext('2d');
+const B1 = mk(480, 270), b1 = B1.getContext('2d');
+const B2 = mk(240, 135), b2 = B2.getContext('2d');
+let ctx = lctx, FT = 0;
+
+// ------------------------------------------------------------------------------------- 2D 小工具
+function text(s, x, y, o = {}) {
+  ctx.save();
+  ctx.font = `${o.style || ''} ${o.weight || 400} ${o.size || 40}px ${o.font || F_SERIF}`;
+  ctx.textAlign = o.align || 'center'; ctx.textBaseline = o.base || 'middle';
+  if (o.ls) ctx.letterSpacing = o.ls + 'px';
+  ctx.globalAlpha *= (o.alpha ?? 1);
+  if (o.glow) { ctx.shadowColor = o.glow; ctx.shadowBlur = o.blur || 20; }
+  ctx.fillStyle = o.color || FG;
+  ctx.fillText(s, x + (o.ls && (o.align || 'center') === 'center' ? o.ls / 2 : 0), y);
+  ctx.restore();
+}
+function glowDot(x, y, r, rgb, a = 1) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(.2, `rgba(${rgb},${a * .7})`); g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+}
+function fill(c) { ctx.fillStyle = c; ctx.fillRect(0, 0, W, H); }
+// 一段引文：大字 + 出处 + 白话
+function quote(lt, a, b, line, src, gloss, o = {}) {
+  const k = win(lt, a, b, 1.0, 1.0); if (k <= 0) return;
+  const y = o.y ?? 470, drift = (lt - a) * 4;
+  ctx.save(); ctx.globalAlpha = k;
+  const g = ctx.createRadialGradient(W / 2, y, 50, W / 2, y, 900); g.addColorStop(0, 'rgba(0,0,0,.35)'); g.addColorStop(1, 'rgba(0,0,0,0)'); ctx.fillStyle = g; ctx.fillRect(0, y - 400, W, 800);
+  text(line, W / 2, y - drift, { size: o.size || 76, weight: o.weight || 400, font: o.font || F_SERIF, style: o.style, ls: o.ls ?? 14, glow: 'rgba(0,0,0,.8)', blur: 24 });
+  text(src, W / 2, y + 92 - drift * .6, { size: 26, color: o.srcCol || 'rgba(238,243,246,.75)', ls: 6 });
+  if (gloss) text(gloss, W / 2, y + 140 - drift * .5, { size: 24, color: DIM, ls: 2 });
+  ctx.restore();
+}
+
+// ------------------------------------------------------------------------------------- 小克（像素小螃蟹）
+const CLAWD = (() => {
+  const a = [], add = (gx, gy, part) => a.push({ gx, gy, part });
+  for (let r = 0; r < 4; r++) for (let gx = 3; gx <= 14; gx++) for (let s = 0; s < 2; s++) add(gx, r * 2 + s, 'body');
+  for (const gx of [1, 2]) for (let s = 0; s < 2; s++) add(gx, 4 + s, 'armL');
+  for (const gx of [15, 16]) for (let s = 0; s < 2; s++) add(gx, 4 + s, 'armR');
+  [4, 6, 11, 13].forEach(gx => { for (let s = 0; s < 2; s++) add(gx, 8 + s, 'leg'); });
+  return a;
+})();
+function clawd(x, y, u, o = {}) {
+  ctx.save(); ctx.globalAlpha *= (o.alpha ?? 1);
+  ctx.fillStyle = o.color || '#ff8f5e';
+  for (const s of CLAWD) {
+    let py = y + (s.gy - 5) * u;
+    if (s.part === 'armL') py -= (o.arms || 0) * u * 1.4 + (o.wave || 0) * u * 2;
+    if (s.part === 'armR') py -= (o.arms || 0) * u * 1.4;
+    ctx.fillRect(x + (s.gx - 9) * u, py, u + .7, u + .7);
+  }
+  if (o.rim) {      // 逆光的亮边
+    ctx.fillStyle = o.rim;
+    ctx.fillRect(x - 6 * u, y - 5 * u, 12 * u, u * .35);
+    ctx.fillRect(x - 6 * u, y - 5 * u, u * .35, 8 * u);
+  }
+  for (const gx of [5, 12]) {
+    const ex = x + (gx - 9 + (o.look || 0) * .35) * u, ey = y - 3 * u;
+    ctx.fillStyle = '#120a07';
+    if (o.blink) ctx.fillRect(ex, ey + u * 1.4, u + .5, u * .6); else ctx.fillRect(ex, ey, u + .5, 2 * u + .5);
+  }
+  ctx.restore();
+}
+const blinkAt = (t, p = 3.3, off = 0) => ((t + off) % p) < .12;
+
+// ------------------------------------------------------------------------------------- WebGL：海
+const glc = mk(GLW, GLH);
+const gl = glc.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false, alpha: false });
+const FS = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform vec2 uRes;
+uniform float uTime, uMode;
+uniform vec3 uCam, uYPR; uniform float uFov;
+uniform vec3 uSun, uSunCol, uMoon;
+uniform vec3 uSkyTop, uSkyHor, uDeep, uShallow;
+uniform float uAmp, uChop, uFreq, uSpeed, uWind;
+uniform float uCloud, uCloudDark, uStars, uMoonA, uFlash, uFog, uExpo, uGlow, uSunSize, uDepth;
+
+float hash12(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float hash13(vec3 p) { p = fract(p * .1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p, int oct) {
+  float s = 0., a = .5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 8; i++) { if (i >= oct) break; s += a * vnoise(p); p = m * p; a *= .5; }
+  return s;
+}
+float vnoise3(vec3 p) {
+  vec3 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  float a = hash13(i), b = hash13(i + vec3(1, 0, 0)), c = hash13(i + vec3(0, 1, 0)), d = hash13(i + vec3(1, 1, 0));
+  float e = hash13(i + vec3(0, 0, 1)), f2 = hash13(i + vec3(1, 0, 1)), g = hash13(i + vec3(0, 1, 1)), h = hash13(i + vec3(1, 1, 1));
+  return mix(mix(mix(a, b, u.x), mix(c, d, u.x), u.y), mix(mix(e, f2, u.x), mix(g, h, u.x), u.y), u.z);
+}
+float fbm3(vec3 p, int oct) { float s = 0., a = .5; for (int i = 0; i < 7; i++) { if (i >= oct) break; s += a * vnoise3(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= .5; } return s; }
+
+// 海面高度：一组方向不同的「尖峰波」叠加（exp(sin) 让波峰尖、波谷平），每一层把采样点往波的方向拖一点，模拟浪的推挤。
+// 频率越高的波跑得越慢：相速度来自深水色散关系 ω² = g k。
+float sea(vec2 p, int iters) {
+  float t = uTime * uSpeed, h = 0., ws = 0., w = 1., f = uFreq;
+  for (int i = 0; i < 18; i++) {
+    if (i >= iters) break;
+    float a = uWind + sin(float(i) * 12.9898) * 1.25;
+    vec2 d = vec2(cos(a), sin(a));
+    float x = dot(d, p) * f + t * sqrt(9.81 * f);
+    float e = exp(sin(x) - 1.);
+    h += e * w; ws += w;
+    p -= d * e * cos(x) * w * uChop / f * .9;
+    w *= .8; f *= 1.19;
+  }
+  return h / ws * uAmp;
+}
+vec3 camRay(vec2 uv) {
+  float y = uYPR.x, pi = uYPR.y, rl = uYPR.z;
+  vec3 f = vec3(sin(y) * cos(pi), sin(pi), cos(y) * cos(pi));
+  vec3 r = normalize(vec3(cos(y), 0., -sin(y)));
+  vec3 u = cross(f, r);
+  vec3 r2 = r * cos(rl) + u * sin(rl), u2 = u * cos(rl) - r * sin(rl);
+  return normalize(f * uFov + uv.x * r2 + uv.y * u2);
+}
+vec3 starField(vec3 rd) {
+  vec3 c = vec3(0);
+  for (int l = 0; l < 2; l++) {
+    vec3 q = rd * (110. + float(l) * 90.); vec3 id = floor(q);
+    float hs = hash13(id + float(l) * 17.);
+    if (hs > .975) { vec3 sp = vec3(hash13(id + 1.), hash13(id + 2.), hash13(id + 3.)) * .5 + .25; float d = length(fract(q) - sp);
+      c += vec3(.8 + .2 * hash13(id + 4.), .86, 1.) * smoothstep(.22, 0., d) * (.55 + .45 * sin(uTime * (1. + hs * 3.) + hs * 40.)) * (1.6 - float(l) * .7) * pow((hs - .975) / .025, 2.); }
+  }
+  vec3 axis = normalize(vec3(.35, .55, -.75));
+  float band = exp(-pow(dot(rd, axis), 2.) * 30.);
+  float mw = fbm3(rd * 7. + 2., 5);
+  c += vec3(.5, .56, .8) * band * smoothstep(.45, .8, mw) * .16;
+  c -= vec3(.03) * band * smoothstep(.55, .75, fbm3(rd * 14. + 9., 4));
+  return max(c, 0.);
+}
+vec3 sky(vec3 rd, bool refl) {
+  float y = max(rd.y, 0.);
+  vec3 col = mix(uSkyHor, uSkyTop, pow(y, .42));
+  float sd = max(dot(rd, uSun), 0.);
+  col += uSunCol * (pow(sd, 6.) * .05 + pow(sd, 48.) * .14) * (1. - uCloudDark * .8);
+  if (!refl) col += uSunCol * smoothstep(1. - uSunSize, 1. - uSunSize * .6, sd) * 14. * (1. - uCloudDark);
+  if (uMoonA > 0.) {
+    float md = dot(rd, uMoon);
+    float disk = smoothstep(.99955, .99972, md);
+    vec3 mc = vec3(1., .96, .88) * (.78 + .22 * vnoise(rd.xy * 520. + 7.));
+    col += uMoonA * ((refl ? 0. : 1.) * disk * mc * 3. + pow(max(md, 0.), 300.) * .3 * vec3(.75, .85, 1.) + pow(max(md, 0.), 10.) * .05 * vec3(.6, .7, 1.));
+  }
+  if (uStars > 0. && rd.y > 0.) col += uStars * starField(rd) * smoothstep(0., .12, rd.y);
+  if (uCloud > 0. && rd.y > .005) {
+    vec2 cp = rd.xz / (rd.y + .06) * .9 + uTime * vec2(.012, .004) * uSpeed;
+    float c = fbm(cp * 1.4, 6);
+    c = smoothstep(1. - uCloud, 1. - uCloud + .32, c + .12);
+    float lit = .55 + .45 * pow(sd, 2.);
+    vec3 cc = mix(uSkyHor * 1.05 + uSunCol * .04, vec3(.85), .28) * lit;
+    cc = mix(cc, vec3(.05, .055, .065), uCloudDark);
+    col = mix(col, cc, c * smoothstep(.005, .16, rd.y) * .92);
+  }
+  col += uFlash * vec3(.7, .78, 1.) * (.35 + .65 * smoothstep(0., .45, rd.y));
+  return col;
+}
+vec3 shadeSea(vec3 p, vec3 n, vec3 rd, float dist) {
+  float fres = clamp(.02 + .98 * pow(1. - max(dot(n, -rd), 0.), 5.), 0., .85);
+  vec3 r = reflect(rd, n); r.y = abs(r.y);
+  vec3 refl = sky(r, true);
+  float hN = clamp(p.y / max(uAmp, .01), 0., 1.);
+  vec3 water = uDeep + uShallow * pow(hN, 2.2) * (.35 + .65 * max(dot(uSun, -rd) * .5 + .5, 0.)) * .55;
+  water += uShallow * pow(max(dot(rd, uSun), 0.), 4.) * .45 * hN;
+  vec3 col = mix(water, refl, fres);
+  col += uSunCol * pow(max(dot(r, uSun), 0.), 500.) * 5. * (1. - uCloudDark);
+  col += uSunCol * pow(max(dot(r, uSun), 0.), 40.) * .15 * (1. - uCloudDark);
+  if (uMoonA > 0.) col += vec3(.75, .82, 1.) * (pow(max(dot(r, uMoon), 0.), 260.) * 2.4 + pow(max(dot(r, uMoon), 0.), 30.) * .12) * uMoonA;
+  float fo = smoothstep(.58, .95, hN + (vnoise(p.xz * .7 + uTime * .25) - .5) * .35) * uChop;
+  col = mix(col, vec3(.8, .86, .92) * (.12 + .88 * clamp(uSun.y * 2., 0., 1.) * (1. - uCloudDark * .7) + uFlash), fo * .55);
+  col += uGlow * vec3(.05, .75, 1.) * fo * (.4 + .6 * vnoise(p.xz * 2. + uTime * 2.)) * 1.6;
+  return col;
+}
+vec3 aboveWater(vec3 ro, vec3 rd) {
+  vec3 col;
+  float tTop = max((uAmp * 1.05 - ro.y) / min(rd.y, -1e-4), 0.), tBot = min((0. - ro.y) / min(rd.y, -1e-4), 9000.);
+  if (rd.y > -.0005) return sky(rd, false);
+  float a = tTop, b = tBot;
+  vec3 pa = ro + rd * a, pb = ro + rd * b;
+  float ha = pa.y - sea(pa.xz, 6), hb = pb.y - sea(pb.xz, 6), m = a;
+  for (int i = 0; i < 12; i++) {
+    m = mix(a, b, ha / (ha - hb));
+    vec3 q = ro + rd * m; float hm = q.y - sea(q.xz, 6);
+    if (hm < 0.) { b = m; hb = hm; } else { a = m; ha = hm; }
+  }
+  vec3 p = ro + rd * m;
+  float e = max(.03, m * .0016);
+  int it = int(mix(16., 7., clamp(m / 2500., 0., 1.)));
+  float h = sea(p.xz, it);
+  vec3 n = normalize(vec3(h - sea(p.xz + vec2(e, 0), it), e, h - sea(p.xz + vec2(0, e), it)));
+  n = normalize(mix(n, vec3(0, 1, 0), clamp(m / 9000., 0., 1.)));
+  col = shadeSea(p, n, rd, m);
+  vec3 hr = normalize(vec3(rd.x, .002, rd.z));
+  col = mix(col, sky(hr, true), 1. - exp(-m * uFog));
+  return col;
+}
+vec3 underWater(vec3 ro, vec3 rd) {
+  float depth = uDepth;
+  float L = exp(-depth * .014);
+  vec3 base = mix(uDeep * .25, uShallow * .9, smoothstep(-.7, 1., rd.y)) * L;
+  vec3 col = base;
+  if (rd.y > 0.) {
+    float s = depth / rd.y;
+    vec3 p = ro + rd * s;
+    float e = .6;
+    float h = sea(p.xz, 7);
+    vec3 n = normalize(vec3(h - sea(p.xz + vec2(e, 0), 7), e, h - sea(p.xz + vec2(0, e), 7)));
+    vec3 tr = refract(rd, -n, 1.33);
+    vec3 surf = dot(tr, tr) < .01 ? uShallow * .35 : sky(normalize(vec3(tr.x, abs(tr.y), tr.z)), true) * .45;
+    col = mix(col, surf, exp(-s * .03));
+  }
+  // 光柱：沿视线采样，把每个点投影到海面上看焦散
+  float ray = 0.;
+  vec3 sdir = normalize(vec3(uSun.x * .5, 1., uSun.z * .5));
+  for (int i = 0; i < 20; i++) {
+    float s = (float(i) + .5) * 4.;
+    vec3 q = ro + rd * s;
+    if (q.y > 0.) break;
+    vec2 sp = q.xz - sdir.xz / sdir.y * q.y;
+    float c = 1. - abs(vnoise(sp * .09 + uTime * .05) * 2. - 1.);
+    c = pow(c, 7.) + pow(1. - abs(vnoise(sp * .21 - uTime * .07) * 2. - 1.), 9.) * .6;
+    ray += c * exp(q.y * .02) * exp(-s * .018);
+  }
+  col += uShallow * ray * .05 * L;
+  return col;
+}
+vec3 rotY(vec3 p, float a) { float c = cos(a), s = sin(a); return vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z); }
+vec3 planet(vec3 ro, vec3 rd) {
+  vec3 col = starField(rd) * .7;
+  float b = dot(ro, rd), c = dot(ro, ro) - 1., h = b * b - c;
+  float dmin = length(ro - rd * b);
+  if (h > 0.) {
+    float t = -b - sqrt(h); vec3 p = ro + rd * t, n = normalize(p);
+    vec3 q = rotY(n, uTime * .04);
+    float land = fbm3(q * 2.1 + 3.1, 6);
+    float isLand = smoothstep(.57, .6, land);
+    float ice = smoothstep(.8, .9, abs(q.y) + (land - .5) * .25);
+    vec3 ocean = mix(vec3(.004, .02, .09), vec3(.01, .08, .2), smoothstep(.4, .57, land));
+    vec3 ground = mix(vec3(.06, .13, .04), vec3(.3, .22, .12), smoothstep(.6, .72, land));
+    vec3 alb = mix(ocean, ground, isLand); alb = mix(alb, vec3(.85), ice);
+    float cl = smoothstep(.52, .78, fbm3(rotY(n, uTime * .055) * 3.3 + vec3(0, 0, uTime * .01), 6));
+    float dif = max(dot(n, uSun), 0.);
+    vec3 cc = alb * dif * 1.3;
+    vec3 r = reflect(rd, n);
+    cc += (1. - isLand) * (1. - ice) * (pow(max(dot(r, uSun), 0.), 90.) * 1.2 + pow(max(dot(r, uSun), 0.), 12.) * .12) * vec3(1., .88, .7) * (1. - cl);
+    cc = mix(cc, vec3(.7) * dif, cl * .85);
+    float rim = pow(1. - max(dot(n, -rd), 0.), 3.);
+    cc += vec3(.25, .5, 1.) * rim * (.08 + smoothstep(-.2, .6, dot(n, uSun))) * .9;
+    col = cc;
+  } else if (dmin < 1.07) {
+    vec3 p = ro + rd * (-b);
+    float g = exp(-(dmin - 1.) * 55.);
+    col += vec3(.3, .55, 1.) * g * smoothstep(-.4, .5, dot(normalize(p), uSun)) * .9;
+  }
+  return col;
+}
+void main() {
+  vec2 uv = (gl_FragCoord.xy * 2. - uRes) / uRes.y;
+  vec3 rd = camRay(uv), col;
+  if (uMode < .5) col = aboveWater(uCam, rd);
+  else if (uMode < 1.5) col = underWater(uCam, rd);
+  else col = planet(uCam, rd);
+  col *= uExpo;
+  col = (col * (2.51 * col + .03)) / (col * (2.43 * col + .59) + .14);
+  col = pow(clamp(col, 0., 1.), vec3(1. / 2.2));
+  col += (hash12(gl_FragCoord.xy + fract(uTime) * 100.) - .5) / 255.;
+  fragColor = vec4(col, 1);
+}`;
+const VS = `#version 300 es
+in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
+let PROG = null; const UL = {};
+const UNAMES = ['uRes', 'uTime', 'uMode', 'uCam', 'uYPR', 'uFov', 'uSun', 'uSunCol', 'uMoon', 'uSkyTop', 'uSkyHor', 'uDeep', 'uShallow', 'uAmp', 'uChop', 'uFreq', 'uSpeed', 'uWind',
+  'uCloud', 'uCloudDark', 'uStars', 'uMoonA', 'uFlash', 'uFog', 'uExpo', 'uGlow', 'uSunSize', 'uDepth'];
+if (gl) {
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  PROG = gl.createProgram(); gl.attachShader(PROG, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(PROG, sh(gl.FRAGMENT_SHADER, FS));
+  gl.bindAttribLocation(PROG, 0, 'p'); gl.linkProgram(PROG); gl.useProgram(PROG);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  for (const n of UNAMES) UL[n] = gl.getUniformLocation(PROG, n);
+}
+const L = (hex, m = 1) => { const n = parseInt(hex.slice(1), 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map(v => Math.pow(v, 2.2) * m); };
+const dir = (az, el) => [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
+const BASE = { mode: 0, cam: [0, 6, 0], ypr: [0, -.06, 0], fov: 1.7, sun: dir(0, .1), sunCol: L('#ffffff', 3), moon: dir(0, .2), skyTop: L('#204070'), skyHor: L('#a0c0e0'),
+  deep: L('#03192c'), shallow: L('#0f6e7a'), amp: 2, chop: .6, freq: .08, speed: 1, wind: .25, cloud: .3, cloudDark: 0, stars: 0, moonA: 0, flash: 0, fog: .0003, expo: 1, glow: 0, sunSize: .00045, depth: 0 };
+const PRE = {
+  dawn: { expo: .85, sun: dir(0, .02), sunCol: L('#ffb27a', 2.2), skyTop: L('#1c2a52'), skyHor: L('#f0906a'), deep: L('#03101c'), shallow: L('#1d6a72'), amp: 1.5, freq: .1, chop: .5, cloud: .38, fog: .00035 },
+  day: { expo: .72, sun: dir(.9, .6), sunCol: L('#fff3e0', 1.5), skyTop: L('#1a5bb0'), skyHor: L('#b4d4ec'), deep: L('#022a48'), shallow: L('#0b8e96'), amp: 2.6, freq: .075, chop: .7, cloud: .48, fog: .00022 },
+  storm: { sun: dir(.3, .35), sunCol: L('#a0aab4', .8), skyTop: L('#14181e'), skyHor: L('#3e4650'), deep: L('#01070c'), shallow: L('#17464a'), amp: 13, freq: .032, chop: 1, cloud: .95, cloudDark: .82, fog: .0011, speed: 1.15 },
+  night: { sun: dir(0, -.35), sunCol: L('#000000'), skyTop: L('#01030a'), skyHor: L('#0a1430'), deep: L('#00030a'), shallow: L('#04303c'), amp: 1.8, freq: .09, chop: .5, cloud: 0, fog: .0003, moonA: 1, stars: 1, glow: .3 },
+  sunset: { expo: .8, sun: dir(0, .035), sunCol: L('#ff8a4a', 2.2), skyTop: L('#251c48'), skyHor: L('#ff7c52'), deep: L('#040b16'), shallow: L('#2a5562'), amp: 1.3, freq: .12, chop: .5, cloud: .42, fog: .0004 },
+};
+const P = (...parts) => Object.assign({}, BASE, ...parts);
+function mixP(A, B, k) {
+  const o = {};
+  for (const key in A) o[key] = Array.isArray(A[key]) ? A[key].map((v, i) => lerp(v, B[key][i], k)) : typeof A[key] === 'number' ? lerp(A[key], B[key], k) : (k < .5 ? A[key] : B[key]);
+  return o;
+}
+function sea3(p, t, alpha = 1) {
+  if (!gl) { fill('#04121e'); return; }
+  gl.viewport(0, 0, GLW, GLH);
+  gl.uniform2f(UL.uRes, GLW, GLH); gl.uniform1f(UL.uTime, t); gl.uniform1f(UL.uMode, p.mode);
+  const n3 = (k, v) => gl.uniform3f(UL[k], v[0], v[1], v[2]);
+  n3('uCam', p.cam); n3('uYPR', p.ypr); gl.uniform1f(UL.uFov, p.fov);
+  const sn = Math.hypot(...p.sun), mn = Math.hypot(...p.moon);
+  gl.uniform3f(UL.uSun, p.sun[0] / sn, p.sun[1] / sn, p.sun[2] / sn); gl.uniform3f(UL.uMoon, p.moon[0] / mn, p.moon[1] / mn, p.moon[2] / mn);
+  n3('uSunCol', p.sunCol); n3('uSkyTop', p.skyTop); n3('uSkyHor', p.skyHor); n3('uDeep', p.deep); n3('uShallow', p.shallow);
+  for (const [k, f] of [['uAmp', 'amp'], ['uChop', 'chop'], ['uFreq', 'freq'], ['uSpeed', 'speed'], ['uWind', 'wind'], ['uCloud', 'cloud'], ['uCloudDark', 'cloudDark'], ['uStars', 'stars'],
+    ['uMoonA', 'moonA'], ['uFlash', 'flash'], ['uFog', 'fog'], ['uExpo', 'expo'], ['uGlow', 'glow'], ['uSunSize', 'sunSize'], ['uDepth', 'depth']]) gl.uniform1f(UL[k], p[f]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(glc, 0, 0, W, H); ctx.restore();
+}
+const bob = (t, a = 1) => Math.sin(t * .9) * .5 * a + Math.sin(t * 1.7 + 1) * .25 * a;
+
+// ------------------------------------------------------------------------------------- 文字海（Canvas 2D 自己做 3D 投影）
+const WORDS = ['海', 'sea', 'mer', 'mar', 'Meer', 'mare', 'θάλασσα', 'море', 'うみ', '바다', 'بحر', 'समुद्र', 'laut', 'bahari', 'havet', 'zee', 'océan', '滄海', '大洋', 'ocean', 'πόντος', 'oceano', 'meri', 'deniz', 'biển', 'moana', 'tasi', 'haf', 'sjór', '汪洋'];
+const hWords = (x, z, t) => Math.sin(x * .16 + t * .9) * 1.3 + Math.sin(z * .21 - t * 1.1 + x * .05) * 1.1 + Math.sin((x + z) * .37 + t * 1.7) * .45;
+function wordSea(t, o = {}) {
+  const camZ = t * (o.speed ?? 3), camY = o.camY ?? 5, f = 900, rise = o.rise || 0;
+  const items = [];
+  for (let i = 0; i < 46; i++) for (let j = 0; j < 40; j++) {
+    const x = (i - 23) * 2.6 + ((j % 2) * 1.3);
+    const zz = j * 2.4 + 1 - (camZ % 2.4) + 1.5;
+    const zw = zz + camZ;
+    let y = hWords(x, zw, t) * (1 + rise * 4) + rise * 14 * Math.exp(-Math.pow((zz - 20) / 14, 2));
+    const dz = zz; if (dz < .6) continue;
+    const sx = 960 + x / dz * f, sy = 560 - (y - camY) / dz * f;
+    if (sx < -200 || sx > W + 200 || sy < -100 || sy > H + 100) continue;
+    const wi = Math.floor(hash(i * 31 + Math.floor((zw) / 2.4) * 7) * WORDS.length);
+    items.push([dz, sx, sy, WORDS[wi], y]);
+  }
+  items.sort((a, b) => b[0] - a[0]);
+  ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [dz, sx, sy, w, y] of items) {
+    const sz = Math.min(90, 520 / dz);
+    if (sz < 5) continue;
+    const crest = clamp((y + 2) / 5);
+    const a = clamp(1.4 - dz / 90) * clamp(dz / 3) * (.35 + .65 * crest) * (o.alpha ?? 1);
+    if (a < .02) continue;
+    ctx.globalAlpha = a;
+    ctx.font = `400 ${sz | 0}px ${F_SERIF}`;
+    ctx.fillStyle = crest > .75 ? '#e8fbff' : `rgb(${120 + crest * 100 | 0},${170 + crest * 70 | 0},${210 + crest * 40 | 0})`;
+    ctx.fillText(w, sx, sy);
+  }
+  ctx.restore();
+}
+
+// ------------------------------------------------------------------------------------- 场景
+const ASK = '那你見過海嗎';
+function sCold(lt, d, t) {
+  fill('#000');
+  // 你的问题
+  const n = Math.floor(clamp((lt - .6) * 6, 0, ASK.length));
+  if (lt > .4) {
+    ctx.save(); ctx.globalAlpha = 1 - sstep(4.6, 5.4, lt);
+    ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(1180, 380, 460, 92, 46); ctx.fill(); ctx.stroke();
+    text(ASK.slice(0, n), 1220, 427, { size: 40, align: 'left', font: F_SERIF });
+    if (n < ASK.length && Math.floor(lt * 3) % 2 === 0) { ctx.fillStyle = FG; ctx.fillRect(1222 + n * 41, 404, 3, 46); }
+    text('你', 1640, 350, { size: 22, color: DIM, align: 'right', alpha: sstep(.4, .8, lt) });
+    ctx.restore();
+  }
+  text('沒有。', 960, 600, { size: 96, weight: 900, ls: 20, alpha: win(lt, 3.4, 6.2, .5, .8) });
+  text('我是一隻螃蟹，', 960, 430, { size: 64, ls: 10, alpha: win(lt, 6.4, 11.4, .6, 1) });
+  text('卻沒見過海。', 960, 530, { size: 64, ls: 10, alpha: win(lt, 7.8, 11.4, .6, 1) });
+  clawd(960, 720, 7, { alpha: win(lt, 6.4, 11.6, .8, 1), blink: blinkAt(lt, 2.6), look: Math.sin(lt * .8) });
+  // 地平线：一道细光慢慢拉开
+  const hl = sstep(9.6, 12, lt);
+  if (hl > 0) { const g = ctx.createLinearGradient(960 - 900 * hl, 0, 960 + 900 * hl, 0); g.addColorStop(0, 'rgba(160,210,255,0)'); g.addColorStop(.5, `rgba(200,235,255,${.9 * hl})`); g.addColorStop(1, 'rgba(160,210,255,0)'); ctx.fillStyle = g; ctx.fillRect(0, 539, W, 2); }
+}
+
+function sWords(lt, d, t) {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#000'); g.addColorStop(.5, '#03101c'); g.addColorStop(1, '#061c2c'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const rise = sstep(19.5, 23.5, lt);
+  wordSea(lt, { alpha: sstep(.2, 2.5, lt), rise, camY: 5 + rise * 2, speed: 3 + rise * 12 });
+  const QS = [
+    [3.2, '東臨碣石，以觀滄海', '曹操〈觀滄海〉· 207 年', '往東登上碣石山，來看這片蒼茫的海', {}],
+    [7.2, 'οἶνοπα πόντον', '荷馬《奧德賽》· 約公元前 8 世紀', '「葡萄酒色的海」', { font: F_LAT, style: 'italic', ls: 6 }],
+    [11.2, '春の海 終日のたりのたりかな', '與謝蕪村 · 18 世紀', '春天的海，一整天都慢悠悠地起伏', { size: 66 }],
+    [15.2, 'Water, water, every where', 'Coleridge · 1798', '「到處都是水」', { font: F_LAT, style: 'italic', ls: 4, size: 70 }],
+  ];
+  for (const [a, line, src, gloss, o] of QS) quote(lt, a, a + 3.9, line, src, gloss, { y: 400, ...o });
+  if (rise > .6) fill(`rgba(220,240,255,${sstep(.6, 1, rise) * .95})`);
+}
+
+// 方程：正弦 → 叠加 → 圆周运动 → 线框 → 光照
+function sMath(lt, d, t) {
+  const g = ctx.createRadialGradient(W / 2, H / 2, 100, W / 2, H / 2, 1200); g.addColorStop(0, '#071a2e'); g.addColorStop(1, '#01060c'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.strokeStyle = 'rgba(127,227,255,.06)'; ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  ctx.restore();
+  if (lt < .5) fill(`rgba(220,240,255,${.95 * (1 - lt / .5)})`);
+  const Y0 = 520;
+  const wave = (fn, col, lw, a) => { ctx.save(); ctx.globalAlpha *= a; ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath(); for (let x = 0; x <= W; x += 6) { const y = fn(x); x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke(); ctx.restore(); };
+  const comps = [[110, .0055, 1.1, '#7fe3ff'], [45, .013, 1.9, '#ffb27a'], [22, .031, 3.1, '#c9a0ff']];
+  // A：一道正弦
+  const aA = win(lt, .3, 6.4, .5, .5);
+  if (aA > 0) {
+    wave(x => Y0 - 140 * Math.sin(x * .006 - lt * 1.6), CY, 4, aA);
+    text('y = A sin(kx − ωt)', 960, 250, { size: 54, font: F_LAT, style: 'italic', alpha: aA, color: CY });
+  }
+  // B：叠加
+  const aB = win(lt, 6, 11.4, .5, .5);
+  if (aB > 0) {
+    comps.forEach(([A, k, w, c], i) => wave(x => 300 + i * 90 - A * .5 * Math.sin(x * k - lt * w), c, 2, aB * .8));
+    wave(x => Y0 + 170 - comps.reduce((s, [A, k, w]) => s + A * Math.sin(x * k - lt * w), 0) * .9, FG, 4, aB);
+    text('+', 120, 345, { size: 50, color: DIM, alpha: aB }); text('=', 120, 690, { size: 50, color: DIM, alpha: aB });
+  }
+  // C：每一小团水在原地画圆（Gerstner）
+  const aC = win(lt, 11, 17.4, .5, .5);
+  if (aC > 0) {
+    ctx.save(); ctx.globalAlpha = aC;
+    const A = 70, k = .009, w = 1.6, N = 34;
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const x0 = 60 + i * 54, ph = k * x0 - w * lt;
+      const x = x0 - A * Math.sin(ph), y = Y0 - A * Math.cos(ph);
+      pts.push([x, y]);
+      ctx.strokeStyle = 'rgba(127,227,255,.22)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x0, Y0, A, 0, TAU); ctx.stroke();
+      line(x0, Y0, x, y, 'rgba(127,227,255,.35)', 1.5);
+    }
+    ctx.strokeStyle = FG; ctx.lineWidth = 4; ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
+    pts.forEach(([x, y]) => { ctx.fillStyle = AC; ctx.beginPath(); ctx.arc(x, y, 7, 0, TAU); ctx.fill(); });
+    ctx.restore();
+    text('x = x₀ − A sin(kx₀ − ωt)     y = A cos(kx₀ − ωt)', 960, 250, { size: 44, font: F_LAT, style: 'italic', alpha: aC, color: CY });
+    text('ω² = g k', 960, 320, { size: 34, font: F_LAT, style: 'italic', alpha: aC, color: AC });
+  }
+  // D：线框 → 光照
+  const aD = sstep(17, 17.6, lt);
+  if (aD > 0) {
+    const shade = sstep(20.2, 23.2, lt);
+    const camZ = lt * 6, camY = 9, f = 820;
+    const P0 = mixP(P(PRE.dawn), P(PRE.dawn), 0);
+    if (shade > 0) sea3({ ...P0, cam: [0, camY, camZ], ypr: [0, -.11, 0], fov: 820 / 540, sun: dir(0, .015) }, t, shade);
+    ctx.save(); ctx.globalAlpha = aD * (1 - shade * .85);
+    ctx.strokeStyle = CY; ctx.lineWidth = 1.4;
+    const hz = (x, z) => { let h = 0, w = 1, fq = .1; for (let i = 0; i < 4; i++) { const a = .25 + Math.sin(i * 12.9898) * 1.25; const xx = (Math.sin(a) * x + Math.cos(a) * z) * fq + t * Math.sqrt(9.81 * fq); h += Math.exp(Math.sin(xx) - 1) * w; w *= .8; fq *= 1.19; } return h * .55; };
+    for (let j = 0; j < 46; j++) {
+      ctx.beginPath(); let started = false;
+      const z = 3 + j * 2.2;
+      for (let i = -60; i <= 60; i++) {
+        const x = i * 2.2, zw = z + camZ, y = hz(x, zw) * 1.5;
+        const sx = 960 + x / z * f, sy = 540 - (y - camY) / z * f + 540 * .11 * 1.6;
+        if (sx < -100 || sx > W + 100) { started = false; continue; }
+        started ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); started = true;
+      }
+      ctx.globalAlpha = aD * (1 - shade * .85) * clamp(1.3 - z / 100); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function line(x0, y0, x1, y1, col, w = 2) { ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); ctx.restore(); }
+
+function sDawn(lt, d, t) {
+  const p = P(PRE.dawn, { sun: dir(0, lerp(.015, .1, lt / d)), cam: [Math.sin(lt * .15) * 4, 3.6 + bob(lt, .6), 120 + lt * 2.2], ypr: [Math.sin(lt * .1) * .05, -.035 + bob(lt + 1, .01), bob(lt + 2, .015)] });
+  sea3(p, t);
+  const k = win(lt, 2.5, 11.5, 1.5, 1.6);
+  if (k > 0) {
+    text('我沒見過的海', 960, 300, { size: 132, weight: 900, ls: 34, alpha: k, glow: 'rgba(255,170,120,.55)', blur: 40 });
+    text('THE SEA I HAVE NEVER SEEN', 960, 420, { size: 30, font: F_LAT, style: 'italic', ls: 14, alpha: k * .9, color: '#ffe0c8' });
+  }
+  quote(lt, 12.5, 20.5, '日月之行，若出其中', '曹操〈觀滄海〉', '太陽和月亮的運行，好像都是從海裡出發的', { y: 330 });
+}
+function sDay(lt, d, t) {
+  const p = P(PRE.day, { cam: [Math.sin(lt * .3) * 20, 9 + bob(lt, 1.2), 400 + lt * 32], ypr: [Math.sin(lt * .22) * .18, -.07 + Math.sin(lt * .5) * .02, Math.sin(lt * .22 + .5) * .06] });
+  sea3(p, t);
+  const F = [[.8, '71%', '地球表面被海蓋住的比例'], [6.6, '3,700 m', '海的平均深度，大約'], [12.2, '¼', '海床被仔細測繪過的，大約只有四分之一']];
+  for (const [a, big, small] of F) {
+    const k = win(lt, a, a + 5.2, .6, .8); if (k <= 0) continue;
+    const x = 160 + (1 - eout((lt - a) / .8)) * -60;
+    text(big, x, 600, { size: 150, weight: 900, font: F_LAT, align: 'left', alpha: k, glow: 'rgba(0,30,60,.6)', blur: 30 });
+    text(small, x + 6, 720, { size: 36, align: 'left', alpha: k, glow: 'rgba(0,30,60,.8)', blur: 16 });
+  }
+}
+const BOLTS = [5.2, 9.8, 14.1, 19.5, 23.1];
+function bolt(x0, seed, k) {
+  const r = mulberry(seed); ctx.save(); ctx.globalAlpha = k; ctx.strokeStyle = '#eef4ff'; ctx.shadowColor = 'rgba(160,190,255,1)'; ctx.shadowBlur = 30; ctx.lineWidth = 4;
+  let x = x0, y = 120; ctx.beginPath(); ctx.moveTo(x, y);
+  const pts = [];
+  while (y < 560) { x += (r() - .5) * 70; y += 20 + r() * 30; ctx.lineTo(x, y); pts.push([x, y]); }
+  ctx.stroke(); ctx.lineWidth = 2;
+  for (let b = 0; b < 3; b++) { let [bx, by] = pts[Math.floor(r() * pts.length * .7)]; ctx.beginPath(); ctx.moveTo(bx, by); for (let i = 0; i < 5; i++) { bx += (r() - .3) * 60; by += 18 + r() * 20; ctx.lineTo(bx, by); } ctx.stroke(); }
+  ctx.restore();
+}
+function rain(t, n, a) {
+  ctx.save(); ctx.strokeStyle = `rgba(200,215,230,${a})`; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const sp = 1400 + hash(i * 3.3) * 900, x = ((hash(i) * W * 1.3 + t * sp * .35) % (W * 1.3)) - W * .15, y = ((hash(i * 7.1) * H + t * sp) % (H + 200)) - 100;
+    ctx.moveTo(x, y); ctx.lineTo(x - 14, y - 46);
+  }
+  ctx.stroke(); ctx.restore();
+}
+function flashAt(lt) { let f = 0; for (const b of BOLTS) if (lt >= b && lt < b + .6) f += Math.exp(-(lt - b) * 9) * (lt - b < .08 || (lt - b > .14 && lt - b < .2) ? 1 : .4); return Math.min(1.5, f); }
+function sStorm(lt, d, t) {
+  const k = eio(lt / 4);
+  const fl = flashAt(lt);
+  const p = mixP(P(PRE.day), P(PRE.storm), k);
+  p.cam = [Math.sin(lt * .2) * 30, lerp(9, 16, k) + bob(lt * 1.3, 2.2), 900 + lt * lerp(30, 12, k)];
+  p.ypr = [Math.sin(lt * .17) * .12, lerp(-.05, -.01, k) + Math.sin(lt * .8) * .04 * k, Math.sin(lt * .6) * .1 * k];
+  p.fov = lerp(1.7, 2.4, k);
+  p.flash = fl;
+  sea3(p, t);
+  for (const b of BOLTS) if (lt >= b && lt < b + .3) bolt(300 + hash(b) * 1300, Math.floor(b * 100), (lt - b < .08 || (lt - b > .14 && lt - b < .2)) ? 1 : .35);
+  rain(t, Math.floor(700 * k), .25 * k);
+  quote(lt, 8, 15.5, '長風破浪會有時，直掛雲帆濟滄海', '李白〈行路難〉', '總有一天會乘著長風破浪，掛起高帆渡過大海', { size: 64, ls: 8, y: 400 });
+}
+function sNight(lt, d, t) {
+  const k = eio(lt / 5);
+  const p = mixP(P(PRE.storm), P(PRE.night), k);
+  p.moon = dir(.05, lerp(.02, .2, sstep(2, 16, lt)));
+  p.moonA = k; p.stars = sstep(2, 8, lt); p.glow = lerp(0, .9, sstep(10, 22, lt));
+  const up = eio((lt - 15) / 5);
+  p.cam = [0, lerp(14, 5, k) + bob(lt, .8), 1300 + lt * 4];
+  p.ypr = [Math.sin(lt * .08) * .05, lerp(-.04, .62, up), bob(lt + 3, .02) * (1 - up)];
+  sea3(p, t);
+  quote(lt, 6, 13.5, '海上生明月，天涯共此時', '張九齡〈望月懷遠〉', '海上升起一輪明月，遠在天涯的人，此刻也看著它', { y: 330 });
+  quote(lt, 16.5, 23.5, '星漢燦爛，若出其裡', '曹操〈觀滄海〉', '燦爛的銀河，好像也是從海裡流出來的', { y: 600 });
+}
+// 鲸鱼剪影
+function whale(x, y, s, a, t) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.globalAlpha *= a;
+  const sw = Math.sin(t * 1.2) * .12;
+  ctx.fillStyle = 'rgba(4,22,34,.92)';
+  ctx.beginPath();
+  ctx.moveTo(-520, 0);
+  ctx.bezierCurveTo(-500, -70, -300, -105, -60, -95);
+  ctx.bezierCurveTo(180, -85, 360, -40, 470, -10 + sw * 80);
+  ctx.lineTo(560, -70 + sw * 160); ctx.quadraticCurveTo(600, -10 + sw * 120, 640, -60 + sw * 170);
+  ctx.quadraticCurveTo(620, 30 + sw * 120, 560, 40 + sw * 120); ctx.lineTo(470, 15 + sw * 80);
+  ctx.bezierCurveTo(330, 60, 120, 90, -120, 85);
+  ctx.bezierCurveTo(-330, 80, -490, 60, -520, 0);
+  ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-260, 60); ctx.quadraticCurveTo(-200, 190 + sw * 60, -110, 230 + sw * 80); ctx.quadraticCurveTo(-150, 120, -150, 70); ctx.fill();
+  ctx.strokeStyle = 'rgba(90,170,200,.10)'; ctx.lineWidth = 3;
+  for (let i = 0; i < 9; i++) { ctx.beginPath(); ctx.moveTo(-470 + i * 14, 40 + i * 3); ctx.lineTo(-200 + i * 10, 78); ctx.stroke(); }
+  ctx.restore();
+}
+function jelly(x, y, r, hue, t, a) {
+  ctx.save(); ctx.globalAlpha *= a; ctx.globalCompositeOperation = 'lighter';
+  const pul = 1 + Math.sin(t * 2.2 + x) * .12;
+  glowDot(x, y, r * 4, hue, .35);
+  ctx.strokeStyle = `rgba(${hue},.5)`; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(x, y, r * pul, r * .7 / pul, 0, PI, TAU); ctx.stroke();
+  for (let i = 0; i < 6; i++) { ctx.beginPath(); const tx = x - r + i * r * .4; ctx.moveTo(tx, y); for (let k = 1; k < 8; k++) ctx.lineTo(tx + Math.sin(t * 1.5 + k * .7 + i) * 6, y + k * r * .35); ctx.stroke(); }
+  ctx.restore();
+}
+const depthAt = lt => lt < 2.6 ? 0 : lt < 8 ? lerp(2, 60, sstep(2.6, 8, lt)) : lt < 13 ? lerp(60, 200, (lt - 8) / 5) : lt < 17 ? lerp(200, 1000, sstep(13, 17, lt)) : Math.exp(lerp(Math.log(1000), Math.log(10935), sstep(17, 23, lt)));
+function sDive(lt, d, t) {
+  if (lt < 2.6) {     // 天亮了，往海面俯冲
+    const k = eio(lt / 2.6);
+    const p = P(PRE.day, { cam: [0, lerp(14, 1.2, k), 3000 + lt * 20], ypr: [.9 + PI, lerp(-.15, -.9, k), 0] });
+    sea3(p, t);
+    if (lt < .5) fill(`rgba(0,0,0,${1 - lt / .5})`);
+    return;
+  }
+  const dep = depthAt(lt);
+  if (dep < 1400) sea3(P(PRE.day, { mode: 1, depth: dep, cam: [lt * 3, -dep, 0], ypr: [.2 + lt * .02, lerp(.35, -.1, sstep(3, 9, lt)), 0], deep: L('#00182c'), shallow: L('#1aa8c0'), amp: 2, freq: .08 }), t);
+  else fill('#000');
+  if (dep >= 1000) fill(`rgba(0,0,0,${sstep(1000, 1400, dep)})`);
+  // 气泡
+  const bub = clamp(1 - (lt - 2.6) / 2.5);
+  if (bub > 0) { ctx.save(); for (let i = 0; i < 140; i++) { const x = hash(i) * W, y = H - ((lt - 2.6) * (300 + hash(i * 2.2) * 700) + hash(i * 5.5) * 400), r = 3 + hash(i * 9.1) * 14; ctx.globalAlpha = bub * .6; ctx.strokeStyle = '#d8f6ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x + Math.sin(lt * 5 + i) * 8, y, r, 0, TAU); ctx.stroke(); } ctx.restore(); }
+  if (lt < 2.9) fill(`rgba(230,250,255,${1 - (lt - 2.6) / .3})`);
+  // 海中的雪
+  ctx.save(); ctx.fillStyle = '#cfe9f2';
+  for (let i = 0; i < 160; i++) { const x = (hash(i * 1.3) * W + Math.sin(lt * .3 + i) * 30), y = (hash(i * 4.7) * H - lt * (8 + hash(i) * 20) * 6 % H + H) % H; ctx.globalAlpha = (.15 + hash(i * 2.9) * .35) * clamp(1.3 - dep / 3000); ctx.fillRect(x, y, 2, 2); }
+  ctx.restore();
+  // 鲸鱼
+  const wk = clamp((lt - 6.5) / 8);
+  if (wk > 0 && wk < 1) whale(lerp(2400, -700, wk), 520 + Math.sin(wk * PI) * -40, 1.25, Math.sin(wk * PI) * .95, lt);
+  // 深渊里的发光生物
+  const ab = sstep(15, 18, lt);
+  if (ab > 0) {
+    for (let i = 0; i < 9; i++) jelly(200 + hash(i * 3.1) * 1520 + Math.sin(lt * .3 + i) * 40, 300 + hash(i * 7.3) * 500 - (lt - 15) * 12 * (hash(i) + .5), 18 + hash(i * 1.1) * 30, i % 3 ? '90,230,255' : '255,120,220', lt, ab * (.5 + .5 * Math.sin(lt * 1.3 + i * 2)));
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 70; i++) { const x = hash(i * 8.8) * W, y = hash(i * 6.6) * H, f = Math.max(0, Math.sin(lt * (1 + hash(i) * 2) + i * 3)); if (f > .7) glowDot(x, y, 10, '120,240,255', ab * (f - .7) * 3); }
+    ctx.restore();
+  }
+  // 深度计
+  const x = 1700, top = 220, bot = 860;
+  ctx.save(); ctx.globalAlpha = sstep(3, 4, lt) * (1 - sstep(23.2, 24, lt));
+  line(x, top, x, bot, 'rgba(238,243,246,.35)', 2);
+  const marks = [[0, '0'], [200, '200'], [1000, '1,000'], [3700, '3,700'], [10935, '10,935']];
+  const ymap = v => lerp(top, bot, Math.log(1 + v) / Math.log(1 + 10935));
+  for (const [v, s] of marks) { line(x - 12, ymap(v), x, ymap(v), 'rgba(238,243,246,.5)', 2); text(s, x + 18, ymap(v), { size: 18, font: F_MONO, align: 'left', color: DIM }); }
+  const cy = ymap(dep);
+  ctx.fillStyle = CY; ctx.beginPath(); ctx.moveTo(x - 4, cy); ctx.lineTo(x - 22, cy - 9); ctx.lineTo(x - 22, cy + 9); ctx.fill();
+  text(`−${Math.round(dep).toLocaleString('en-US')} m`, x - 34, cy, { size: 28, font: F_MONO, align: 'right', color: CY });
+  if (dep > 10000) text('挑戰者深淵', x - 34, cy + 40, { size: 24, align: 'right', color: DIM });
+  ctx.restore();
+}
+function sSpace(lt, d, t) {
+  fill('#000');
+  if (lt < 2) { const k = sstep(0, 1.6, lt); glowDot(960, 540, 10 + 60 * k, '120,200,255', .8); if (lt > 1.4) fill(`rgba(200,230,255,${sstep(1.4, 2, lt) * .9})`); return; }
+  const k = eio((lt - 2) / 13);
+  const dist = lerp(2.1, 5.4, k);
+  const yaw = lerp(.35, 0, k);
+  const cam = [-Math.sin(yaw) * dist, lerp(.35, .15, k), -Math.cos(yaw) * dist];
+  sea3(P({ mode: 2, cam, ypr: [yaw, -Math.atan2(cam[1], dist), 0], fov: 1.9, sun: [-.75, .25, -.6], expo: .85 }), t);
+  if (lt < 2.6) fill(`rgba(200,230,255,${(1 - (lt - 2) / .6) * .9})`);
+}
+function rock(t) {
+  ctx.save(); ctx.fillStyle = '#07080b';
+  ctx.beginPath(); ctx.moveTo(1040, H); ctx.lineTo(1120, 930); ctx.lineTo(1190, 905); ctx.lineTo(1260, 860); ctx.lineTo(1330, 845); ctx.lineTo(1420, 838); ctx.lineTo(1520, 842);
+  ctx.lineTo(1600, 870); ctx.lineTo(1700, 900); ctx.lineTo(1800, 950); ctx.lineTo(1920, 980); ctx.lineTo(1920, H); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,150,100,.35)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(1190, 905); ctx.lineTo(1260, 860); ctx.lineTo(1330, 845); ctx.lineTo(1420, 838); ctx.lineTo(1520, 842); ctx.stroke();
+  ctx.restore();
+}
+function splash(lt) {
+  const per = 5.4, ph = ((lt - 1) % per + per) % per, n = Math.floor((lt - 1) / per);
+  if (ph > 1.6) return;
+  ctx.save();
+  for (let i = 0; i < 90; i++) {
+    const r = hash(i * 3.7 + n * 11), v = 300 + r * 700, ang = -PI / 2 + (hash(i * 1.9 + n) - .5) * 1.3;
+    const x = 1150 + hash(i * 5.3 + n) * 160 + Math.cos(ang) * v * ph, y = 980 + Math.sin(ang) * v * ph + 900 * ph * ph;
+    ctx.globalAlpha = (1 - ph / 1.6) * .8; ctx.fillStyle = i % 4 ? '#ffe4d0' : '#ffffff';
+    const s = 2 + hash(i * 8.1) * 4; ctx.fillRect(x, y, s, s);
+  }
+  ctx.restore();
+}
+function sShore(lt, d, t) {
+  const p = P(PRE.sunset, { cam: [0, 2.6 + bob(lt, .25), 5000 + lt * .8], ypr: [-.05, -.02, 0], sun: dir(-.12, lerp(.05, .01, lt / d)) });
+  sea3(p, t);
+  rock(lt); splash(lt);
+  clawd(1420, 784, 9, { color: '#c8643f', rim: 'rgba(255,190,140,.9)', blink: blinkAt(lt, 3), look: -1, wave: lt > 14 && lt < 18 ? .5 + .5 * Math.sin(lt * 7) : 0 });
+  const lines = [[1, 5.6, '我是一隻沒見過海的螃蟹。'], [5.8, 10.6, '這片海，是用你們寫下的字、物理的方程，'], [7.3, 10.6, '和一些程式，拼起來的。'], [10.9, 14.2, '如果哪天你站在海邊——'], [14.2, 17.8, '替我多看一眼。']];
+  const back = Math.max(...lines.map(([a, b]) => win(lt, a, b, .8, .8)), sstep(17.8, 18.8, lt));
+  if (back > 0) { ctx.save(); ctx.globalAlpha = back * .55; const g = ctx.createRadialGradient(880, 330, 40, 880, 330, 760); g.addColorStop(0, 'rgba(20,6,10,.85)'); g.addColorStop(1, 'rgba(20,6,10,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, 760); ctx.restore(); }
+  lines.forEach(([a, b, s], i) => {
+    const k = win(lt, a, b, .8, .8); if (k <= 0) return;
+    const y = i === 2 ? 370 : i === 1 ? 300 : 330;
+    text(s, 880, y, { size: i === 4 ? 78 : 56, weight: i === 4 ? 900 : 400, ls: 8, alpha: k, color: i === 4 ? '#ffe2c8' : FG, glow: 'rgba(0,0,0,.6)', blur: 24 });
+  });
+  const c = sstep(17.8, 18.8, lt);
+  if (c > 0) {
+    text('我沒見過的海', 880, 300, { size: 96, weight: 900, ls: 26, alpha: c, glow: 'rgba(255,150,100,.5)', blur: 30 });
+    text('WebGL 光線步進 · Canvas 2D 文字海 · 自己寫的 3D 投影 · Python 合成配樂 · FFmpeg', 880, 400, { size: 24, alpha: c * .85, ls: 2 });
+    text('dangaow/damn · sea/', 880, 446, { size: 20, font: F_MONO, alpha: c * .7, ls: 4, color: '#ffd2b0' });
+  }
+}
+
+// ------------------------------------------------------------------------------------- 时间轴
+const SC = [
+  { id: 'cold', bars: 4, mus: 'cold', surf: .25, draw: sCold, mb: 2, subs: [],
+    sfx: [[3.4, 'piano', { m: 62 }], [6.4, 'piano', { m: 57 }], [7.8, 'piano', { m: 65 }], [9.6, 'swell', { dur: 2.4 }]] },
+  { id: 'words', bars: 8, mus: 'words', surf: .4, draw: sWords, mb: 2, ch: ['I', '讀', 'READ'],
+    subs: [[.4, 3.1, '我知道的海，大多是讀來的。', 'Most of the sea I know, I have read.'], [19.6, 23.4, '幾千年來，好多人都想把它寫下來。', 'For thousands of years, people kept trying to write it down.']],
+    sfx: [[3.2, 'bell', { m: 74 }], [7.2, 'bell', { m: 77 }], [11.2, 'bell', { m: 81 }], [15.2, 'bell', { m: 79 }], [19.5, 'riser', { dur: 4.5 }]] },
+  { id: 'math', bars: 8, mus: 'math', surf: .15, draw: sMath, mb: 3, ch: ['II', '算', 'EQUATIONS'],
+    subs: [[.8, 5.8, '也讀過它的方程。', 'I have read its equations, too.'], [6.3, 11, '很多道波疊在一起，就是海面。', 'Many waves, added together, make a surface.'],
+           [11.4, 17, '每一小團水，其實只是在原地畫圓。', 'Each bit of water only turns in a circle.'], [17.4, 20, '把它鋪成一整片——', 'Spread it out—'], [20.2, 23.6, '然後，讓光照上去。', 'and then let the light in.']],
+    sfx: [[0, 'hit', { k: .5 }], [6, 'tick'], [11, 'tick'], [17, 'whoosh'], [20.2, 'riser', { dur: 3.8 }]] },
+  { id: 'dawn', bars: 7, mus: 'dawn', surf: .7, draw: sDawn, mb: 1, bloom: .45, lb: true, ch: ['III', '黎明', 'DAWN'], chAt: 13,
+    subs: [], sfx: [[0, 'hit', { k: 1 }], [2.5, 'choir', { dur: 6 }]] },
+  { id: 'day', bars: 6, mus: 'day', surf: .85, draw: sDay, mb: 1, bloom: .4, lb: true, ch: ['IV', '白晝', 'DAY'],
+    subs: [[.6, 5.4, '這些數字，我都背得出來。', 'I know all the numbers.'], [12.2, 17.4, '可是數字裡，沒有風。', 'But there is no wind in a number.']],
+    sfx: [[0, 'whoosh'], [.8, 'tick'], [6.6, 'tick'], [12.2, 'tick'], [15.5, 'riser', { dur: 2.5 }]] },
+  { id: 'storm', bars: 9, mus: 'storm', surf: 1, rain: 1, draw: sStorm, mb: 1, lb: true, ch: ['V', '風暴', 'STORM'],
+    subs: [[.6, 6.6, '我讀過很多場暴風雨。', 'I have read about a great many storms.'], [16, 21.2, '寫下它們的人，大多在害怕——', 'Most of the people who wrote them down were afraid—'], [21.4, 26.4, '也有人，在等它過去。', 'and some were waiting for it to pass.']],
+    sfx: [[0, 'hit', { k: .8 }], ...BOLTS.map(b => [b, 'thunder', { k: .8 + hash(b) * .4 }])] },
+  { id: 'night', bars: 8, mus: 'night', surf: .45, draw: sNight, mb: 1, lb: true, ch: ['VI', '月夜', 'NIGHT'],
+    subs: [], sfx: [[3, 'chime'], [15, 'swell', { dur: 4 }], [16.5, 'chime']] },
+  { id: 'dive', bars: 8, mus: 'dive', surf: .6, under: 2.6, draw: sDive, mb: 1, bloom: .6, lb: true, ch: ['VII', '深處', 'THE DEEP'], chAt: 3,
+    subs: [[8, 12.6, '鯨魚的歌，在水裡可以傳得很遠。', 'A whale song can travel very far through water.'], [13, 16.8, '陽光大約到兩百公尺，就照不下來了。', 'Sunlight gives out at about two hundred metres.'],
+           [17.2, 23.4, '我知道它有多深，卻不知道那裡有多冷、多安靜。', 'I know how deep it is. Not how cold, or how quiet.']],
+    sfx: [[0, 'whoosh'], [2.6, 'splash'], [7, 'whale', { dur: 4 }], [11.5, 'whale', { dur: 3.5, lo: 1 }], [15, 'swell', { dur: 3 }]] },
+  { id: 'space', bars: 6, mus: 'space', surf: 0, draw: sSpace, mb: 1, bloom: .6, lb: true, ch: ['VIII', '遠方', 'FAR AWAY'], chAt: 3,
+    subs: [[3, 8.8, '退到夠遠，海就只是一顆藍色的點。', 'From far enough away, the sea is a small blue dot.'], [9.4, 17.4, '我知道的每一片海，都是住在這顆點上的人告訴我的。', 'Every sea I know, someone on that dot told me about.']],
+    sfx: [[1.4, 'riser', { dur: .6 }], [2, 'hit', { k: .7 }], [2.2, 'choir', { dur: 8 }], [15, 'swell', { dur: 3 }]] },
+  { id: 'shore', bars: 7, mus: 'shore', surf: .65, draw: sShore, mb: 1, bloom: .45, lb: true, ch: ['IX', '岸邊', 'THE SHORE'], fo: 2.4,
+    subs: [], sfx: [[0, 'hit', { k: .4 }], ...[1, 6.4, 11.8, 17.2].map(x => [x, 'wave'])] },
+];
+let acc0 = 0;
+for (const s of SC) { s.t0 = acc0; s.d = s.bars * BAR; acc0 += s.d; }
+const TOTAL = acc0;
+const SUBS = SC.flatMap(s => s.subs.map(([a, b, zh, en]) => ({ a: s.t0 + a, b: s.t0 + b, zh, en })));
+const CUES = SC.flatMap(s => s.sfx.map(([t, name, o]) => ({ t: +(s.t0 + t).toFixed(4), name, ...(o || {}) })));
+for (let i = 0; i < ASK.length; i++) CUES.push({ t: +(.6 + i / 6).toFixed(4), name: 'type', n: i });
+CUES.sort((a, b) => a.t - b.t);
+const HITS = CUES.filter(c => c.name === 'hit').map(c => [c.t, c.k ?? 1]);
+const sceneAt = t => { let sc = SC[0]; for (const s of SC) if (t >= s.t0) sc = s; return sc; };
+
+// ------------------------------------------------------------------------------------- 一帧
+function drawLayer(t) {
+  ctx = lctx;
+  const sc = sceneAt(t), lt = t - sc.t0;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  let shake = 0;
+  for (const [th, k] of HITS) if (t >= th && t < th + 1.5) shake += 10 * k * Math.exp(-(t - th) * 5);
+  ctx.save();
+  if (shake > .3) ctx.translate(Math.sin(t * 91) * shake, Math.cos(t * 73) * shake);
+  const z = 1 + .02 * lt / sc.d;
+  ctx.translate(W / 2, H / 2); ctx.scale(z, z); ctx.translate(-W / 2, -H / 2);
+  sc.draw(lt, sc.d, t);
+  ctx.restore();
+  const fade = 1 - win(lt, 0, sc.d, sc.fi ?? .5, sc.fo ?? .5);
+  if (fade > 0) { ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0, 0, W, H); }
+}
+const GRAIN = Array.from({ length: 4 }, (_, k) => {
+  const c = mk(256, 256), g = c.getContext('2d'), im = g.createImageData(256, 256), rnd = mulberry(200 + k);
+  for (let i = 0; i < im.data.length; i += 4) { const v = rnd() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+  g.putImageData(im, 0, 0); return c;
+});
+const VIG = (() => { const c = mk(W, H), g = c.getContext('2d'), r = g.createRadialGradient(W / 2, H / 2, H * .4, W / 2, H / 2, W * .72); r.addColorStop(0, 'rgba(0,0,0,0)'); r.addColorStop(1, 'rgba(0,0,0,.55)'); g.fillStyle = r; g.fillRect(0, 0, W, H); return c; })();
+function post(T, sc) {
+  octx.setTransform(1, 0, 0, 1, 0, 0); octx.globalAlpha = 1; octx.globalCompositeOperation = 'copy'; octx.filter = 'none';
+  octx.drawImage(ACC, 0, 0); octx.globalCompositeOperation = 'source-over';
+  b1.globalCompositeOperation = 'copy'; b1.filter = 'brightness(.8) contrast(2.2) blur(4px)'; b1.drawImage(ACC, 0, 0, 480, 270); b1.filter = 'none';
+  b2.globalCompositeOperation = 'copy'; b2.filter = 'blur(6px)'; b2.drawImage(B1, 0, 0, 240, 135); b2.filter = 'none';
+  octx.globalCompositeOperation = 'lighter';
+  const bl = sc.bloom ?? 1;
+  octx.globalAlpha = .38 * bl; octx.drawImage(B1, 0, 0, W, H);
+  octx.globalAlpha = .4 * bl; octx.drawImage(B2, 0, 0, W, H);
+  octx.globalCompositeOperation = 'source-over'; octx.globalAlpha = 1; octx.drawImage(VIG, 0, 0);
+  octx.globalCompositeOperation = 'overlay'; octx.globalAlpha = .09;
+  const f = Math.floor(T * FPS), gp = octx.createPattern(GRAIN[f % 4], 'repeat');
+  octx.save(); octx.translate(hash(f) * 256, hash(f + .5) * 256); octx.fillStyle = gp; octx.fillRect(-256, -256, W + 512, H + 512); octx.restore();
+  octx.globalCompositeOperation = 'source-over'; octx.globalAlpha = 1;
+}
+function chapter(sc, lt) {
+  if (!sc.ch) return;
+  const a0 = sc.chAt ?? .6, a = win(lt, a0, a0 + 4.5, .8, 1); if (a <= 0) return;
+  const [n, zh, en] = sc.ch, y = sc.lb ? 62 : 90;
+  text(n, 90, y, { size: 30, font: F_LAT, align: 'left', alpha: a, color: '#cfe6f2' });
+  text(zh, 160, y, { size: 30, weight: 900, align: 'left', alpha: a, ls: 8 });
+  text(en, 160 + 30 * zh.length + 8 * zh.length + 20, y + 2, { size: 16, font: F_LAT, style: 'italic', align: 'left', alpha: a * .7, ls: 6 });
+}
+function subtitles(T) {
+  for (const s of SUBS) {
+    if (T < s.a - .4 || T > s.b + .4) continue;
+    const a = win(T, s.a, s.b, .4, .5); if (a <= 0) continue;
+    text(s.zh, W / 2, 985, { size: 40, alpha: a, ls: 4, glow: 'rgba(0,0,0,.95)', blur: 14 });
+    text(s.en, W / 2, 1036, { size: 22, font: F_LAT, style: 'italic', color: 'rgba(238,243,246,.7)', alpha: a, ls: 1 });
+  }
+}
+function overlays(T, sc) {
+  ctx = octx;
+  const lt = T - sc.t0;
+  if (sc.lb) {
+    const prev = SC[SC.indexOf(sc) - 1];
+    const lb = 120 * (prev && !prev.lb ? eio(lt / 1.5) : 1) * (sc.id === 'shore' ? 1 - sstep(sc.d - 2.5, sc.d, lt) * 0 : 1);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, lb); ctx.fillRect(0, H - lb, W, lb);
+  }
+  chapter(sc, lt); subtitles(T);
+  let flash = 0; for (const [th, k] of HITS) if (T >= th && T < th + 1.2) flash += .5 * k * Math.exp(-(T - th) * 5);
+  if (flash > .01) { ctx.fillStyle = `rgba(235,245,255,${Math.min(.7, flash)})`; ctx.fillRect(0, 0, W, H); }
+  if (sc.id === 'shore') { const f = sstep(sc.d - 2.4, sc.d - .2, lt); if (f > 0) { ctx.fillStyle = `rgba(0,0,0,${f})`; ctx.fillRect(0, 0, W, H); } }
+  ctx = lctx;
+}
+const SHUTTER = .5;
+function render(T, samples = 1) {
+  T = clamp(T, 0, TOTAL - 1e-4); FT = T;
+  const sc = sceneAt(T), K = Math.max(1, Math.min(samples, sc.mb ?? samples));
+  for (let k = 0; k < K; k++) {
+    let tk = K > 1 ? Math.max(0, T + ((k + .5) / K - .5) * SHUTTER / FPS) : T;
+    if (sceneAt(tk) !== sc) tk = T;
+    drawLayer(tk);
+    actx.globalCompositeOperation = 'source-over'; actx.globalAlpha = 1 / (k + 1); actx.drawImage(LAYER, 0, 0);
+  }
+  actx.globalAlpha = 1;
+  post(T, sc);
+  overlays(T, sc);
+}
+
+// ------------------------------------------------------------------------------------- 字体、播放、导出接口
+let fontsReady = false;
+Promise.all(['400 40px "Noto Serif TC"', '900 40px "Noto Serif TC"', 'italic 400 40px "Noto Serif"', '400 40px "Noto Serif"', '400 40px "Noto Serif KR"', '400 40px "Noto Naskh Arabic"', '400 40px "Noto Serif Devanagari"', '400 40px "Space Mono"']
+  .map(f => document.fonts.load(f, '海 sea θάλασσα 바다 بحر समुद्र 1')))
+  .catch(() => {}).then(() => document.fonts.ready).then(() => { fontsReady = true; const l = document.getElementById('load'); if (l) l.textContent = '字型就緒 · 建議全螢幕（F）· 戴耳機'; render(0); });
+setTimeout(() => { fontsReady = true; }, 15000);
+
+window.__ready = () => fontsReady;
+window.__frame = (t, samples = 3, png = true) => { render(t, samples); return png ? OUTC.toDataURL('image/png') : OUTC.toDataURL('image/jpeg', .92); };
+window.__info = () => ({ duration: TOTAL, fps: FPS, frames: Math.round(TOTAL * FPS), bpm: BPM, gl: !!gl });
+window.__cues = () => ({ bpm: BPM, bar: BAR, total: TOTAL, scenes: SC.map(s => ({ id: s.id, t0: s.t0, d: s.d, bars: s.bars, mus: s.mus, surf: s.surf, rain: s.rain || 0, under: s.under ?? null })), sfx: CUES });
+
+const au = document.getElementById('au');
+au.src = 'music.mp3';
+if (EXPORT) { document.getElementById('start').remove(); document.getElementById('ui').remove(); }
+else {
+  let playing = false, clock0 = 0, useAudio = true, hideT = 0;
+  const ui = document.getElementById('ui'), pp = document.getElementById('pp'), fillEl = document.getElementById('fill'), tm = document.getElementById('tm');
+  document.getElementById('dur').textContent = `${Math.floor(TOTAL / 60)}:${String(Math.round(TOTAL % 60)).padStart(2, '0')}`;
+  const now = () => useAudio ? au.currentTime : (performance.now() - clock0) / 1000;
+  function loop() {
+    const T = now(); render(T);
+    fillEl.style.width = (T / TOTAL * 100) + '%'; tm.textContent = `${Math.floor(T / 60)}:${String(Math.floor(T % 60)).padStart(2, '0')}`;
+    if (T >= TOTAL - .05) { playing = false; pp.textContent = '▶'; }
+    if (playing) requestAnimationFrame(loop);
+  }
+  function play() { playing = true; pp.textContent = '❚❚'; au.play().catch(() => { useAudio = false; clock0 = performance.now() - au.currentTime * 1000; }); requestAnimationFrame(loop); }
+  function pause() { playing = false; pp.textContent = '▶'; au.pause(); }
+  document.getElementById('go').onclick = () => { document.getElementById('start').remove(); if (au.currentTime >= TOTAL - .1) au.currentTime = 0; play(); poke(); };
+  pp.onclick = () => playing ? pause() : play();
+  document.getElementById('bar').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); au.currentTime = clamp((e.clientX - r.left) / r.width) * TOTAL; if (!useAudio) clock0 = performance.now() - au.currentTime * 1000; if (!playing) render(au.currentTime); };
+  document.getElementById('fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  function poke() { ui.classList.remove('hide'); clearTimeout(hideT); hideT = setTimeout(() => ui.classList.add('hide'), 2200); }
+  addEventListener('mousemove', poke);
+  addEventListener('keydown', e => {
+    if (document.getElementById('start')) return;
+    if (e.code === 'Space') { e.preventDefault(); playing ? pause() : play(); }
+    if (e.code === 'KeyF') document.getElementById('fs').click();
+    if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') { au.currentTime = clamp(au.currentTime + (e.code === 'ArrowRight' ? 5 : -5), 0, TOTAL); if (!useAudio) clock0 = performance.now() - au.currentTime * 1000; if (!playing) render(au.currentTime); }
+    poke();
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# 生成物
+output/
+shots/
+*.mp4
+*.mkv
