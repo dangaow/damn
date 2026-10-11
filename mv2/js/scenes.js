@@ -82,26 +82,31 @@ function lampPath(c, t, t0, o = {}) {
     c.restore();
   }
 }
-// YuKIluv7 的铭牌：灯下房间左下角一级水泥台阶，正面钉着金属牌，斜着拍。on 灯的亮度，spec 反光扫过的位置
+// YuKIluv7 的铭牌：灯下房间左下角一级水泥台阶，正面钉着金属牌，斜着拍。
+// 透视：台阶正面的上下边都收向地平线上同一个消失点 VP（画面右外），牌子跟着同一个透视；台阶往左伸出画面外。
+// on 灯的亮度，spec 反光扫过的位置
 function stepPlaque(c, t, o = {}) {
-  const on = o.on ?? 1, dy = o.dy ?? 0;
-  const fT = x => lerp(690, 736, (x - 100) / 700) + dy, fB = x => lerp(880, 872, (x - 100) / 700) + dy;
-  concrete(c, [[100, fT(100)], [250, 636 + dy], [890, 700 + dy], [800, fT(800)]], '#545b63', '#3a4047');                 // 台面（被灯照到）
-  concrete(c, [[100, fT(100)], [800, fT(800)], [800, fB(800)], [100, fB(100)]], '#262b31', '#121518');                 // 正面
-  const xL = 200, xR = 640, pl = (x, k) => lerp(fT(x), fB(x), k);
-  plane(c, plaqueTex('YuKIluv7', 'VOCAL / LYRICS / COMPOSITION / ARRANGEMENT', false), xL, pl(xL, .2), pl(xL, .74), xR, pl(xR, .24), pl(xR, .72), { spec: o.spec, dark: (1 - on) * .85 + .12 });
-  if (o.snow) { c.save(); c.globalAlpha = o.snow; c.filter = 'blur(2px)'; c.fillStyle = '#dfe6ec'; c.beginPath(); c.moveTo(100, fT(100)); c.lineTo(250, 636 + dy); c.lineTo(890, 700 + dy); c.lineTo(800, fT(800)); c.closePath(); c.fill(); c.restore(); c.filter = 'none'; }
+  const on = o.on ?? 1, VP = [2700, FLOOR.yh], x0 = -60, x1 = 820, T0 = 690, B0 = 880;
+  const edge = (y0, x) => lerp(y0, VP[1], (x - x0) / (VP[0] - x0));                // 从左边 (x0, y0) 收向 VP 的直线
+  const fT = x => edge(T0, x), fB = x => edge(B0, x);
+  const depth = .1, back = (x, y) => [lerp(x, -1400, depth), lerp(y, FLOOR.yh, depth)];   // 台面往里退（第二个消失点在左边很远）
+  concrete(c, [back(x0, fT(x0)), back(x1, fT(x1)), [x1, fT(x1)], [x0, fT(x0)]], '#5a616a', '#41474e');                 // 台面（被灯照到）
+  concrete(c, [[x0, fT(x0)], [x1, fT(x1)], [x1, fB(x1)], [x0, fB(x0)]], '#272c32', '#121518');                         // 正面
+  c.fillStyle = 'rgba(0,0,0,.6)'; c.beginPath(); c.moveTo(x1, fT(x1)); c.lineTo(...back(x1, fT(x1))); c.lineTo(x1 + 18, fT(x1) + 4); c.lineTo(x1 + 4, fB(x1)); c.lineTo(x1, fB(x1)); c.closePath(); c.fill();   // 右端一点侧面
+  const xL = 170, xR = 640, pl = (x, k) => lerp(fT(x), fB(x), k);
+  plane(c, plaqueTex('YuKIluv7', 'VOCAL / LYRICS / COMPOSITION / ARRANGEMENT', false), xL, pl(xL, .22), pl(xL, .72), xR, pl(xR, .22), pl(xR, .72), { spec: o.spec, dark: (1 - on) * .85 + .12 });
+  if (o.snow) { c.save(); c.globalAlpha = o.snow; c.filter = 'blur(2px)'; c.fillStyle = '#dfe6ec'; c.beginPath(); [back(x0, fT(x0)), back(x1, fT(x1)), [x1, fT(x1)], [x0, fT(x0)]].forEach((q, i) => i ? c.lineTo(...q) : c.moveTo(...q)); c.closePath(); c.fill(); c.restore(); c.filter = 'none'; }
 }
 // dangao_w 的铭牌：天桥底下前景一根水泥柱子，柱子侧面钉着金属牌，被雨淋湿
 function pillarPlaque(c, t, o = {}) {
-  const yT = x => lerp(-120, 70, (x + 20) / 490), yB = x => lerp(H + 120, 1000, (x + 20) / 490);
+  const VP = [1500, 540], e = (y0, x) => lerp(y0, VP[1], (x + 20) / (VP[0] + 20));                        // 柱子侧面的上下边收向同一个消失点
+  const yT = x => e(-160, x), yB = x => e(H + 160, x);
   concrete(c, [[-20, yT(-20)], [470, yT(470)], [470, yB(470)], [-20, yB(-20)]], '#0c1424', '#04070d');
   c.save(); c.beginPath(); c.moveTo(-20, yT(-20)); c.lineTo(470, yT(470)); c.lineTo(470, yB(470)); c.lineTo(-20, yB(-20)); c.closePath(); c.clip();
   rain(c, t * .25, { seed: 31, n: 70, spd: 300, len: 160, wind: 0, alpha: .18, col: 'rgb(160,200,240)' });          // 柱子上往下流的水
   c.restore();
   const xL = 80, xR = 400, mid = x => lerp(yT(x), yB(x), .44), hh = x => (yB(x) - yT(x)) * .085;
   plane(c, plaqueTex('dangao_w', 'VOCAL / LYRICS / COMPOSITION', true), xL, mid(xL) - hh(xL), mid(xL) + hh(xL), xR, mid(xR) - hh(xR), mid(xR) + hh(xR), { spec: o.spec, specA: .7, dark: .38 });
-  c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = 'rgba(127,212,255,.06)'; c.fillRect(xL, mid(xL) - hh(xL), xR - xL, hh(xL) * 2); c.restore();
   c.fillStyle = 'rgba(160,210,255,.25)'; c.fillRect(466, yT(470), 4, yB(470) - yT(470));                               // 柱子边缘的一道蓝光
 }
 // 落下来的拍立得：从 t0 开始，每隔 gap 落一张，落到地上停住
