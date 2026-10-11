@@ -1104,90 +1104,62 @@ scene(20.675, [14, 15], (T, lt, P) => {
   sub(14, T); sub(15, T);
 }, (T, lt) => ({ col: .45, tint: AGED }));
 
-// ---- 07 two umbrellas crossing in the rain, seen from above; one stops, the other is lost in the crowd ------------------ 0:23.4 - 0:30.1
-// an umbrella from above: eight panels between ribs, scalloped rim, a wet sheen, rain landing on it
-function umbrella(c, x, y, r, rot, cols, T, o = {}) {
+// ---- 07 two umbrellas in the rain, seen from above: they open, turn as they're carried, one stops, the other folds away ---- 0:23.4 - 0:30.1
+// an umbrella from above that moves like one: open 0..1 unfolds it from a closed point, spin turns it, the fabric breathes
+// between the ribs, tilt pushes the tip off centre, the panels catch the light by their angle, rain beads run to the tips
+// and fly off when it turns.
+function canopy(c, x, y, r, T, o = {}) {
+  const open = o.open ?? 1, op = eout(open), spin = o.spin || 0, n = 8, seed = o.seed || 0, cols = o.cols;
+  if (op <= .001) return;
+  const R = r * (.1 + .9 * op), tl = o.tilt || [0, 0], ax = x + tl[0] * R * .22, ay = y + tl[1] * R * .22, wind = o.wind ?? 1;
+  const tip = k => { const a = spin + k / n * TAU, fl = 1 + (.025 * Math.sin(T * 2.3 + k * 1.7 + seed) + .015 * Math.sin(T * 5.1 + k * 2.9 + seed)) * wind * op;
+    return [x + Math.cos(a) * R * fl, y + Math.sin(a) * R * fl, a]; };
   c.save(); c.globalAlpha *= o.alpha ?? 1;
-  if (o.shadow !== false) { c.fillStyle = 'rgba(0,0,0,.45)'; c.beginPath(); c.ellipse(x + r * .18, y + r * .22, r * 1.02, r * .98, 0, 0, TAU); c.fill(); }   // its shadow on the wet road
-  c.translate(x, y); if (o.squash) c.scale(1, o.squash); c.rotate(rot);
-  const tip = k => [Math.cos(k / 8 * TAU) * r, Math.sin(k / 8 * TAU) * r];
-  for (let k = 0; k < 8; k++) {
-    const [ax, ay] = tip(k), [bx, by] = tip(k + 1), mx = (ax + bx) / 2 * .9, my = (ay + by) / 2 * .9;
-    c.fillStyle = cols[k % cols.length]; c.beginPath(); c.moveTo(0, 0); c.lineTo(ax, ay); c.quadraticCurveTo(mx, my, bx, by); c.closePath(); c.fill();
+  if (o.blur) c.filter = `blur(${o.blur}px)`;
+  if (o.shadow !== false) { c.fillStyle = 'rgba(0,0,0,.4)'; c.beginPath(); c.ellipse(x + R * .16, y + R * .2, R * 1.02, R * .98, 0, 0, TAU); c.fill(); }
+  const slack = lerp(.55, .9, op) - .04 * Math.sin(T * 1.7 + seed) * wind;            // closed fabric sags between the ribs
+  for (let k = 0; k < n; k++) {
+    const [x0, y0, a0] = tip(k), [x1, y1] = tip(k + 1), mx = ax + ((x0 + x1) / 2 - ax) * slack, my = ay + ((y0 + y1) / 2 - ay) * slack;
+    const light = .5 + .5 * Math.cos(a0 + PI / n - (o.lightA ?? -2.3));                // panels turned to the light are lighter
+    c.fillStyle = cols[k % cols.length]; c.beginPath(); c.moveTo(ax, ay); c.lineTo(x0, y0); c.quadraticCurveTo(mx, my, x1, y1); c.closePath(); c.fill();
+    c.fillStyle = `rgba(255,255,255,${(o.sheen ?? .2) * light * op})`; c.fill();
+    c.fillStyle = `rgba(0,0,0,${.22 * (1 - light)})`; c.fill();
   }
-  c.strokeStyle = o.rib || 'rgba(0,0,0,.55)'; c.lineWidth = 1.6;
-  for (let k = 0; k < 8; k++) { const [ax, ay] = tip(k); c.beginPath(); c.moveTo(0, 0); c.lineTo(ax, ay); c.stroke(); }
-  const sh = c.createRadialGradient(-r * .35, -r * .35, 0, -r * .35, -r * .35, r * 1.1); sh.addColorStop(0, `rgba(255,255,255,${o.sheen ?? .22})`); sh.addColorStop(1, 'rgba(255,255,255,0)');
-  c.fillStyle = sh; c.beginPath(); c.arc(0, 0, r, 0, TAU); c.fill();
-  if (o.rim) { c.strokeStyle = o.rim; c.lineWidth = 3; c.beginPath(); for (let k = 0; k <= 8; k++) { const [ax, ay] = tip(k % 8), [bx, by] = tip(k + 1); if (k === 8) break; if (!k) c.moveTo(ax, ay); c.quadraticCurveTo((ax + bx) / 2 * .9, (ay + by) / 2 * .9, bx, by); } c.stroke(); }
-  c.fillStyle = '#d8d8d8'; c.beginPath(); c.arc(0, 0, r * .05, 0, TAU); c.fill();
-  if (o.drops) for (let i = 0; i < o.drops; i++) {                   // rain landing on the canopy
-    const per = .5 + .5 * hash1(i * 3.1 + (o.seed || 0)), age = (T + hash1(i * 7.3) * per) % per, cyc = Math.floor((T + hash1(i * 7.3) * per) / per);
-    const a = hash2(i, cyc + 50) * TAU, d = Math.sqrt(hash2(i + 9, cyc)) * r * .9, k = age / per;
-    c.strokeStyle = `rgba(255,255,255,${.7 * (1 - k)})`; c.lineWidth = 1.4; c.beginPath(); c.arc(Math.cos(a) * d, Math.sin(a) * d, 2 + k * 9, 0, TAU); c.stroke();
+  c.strokeStyle = o.rib || 'rgba(0,0,0,.5)'; c.lineWidth = 1.5;
+  for (let k = 0; k < n; k++) { const [x0, y0] = tip(k); c.beginPath(); c.moveTo(ax, ay); c.quadraticCurveTo((ax + x0) / 2 + (y0 - ay) * .03, (ay + y0) / 2 - (x0 - ax) * .03, x0, y0); c.stroke(); }
+  if (o.rim) { c.strokeStyle = o.rim; c.lineWidth = 2.5; c.beginPath();
+    for (let k = 0; k < n; k++) { const [x0, y0] = tip(k), [x1, y1] = tip(k + 1); if (!k) c.moveTo(x0, y0); c.quadraticCurveTo(ax + ((x0 + x1) / 2 - ax) * slack, ay + ((y0 + y1) / 2 - ay) * slack, x1, y1); } c.stroke(); }
+  c.fillStyle = '#d8d8d8'; c.beginPath(); c.arc(ax, ay, R * .045, 0, TAU); c.fill();
+  // rain: beads land, slide down a panel to a tip, and leave; when it turns fast they fly off the tips
+  const nb = Math.round((o.beads ?? 10) * op), spinRate = Math.abs(o.spinRate || 0);
+  for (let i = 0; i < nb; i++) {
+    const per = 1 + 1.2 * hash1(i * 3.1 + seed), age = ((T + hash1(i * 7.3 + seed) * per) % per) / per, cyc = Math.floor((T + hash1(i * 7.3 + seed) * per) / per);
+    const k = Math.floor(hash2(i, cyc + seed) * n), [tx, ty] = tip(k), d = lerp(.2 + .5 * hash2(i + 3, cyc), 1, age * age);
+    const bx = ax + (tx - ax) * d, by = ay + (ty - ay) * d, a = sstep(0, .1, age) * (1 - sstep(.9, 1, age));
+    c.fillStyle = `rgba(245,245,245,${.75 * a})`; c.beginPath(); c.arc(bx, by, 2.2 + 1.5 * hash1(i), 0, TAU); c.fill();
+  }
+  if (spinRate > .3) for (let k = 0; k < n; k++) {                   // spray off the tips
+    const [tx, ty, a] = tip(k), q = ((T * 3 + k * .37 + seed) % 1), dir = Math.sign(o.spinRate);
+    const ox = Math.cos(a) * 30 * q - Math.sin(a) * dir * 40 * q, oy = Math.sin(a) * 30 * q + Math.cos(a) * dir * 40 * q;
+    c.strokeStyle = `rgba(240,240,240,${.5 * (1 - q) * clamp(spinRate - .3)})`; c.lineWidth = 2; c.beginPath(); c.moveTo(tx + ox, ty + oy); c.lineTo(tx + ox * 1.25, ty + oy * 1.25); c.stroke();
   }
   c.restore();
 }
-// someone walking under an umbrella, seen from high up at an angle: the canopy is a tilted disc, and under its front rim
-// the coat and the legs show; the legs stride, the canopy bobs with each step, water runs off the rim, the wet road
-// holds a long smear of reflection. wx = place on the road, s = distance walked, dir = +1 walking right, amp = stride
-function walker(c, wx, y, r, s, dir, T, o = {}) {
-  const camX = o.camX || 0, x = wx - camX, amp = o.amp ?? 1, stepLen = 64, ph = s / stepLen * PI, sq = .52;
-  const bob = -Math.abs(Math.sin(ph)) * 5 * amp, lean = Math.sin(ph) * .035 * amp + (o.idle || 0) * Math.sin(T * 1.3 + (o.seed || 0)) * .012;
-  const hip = y + r * .78, footY = y + r * 1.42, coat = o.legs || '#0a0a0a', edge = o.rimLight || 'rgba(205,205,205,.34)', cy = y + bob;
-  c.save(); c.globalAlpha *= o.alpha ?? 1;
-  // the reflection: a long vertical smear of the canopy's colour on the wet road
-  const rg = c.createLinearGradient(0, footY, 0, footY + r * 1.6); rg.addColorStop(0, o.refl || 'rgba(120,120,120,.22)'); rg.addColorStop(1, 'rgba(0,0,0,0)');
-  c.fillStyle = rg; c.fillRect(x - r * .5, footY, r, r * 1.6);
-  // splashes where the last steps came down
-  const k = Math.floor(ph / PI);
-  for (let j = 0; j < 3 && amp > .05; j++) {
-    const kk = k - j, age = (s - kk * stepLen) / stepLen; if (age < 0 || age > 3) continue;
-    const fx = wx - dir * (s - kk * stepLen) + dir * 18 - camX, fy = footY + (kk % 2 ? -5 : 5);
-    c.strokeStyle = `rgba(235,235,235,${.4 * (1 - age / 3) * amp})`; c.lineWidth = 1.5;
-    c.beginPath(); c.ellipse(fx, fy + 4, 4 + age * 13, (4 + age * 13) * .35, 0, 0, TAU); c.stroke();
-  }
-  // legs: two strides out of phase; the back foot lifts as it swings through
-  for (const [side, phase] of [[-1, ph + PI], [1, ph]]) {
-    const sw = Math.sin(phase) * 26 * amp * dir, up = Math.max(0, -Math.cos(phase)) * 8 * amp;
-    const hx = x + side * 9 + dir * 2, fx = x + sw + side * 4, fy = footY - up + (side < 0 ? -4 : 0), kx = (hx + fx) / 2 + dir * 4 * amp, ky = (hip + fy) / 2;
-    c.lineCap = 'round'; c.lineJoin = 'round';
-    for (const [col, lw] of [[edge, 16], [coat, 12]]) { c.strokeStyle = col; c.lineWidth = lw; c.beginPath(); c.moveTo(hx, hip); c.quadraticCurveTo(kx, ky, fx, fy); c.stroke(); }
-    c.fillStyle = coat; c.beginPath(); c.ellipse(fx + dir * 7, fy + 3, 13, 6, 0, 0, TAU); c.fill();
-    c.fillStyle = 'rgba(235,235,235,.45)'; c.beginPath(); c.ellipse(fx + dir * 12, fy + 1, 4, 1.6, 0, 0, TAU); c.fill();     // wet shoe catching the light
-  }
-  // the coat, from under the canopy to the knees, swinging a little with the stride
-  c.save(); c.translate(x, cy + r * .1); c.rotate(lean);
-  const hw = r * .3, hem = hip - cy + 6, flare = 5 * Math.sin(ph) * amp * dir;
-  c.beginPath(); c.moveTo(-hw * .55, 0); c.lineTo(hw * .55, 0); c.quadraticCurveTo(hw * .62, hem * .45, hw * .95 + flare, hem - 3);
-  c.quadraticCurveTo(flare, hem + 6, -hw * .95 + flare, hem - 3); c.quadraticCurveTo(-hw * .62, hem * .45, -hw * .55, 0); c.closePath();
-  c.strokeStyle = edge; c.lineWidth = 4; c.stroke(); c.fillStyle = coat; c.fill();
-  c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 2; c.beginPath(); c.moveTo(0, r * .2); c.lineTo(flare * .5, hem - 4); c.stroke();      // the coat's front edge
-  c.restore();
-  // water running off the front rim
-  for (let d = 0; d < 6; d++) {
-    const per = .55 + .3 * hash1(d * 3.1 + (o.seed || 0)), age = ((T + hash1(d * 7.7) * per) % per) / per, a = PI * (.1 + .8 * hash1(d * 5.3 + (o.seed || 0)));
-    const dx = x + Math.cos(a) * r * .97, dy0 = cy + Math.sin(a) * r * sq * .97;
-    c.strokeStyle = `rgba(235,235,235,${.55 * (1 - age)})`; c.lineWidth = 2; c.beginPath(); c.moveTo(dx, dy0 + age * 70); c.lineTo(dx, dy0 + age * 70 + 10); c.stroke();
-  }
-  c.restore();
-  // the canopy, tilted towards us, its shadow thrown down behind it
-  c.save(); c.globalAlpha *= (o.alpha ?? 1) * .5; c.fillStyle = '#000'; c.beginPath(); c.ellipse(x + r * .1, footY - r * .06, r * .9, r * .26, 0, 0, TAU); c.fill(); c.restore();
-  umbrella(c, x, cy, r, (o.rot || 0) + .04 * Math.sin(ph * .5) * amp, o.cols, T, { ...o, squash: sq, shadow: false, alpha: o.alpha ?? 1 });
-  // the hand on the handle, just below the front rim: the stick comes down out of the canopy into it
-  const hx = x + dir * 5 + lean * 40, hy = cy + r * .68, ax = x - dir * r * .16, ay = cy + r * .86;
-  c.save(); c.globalAlpha *= o.alpha ?? 1; c.lineCap = 'round';
-  c.strokeStyle = '#2a2a2a'; c.lineWidth = 4; c.beginPath(); c.moveTo(x + lean * 30, cy + r * sq * .9); c.lineTo(hx, hy); c.stroke();
-  for (const [col, lw] of [[edge, 13], [coat, 9]]) { c.strokeStyle = col; c.lineWidth = lw; c.beginPath(); c.moveTo(ax, ay); c.quadraticCurveTo(hx - dir * 4, hy + 16, hx, hy + 3); c.stroke(); }   // the forearm
-  c.fillStyle = o.hand || '#cfcac0'; c.beginPath(); c.ellipse(hx, hy + 2, 6, 5, 0, 0, TAU); c.fill();                       // knuckles catching the light
-  c.restore();
-}
-const UMB = { t0: 23.359, stop: L[18].t, crowd: L[19].t, alone: L[20].t, v: 140, yRed: H / 2 - 230, yMe: H / 2 - 10, cv: 330, c0: 26.4 };
+const UMB = { t0: 23.359, stop: L[18].t, crowd: L[19].t, alone: L[20].t, v: 140, yRed: H / 2 - 110, yMe: H / 2 + 75 };
 // distance walked: a slow stroll, and an eased stop for the one who stops
 const walked = (T, stops) => { const d = T - UMB.t0; if (!stops || T < UMB.stop) return UMB.v * d; const s = Math.min(T - UMB.stop, .7); return UMB.v * (UMB.stop - UMB.t0) + UMB.v * (s - s * s / 1.4); };
+// how far an umbrella has turned: it turns as it's carried, and settles when it stops
+const turned = (T, stops) => { const d = T - UMB.t0; if (!stops || T < UMB.stop) return .32 * d; const s = Math.min(T - UMB.stop, 1.2); return .32 * (UMB.stop - UMB.t0) + .32 * (s - s * s / 2.4); };
+const CROWD = Array.from({ length: 17 }, (_, i) => {
+  const near = i < 3, lane = hash1(i * 4.1);
+  // they pass above and below the two; the last near one only after she has gone
+  return { near, y: near ? [H / 2 + 420, H / 2 - 470, H / 2 + 40][i] : lane < .5 ? H / 2 - 520 + lane / .5 * 280 : H / 2 + 230 + (lane - .5) / .5 * 260,
+    r: near ? 260 + 60 * hash1(i * 9.9) : 70 + 50 * hash1(i * 2.2), v: near ? 900 : 260 + 140 * hash1(i * 6.1), x0: near ? W + 400 : W + 80 + hash1(i * 9.7) * 1100,
+    t: near ? [UMB.crowd + .1, UMB.crowd + .6, UMB.crowd + 1.55][i] : UMB.crowd - .9 + hash1(i * 13.3) * .9, spin: (hash1(i * 3.9) - .5) * 1.4, g: Math.round(30 + 75 * hash1(i * 6.6)), clear: !near && hash1(i * 8.8) < .2 };
+});
 scene(23.359, [16, 17, 18, 19, 20], (T, lt, P) => {
   const camX = walked(T, true) - 60, red = sstep(UMB.stop - .1, UMB.stop + .5, T);
-  const z = 1.25 - .4 * eio(clamp((T - UMB.alone) / 1.4)), meWX = 820 + walked(T, true), meX = meWX - camX, meY = UMB.yMe;   // close enough to see them walk; rising at the end
+  const z = 1.18 - .38 * eio(clamp((T - UMB.alone) / 1.4)), meX = 820 + walked(T, true) - camX, meY = UMB.yMe;
   sx.save(); sx.translate(meX, meY); sx.scale(z, z); sx.translate(-meX, -meY);
   sx.fillStyle = '#0d0d0d'; sx.fillRect(-W, -H, W * 3, H * 3);
   sx.save(); sx.globalCompositeOperation = 'lighter';                 // wet asphalt glints
@@ -1215,26 +1187,29 @@ scene(23.359, [16, 17, 18, 19, 20], (T, lt, P) => {
     const x = hash2(i, cyc) * W * 1.2 - W * .1, y = hash2(i + 40, cyc) * H, k = age / per;
     sx.strokeStyle = `rgba(230,230,230,${.5 * (1 - k)})`; sx.lineWidth = 1.5; sx.beginPath(); sx.arc(x, y, 3 + k * 22, 0, TAU); sx.stroke();
   }
-  // she keeps walking; when the crowd has passed, she is gone
-  const redA = 1 - sstep(28.35, 28.8, T);
-  if (redA > 0) walker(sx, 850 + walked(T, false), UMB.yRed, 108, walked(T, false), 1, T, { camX, alpha: redA, cols: ['#d11a2e', '#b30f26'], sheen: .3, drops: 8, seed: 3, rot: .2, legs: '#120809', refl: 'rgba(210,26,46,.35)' });
-  // a crowd crossing the other way, at a brisk walk, either side of him
-  for (let i = 0; i < 30; i++) {
-    const lane = hash1(i * 4.1), y = lane < .7 ? H / 2 - 470 + lane / .7 * 330 : H / 2 + 250 + (lane - .7) / .3 * 200;
-    const d = UMB.cv * (T - UMB.c0) + hash1(i * 13.3) * 40, wx = camX + W + 120 + hash1(i * 9.7) * 700 - d, r = 82 + 30 * hash1(i * 2.2);
-    if (wx - camX < -220 || wx - camX > W + 220) continue;
-    const g = Math.round(26 + 70 * hash1(i * 6.6)), clear = hash1(i * 8.8) < .15;
-    const cols = clear ? ['rgba(235,235,235,.28)', 'rgba(235,235,235,.2)'] : [`rgb(${g},${g},${g})`, `rgb(${g + 14},${g + 14},${g + 14})`];
-    walker(sx, wx, y, r, d + hash1(i * 5.1) * 140, -1, T, { camX, cols, hand: '#3a3a3a', rot: hash1(i * 3.9) * 3, sheen: clear ? .1 : .16, rib: clear ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.5)', seed: i });
-  }
-  // him: walks, slows, stops, and stands
-  const amp = T < UMB.stop ? 1 : 1 - eio(clamp((T - UMB.stop) / .7));
-  walker(sx, meWX, meY, 104, walked(T, true), 1, T, { camX, amp, idle: 1 - amp, cols: ['#161616', '#242424'], sheen: .24, rib: 'rgba(150,150,150,.55)', rim: 'rgba(225,225,225,.55)', drops: T > UMB.alone - .3 ? 14 : 6, seed: 7, rot: -.3, legs: '#090909', rimLight: 'rgba(215,215,215,.45)' });
+  const bobA = T => 1 + .012 * Math.sin((T - UMB.t0) / BEAT * TAU);   // the canopy rises and falls a little with each step
+  // she: opens first, turns as she walks; as the crowd goes through, her umbrella turns faster, folds shut and is gone
+  const fold = sstep(UMB.crowd + .55, UMB.crowd + 1.35, T), redOpen = sstep(23.36, 23.95, T) * (1 - fold);
+  const redX = 850 + walked(T, false) - camX, redSpin = turned(T, false) + 2.6 * fold * fold;
+  if (redOpen > 0) canopy(sx, redX, UMB.yRed, 110 * bobA(T + .25), T, { open: redOpen, spin: redSpin + .2, spinRate: .32 + 3 * fold * (1 - fold), tilt: [.6, -.2], cols: ['#d11a2e', '#b30f26'], sheen: .32, beads: 10, seed: 3, alpha: 1 - sstep(.85, 1, fold) });
+  // him: opens a beat later; stops; his umbrella settles, and the rain gathers on it
+  const meOpen = sstep(23.62, 24.2, T), meSpin = turned(T, true) - .3, alone = sstep(UMB.alone - .3, UMB.alone + 1.5, T);
+  const crowdDraw = near => CROWD.forEach((u, i) => {
+    if (u.near !== near || T < u.t) return;
+    const d = T - u.t, x = u.x0 - u.v * d, y = u.y + Math.sin(d * 1.3 + i) * 10; if (x < -u.r * 1.4 || x > W + u.r * 1.4) return;
+    const cols = u.clear ? ['rgba(235,235,235,.22)', 'rgba(235,235,235,.15)'] : [`rgb(${u.g},${u.g},${u.g})`, `rgb(${u.g + 14},${u.g + 14},${u.g + 14})`];
+    canopy(sx, x, y, u.r * (1 + .012 * Math.sin(d * 8 + i)), T, { open: sstep(0, .5, d + .4), spin: hash1(i) * 3 + u.spin * d, spinRate: u.spin, tilt: [-.5, .1], cols, seed: i * 7, beads: u.near ? 0 : 6,
+      sheen: u.clear ? .08 : .16, rib: u.clear ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.5)', blur: u.near ? 10 : 0, alpha: u.near ? .92 : 1, shadow: !u.near });
+  });
+  crowdDraw(false);
+  canopy(sx, meX, meY, 104 * (T < UMB.stop ? bobA(T) : 1), T, { open: meOpen, spin: meSpin, spinRate: T < UMB.stop ? .32 : .32 * (1 - clamp((T - UMB.stop) / 1.2)), tilt: [.5, .1],
+    cols: ['#161616', '#242424'], sheen: .26, rib: 'rgba(150,150,150,.55)', rim: 'rgba(225,225,225,.5)', beads: 10 + 16 * alone, seed: 7, wind: 1 + alone });
+  crowdDraw(true);                                                     // a few pass right in front of the lens, out of focus
   sx.restore();
   sx.save(); sx.globalAlpha = .28; rain(sx, T, { n: 120, len: 26, speed: 900, ang: .02, seed: 33 }); sx.restore();
   shade(930, .6, 140);
   for (const i of [16, 17, 18, 19, 20]) sub(i, T);
-}, (T) => ({ ht: .62, cell: 4.5, col: .45, tint: AGED, grain: .04, shift: kickShake(T, .002) }));
+}, (T) => ({ ht: .7, cell: 4.5, col: .45, tint: AGED, grain: .04, shift: kickShake(T, .002) }));
 
 // ---- 08 everything turns black and white ------------------------------------------------------------------------ 0:30.1 - 0:31.6
 scene(30.091, [21], (T, lt, P) => {
