@@ -35,21 +35,52 @@ function lampSpace(c, t, o = {}) {
   if (o.pile) { c.save(); c.globalAlpha = o.pile * .55 * (.25 + .75 * on); c.filter = 'blur(8px)'; c.fillStyle = '#aab4be'; c.beginPath(); c.ellipse(x, y + h + 10, 380 * s, 46 * s, 0, 0, 6.283); c.fill(); c.restore(); c.filter = 'none'; }
   if (o.rain && on > .05) { c.save(); coneClip(c, x, y + 8, 240 * s, 1100 * s, h); rain(c, rainT(t), { seed: RAIN_SEED, n: o.rain, spd: 1500, len: 60, wind: .04, alpha: .55 * on }); c.restore(); }
 }
-// 湿地 / 雪地上的一串脚印，往远处延伸。dir：往左 -1 / 往右 1 / 往里 0
+// 湿地 / 雪地上的一串脚印，往远处延伸。按地面透视投影：近大远小、越远越扁。
+// o.drift：每米往旁边偏多少（两串脚印往两边走）；o.snow：雪地上的凹痕，否则是湿地上的水印
+const FLOOR = { yh: 560, f: 1100, hc: .9 };                                            // 地平线、焦距、镜头高度
+const floorPt = (cx, X, Z) => [cx + FLOOR.f * X / Z, FLOOR.yh + FLOOR.f * FLOOR.hc / Z];
+// 鞋底轮廓（单位：米）：u 从脚跟 -0.5 到脚尖 0.5，返回半宽；arch 那一侧更窄
+function soleOutline(side) {
+  const L = .28, ell = (u, c0, r) => Math.sqrt(Math.max(0, 1 - Math.pow((u - c0) / r, 2)));
+  const hw = u => u > .2 ? .052 * ell(u, .2, .3) : u > -.1 ? lerp(.037, .052, (u + .1) / .3) : u > -.3 ? .037 : .042 * ell(u, -.3, .2);
+  const pts = [];
+  for (let i = 0; i <= 24; i++) { const u = -.5 + i / 24; pts.push([hw(u), u * L]); }
+  for (let i = 24; i >= 0; i--) { const u = -.5 + i / 24; pts.push([-hw(u) * (u > -.3 && u < .1 ? .8 : 1), u * L]); }    // 脚弓那一侧略窄
+  return pts.map(([v, l]) => [v * side, l]);
+}
+const SOLE = { l: soleOutline(-1), r: soleOutline(1) };
 function footprints(c, t, t0, o = {}) {
-  const n = o.n ?? 16, every = o.every ?? .16, x0 = o.x ?? W / 2, y0 = o.y0 ?? 900, y1 = o.y1 ?? 600, dir = o.dir ?? 0;
+  const n = o.n ?? 18, every = o.every ?? .22, cx = o.x ?? W / 2, drift = o.drift ?? 0, z0 = 2.3, stride = .75;
   c.save();
   for (let i = 0; i < n; i++) {
     const appear = t0 + i * every; if (t < appear) break;
-    const u = i / (n - 1), d = 1 / (1 + u * 5), y = lerp(y0, y1, 1 - d) , x = x0 + dir * u * 520 + (i % 2 ? 1 : -1) * 34 * d;
-    const a = clamp((t - appear) / .12) * (o.a ?? .85) * (1 - u * .5);
-    c.globalAlpha = a; c.fillStyle = o.col ?? '#020304';
-    c.save(); c.translate(x, y); c.scale(d * 1.7, d * .5 * 1.7); c.rotate(dir * .5);
-    c.beginPath(); c.ellipse(0, -18, 22, 34, 0, 0, 6.283); c.fill(); c.beginPath(); c.ellipse(0, 30, 18, 20, 0, 0, 6.283); c.fill();
-    c.restore();
-    if (o.wet) { c.globalCompositeOperation = 'lighter'; c.globalAlpha = a * .25; c.fillStyle = '#9fb3c8'; c.beginPath(); c.ellipse(x - 6 * d, y - 6 * d, 10 * d, 4 * d, 0, 0, 6.283); c.fill(); c.globalCompositeOperation = 'source-over'; }
+    const right = i % 2, Z = z0 + i * stride * .5, X = (right ? .11 : -.11) + drift * (Z - z0), yaw = Math.atan(drift);
+    const fade = clamp((t - appear) / .2) * clamp(1.15 - (Z - z0) / 6) * (o.a ?? 1);
+    if (fade <= 0) continue;
+    const poly = SOLE[right ? 'r' : 'l'].map(([v, l]) => { const vv = v * Math.cos(yaw) + l * Math.sin(yaw), ll = l * Math.cos(yaw) - v * Math.sin(yaw); return floorPt(cx, X + vv, Z + ll); });
+    c.beginPath(); poly.forEach((p, k) => k ? c.lineTo(...p) : c.moveTo(...p)); c.closePath();
+    if (o.snow) {                                                                  // 雪地：浅灰的凹痕，靠灯的一边有一点阴影
+      c.globalAlpha = fade * .55; c.fillStyle = '#5d6872'; c.fill();
+      c.globalAlpha = fade * .35; c.lineWidth = 2; c.strokeStyle = '#1d232a'; c.stroke();
+    } else {                                                                       // 湿地：水印 + 边缘一点灯光反光
+      c.globalAlpha = fade * .62; c.fillStyle = '#14181d'; c.fill();
+      c.globalAlpha = fade * .45; c.lineWidth = 1.2; c.strokeStyle = '#c9d6e4'; c.stroke();
+    }
   }
   c.restore();
+}
+// 一排灯往雾里一盏盏亮过去（"跟着你走"）：按透视往远处排；o.drift 每米往旁边偏多少
+function lampPath(c, t, t0, o = {}) {
+  const n = o.n ?? 9, every = o.every ?? .2, cx = o.x ?? W / 2, drift = o.drift ?? 0, x0 = o.x0 ?? 0, z0 = 2.6, gap = 1.6;
+  for (let i = n - 1; i >= 0; i--) {                                              // 从远往近画
+    const on = lampFlicker(t, t0 + i * every); if (on <= 0) continue;
+    const Z = z0 + i * gap, X = x0 + drift * (Z - z0), sc = 2.6 / Z, fade = clamp(1.2 - i / n);
+    const [x, yF] = floorPt(cx, X, Z), yC = FLOOR.yh - FLOOR.f * .9 / Z;
+    c.save(); c.globalAlpha = fade;
+    tubeLamp(c, x, yC, 220 * sc, on * Math.min(1, sc * 1.2));
+    lightCone(c, x, yC + 6 * sc, 200 * sc, 760 * sc, yF - yC, on * .9 * Math.min(1, sc * sc * 1.5));
+    c.restore();
+  }
 }
 // 落下来的拍立得：从 t0 开始，每隔 gap 落一张，落到地上停住
 function polaroidFall(c, t, t0, o = {}) {
@@ -265,11 +296,10 @@ function hook(c, t, L, second) {
   else if (t < lFollow) {                                                         // 甩镜头，那边也是空的
     whip(c, span(t, lTurn + .05, lTurn + .45), () => space(0));
     lineWord(c, t, lTurn + .45, lFollow, 'TURN AROUND', { size: 120, y: 420, track: 50 });
-  } else if (t < lForget) {                                                       // 脚印
-    space(0);
-    if (second) { footprints(c, t, lFollow, { dir: -1, x: W / 2 - 60, col: '#0a0c0f', a: .6 }); footprints(c, t, lFollow + .08, { dir: 1, x: W / 2 + 60, col: '#0a0c0f', a: .6 }); }
-    else footprints(c, t, lFollow, { wet: true });
-    lineWord(c, t, lFollow, lForget, 'FOLLOWING', { size: 120, y: 360, track: 60, a: .9 });
+  } else if (t < lForget) {                                                       // 一排灯往雾里一盏盏亮过去
+    if (second) { lampPath(c, t, lFollow, { x0: -.7, drift: -.45, n: 6 }); lampPath(c, t, lFollow + .1, { x0: .7, drift: .45, n: 6 }); }
+    else lampPath(c, t, lFollow, { x0: -1.1, drift: .3 });
+    lineWord(c, t, lFollow, lForget, 'FOLLOWING', { size: 110, y: 800, track: 60, a: .9 });
   } else if (t < lLove) {                                                          // 拍立得落下
     space(0);
     polaroidFall(c, t, lForget, { snowCover: second ? 1 : 0 });
