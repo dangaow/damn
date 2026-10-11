@@ -52,7 +52,12 @@ python build.py                   # 单文件播放器 Isolated_MV.html
 | `node export.mjs --frames frames` | 同时把每一帧 PNG 存到 `frames/` |
 | `--from 30 --to 40`、`--workers 3`、`--crf 18` | 只导出一段、指定进程数、调整码率 |
 
-没有显卡的机器上 Chrome 会用 SwiftShader 软件渲染，四核约 4 帧/秒，整片约 15 分钟。
+没有显卡的机器上 Chrome 会用 SwiftShader 软件渲染，四核约 3 帧/秒，整片约 22 分钟。网点和颗粒很吃码率：母版约 750 MB，分享版约 240 MB。需要发到有大小限制的地方时，可以从母版压一个 720p 预览（约 28 MB）：
+
+```bash
+ffmpeg -i Isolated_MV.mp4 -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -b:v 1720k -pass 1 -an -f mp4 /dev/null
+ffmpeg -i Isolated_MV.mp4 -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -b:v 1720k -pass 2 -c:a aac -b:a 128k -movflags +faststart Isolated_MV_preview_720p.mp4
+```
 
 ## 字体
 
