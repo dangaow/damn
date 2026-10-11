@@ -1593,7 +1593,7 @@ link(5.570, { dur: 1.2, a: { blur: 12 }, b: { blur: 20 } });                    
 link(7.046, { dur: 1.0, a: { c: [960, 760], s: 1.35 }, b: { s: .85 } });                          // lean in towards one building of the skyline
 link(12.181, { dur: 1.2, a: { s: .8 }, mix: 'ink', mc: [W / 2, H], bEarly: true });               // back away from the windows; smoke drifts over
 link(16.401, { dur: .5, a: { s: 1.12 }, b: { s: 1.15 }, mix: 'light' });                          // the white paint turns into the storm
-link(18.103, { dur: .8, a: { s: 1.2 }, b: { s: .9 }, mix: 'dark' });                              // the storm comes down as one drop
+link(18.103, { dur: .9, a: { s: 1.2 }, b: { s: .9 } });                              // the storm comes down as one drop
 link(20.675, { dur: 1.2, a: { d: [0, 600] }, b: { d: [0, -520] } });                              // look up from the lamp in the water to the lamps
 link(23.359, { dur: 1.2, a: { d: [0, -560] }, b: { d: [0, 520] } });                              // look down from the road to the crossing
 link(30.091, { dur: 1.2, a: { d: [0, 600] }, b: { d: [0, -520] } });                              // look up from the crossing into the sky
@@ -1611,7 +1611,7 @@ for (const [b, end] of [[25, 46.016], [50, null]]) {
   link(L[b + 1].t, { dur: .8, aHold: true, a: { s: 1.2 }, b: { s: .9 } });                       // the swirl settles into rings
   link(L[b + 2].t, { dur: .6, aHold: true, a: { s: 1.15 }, b: { s: .9 }, mix: 'light' });        // the rings fade into the words
   link(L[b + 3].t, { dur: .45, aHold: true, mix: 'ink' });                                         // the letters let go, red floods in
-  link(L[b + 4].t, { dur: .5, aHold: true, mix: 'ink' });                                        // ink carries U LOVE into ONE MORE
+  link(L[b + 4].t, { dur: .6, aHold: true, a: { s: 1.08 }, b: { s: .94 } });                     // U LOVE melts into ONE MORE
   if (end) link(end, { dur: 1.0, a: { d: [0, -420] }, b: { d: [0, 420] } });                      // the rows drift up into the film strip
 }
 
