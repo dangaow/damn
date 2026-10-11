@@ -1028,56 +1028,80 @@ scene(20.675, [14, 15], (T, lt, P) => {
   sub(14, T); sub(15, T);
 }, (T, lt) => ({ col: .45, tint: AGED, zoom: 1 + .04 * sstep(L[15].t + .2, L[15].t + 1.2, T) }), { wipe: .5 });
 
-// ---- 07 writing the future on manuscript paper ------------------------------------------------------------- 0:23.4 - 0:30.1
-const GRID = { x0: 260, y0: 150, cell: 100, cols: 14, rows: 8 };
-function brushRow(c, s, t0, t1, row, col0, T, o = {}) {
-  const cs = chars(s), d = Math.min((t1 - t0) * .8, cs.length * .14);
-  cs.forEach((ch, k) => {
-    const tk = t0 + k * d / cs.length, p = clamp((T - tk) / .16); if (p <= 0) return;
-    const x = GRID.x0 + (col0 + k + .5) * GRID.cell, y = GRID.y0 + (row + .5) * GRID.cell;
-    c.save(); c.beginPath(); c.rect(x - 60, y - 60, 120, 120 * eout(p)); c.clip();
-    txt(c, ch, x, y + 4, { font: F.brush, size: 88, color: (o.red && o.red.includes(k)) ? RED : (o.color || '#141210'), sc: 1 + .1 * (1 - eout(p)) });
-    c.restore();
-  });
-}
-function blob(c, cx, cy, r, T) {
-  c.beginPath();
-  for (let i = 0; i <= 96; i++) {
-    const a = i / 96 * TAU, rr = r * (1 + .16 * Math.sin(3 * a + T * .7) + .09 * Math.sin(7 * a - T * 1.3) + .05 * Math.sin(13 * a + 2.1) + .04 * Math.sin(23 * a - T));
-    i ? c.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr) : c.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+// ---- 07 two umbrellas crossing in the rain, seen from above; one stops, the other is lost in the crowd ------------------ 0:23.4 - 0:30.1
+// an umbrella from above: eight panels between ribs, scalloped rim, a wet sheen, rain landing on it
+function umbrella(c, x, y, r, rot, cols, T, o = {}) {
+  c.save(); c.globalAlpha *= o.alpha ?? 1;
+  c.fillStyle = 'rgba(0,0,0,.45)'; c.beginPath(); c.ellipse(x + r * .18, y + r * .22, r * 1.02, r * .98, 0, 0, TAU); c.fill();   // its shadow on the wet road
+  c.translate(x, y); c.rotate(rot);
+  const tip = k => [Math.cos(k / 8 * TAU) * r, Math.sin(k / 8 * TAU) * r];
+  for (let k = 0; k < 8; k++) {
+    const [ax, ay] = tip(k), [bx, by] = tip(k + 1), mx = (ax + bx) / 2 * .9, my = (ay + by) / 2 * .9;
+    c.fillStyle = cols[k % cols.length]; c.beginPath(); c.moveTo(0, 0); c.lineTo(ax, ay); c.quadraticCurveTo(mx, my, bx, by); c.closePath(); c.fill();
   }
-  c.closePath(); c.fill();
+  c.strokeStyle = o.rib || 'rgba(0,0,0,.55)'; c.lineWidth = 1.6;
+  for (let k = 0; k < 8; k++) { const [ax, ay] = tip(k); c.beginPath(); c.moveTo(0, 0); c.lineTo(ax, ay); c.stroke(); }
+  const sh = c.createRadialGradient(-r * .35, -r * .35, 0, -r * .35, -r * .35, r * 1.1); sh.addColorStop(0, `rgba(255,255,255,${o.sheen ?? .22})`); sh.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = sh; c.beginPath(); c.arc(0, 0, r, 0, TAU); c.fill();
+  if (o.rim) { c.strokeStyle = o.rim; c.lineWidth = 3; c.beginPath(); for (let k = 0; k <= 8; k++) { const [ax, ay] = tip(k % 8), [bx, by] = tip(k + 1); if (k === 8) break; if (!k) c.moveTo(ax, ay); c.quadraticCurveTo((ax + bx) / 2 * .9, (ay + by) / 2 * .9, bx, by); } c.stroke(); }
+  c.fillStyle = '#d8d8d8'; c.beginPath(); c.arc(0, 0, r * .05, 0, TAU); c.fill();
+  if (o.drops) for (let i = 0; i < o.drops; i++) {                   // rain landing on the canopy
+    const per = .5 + .5 * hash1(i * 3.1 + (o.seed || 0)), age = (T + hash1(i * 7.3) * per) % per, cyc = Math.floor((T + hash1(i * 7.3) * per) / per);
+    const a = hash2(i, cyc + 50) * TAU, d = Math.sqrt(hash2(i + 9, cyc)) * r * .9, k = age / per;
+    c.strokeStyle = `rgba(255,255,255,${.7 * (1 - k)})`; c.lineWidth = 1.4; c.beginPath(); c.arc(Math.cos(a) * d, Math.sin(a) * d, 2 + k * 9, 0, TAU); c.stroke();
+  }
+  c.restore();
 }
+const UMB = { t0: 23.359, stop: L[18].t, crowd: L[19].t, alone: L[20].t, v: 150, yRed: H / 2 - 95, yMe: H / 2 + 70 };
+// metres walked: steady, with an eased stop for the one who stops
+const walked = (T, stops) => { const d = T - UMB.t0; if (!stops || T < UMB.stop) return UMB.v * d; const s = Math.min(T - UMB.stop, .6); return UMB.v * (UMB.stop - UMB.t0) + UMB.v * (s - s * s / 1.2); };
 scene(23.359, [16, 17, 18, 19, 20], (T, lt, P) => {
-  const z = lerp(1.12, .9, eio(clamp((T - 23.359) / 5))), [dx, dy] = drift(T, 5, .2, 14);
-  const cam = c => c.setTransform(z, 0, 0, z, W / 2 * (1 - z) + dx, H / 2 * (1 - z) + dy);
-  cam(sx); sx.drawImage(PAPER, 0, 0);
-  sx.strokeStyle = '#6f7d6c'; sx.lineWidth = 2;
-  for (let r = 0; r < GRID.rows; r++) for (let k = 0; k < GRID.cols; k++) sx.strokeRect(GRID.x0 + k * GRID.cell + 4, GRID.y0 + r * GRID.cell + 4, GRID.cell - 8, GRID.cell - 8);
-  sx.lineWidth = 4; sx.strokeRect(GRID.x0 - 14, GRID.y0 - 14, GRID.cols * GRID.cell + 28, GRID.rows * GRID.cell + 28);
-  sx.setTransform(1, 0, 0, 1, 0, 0);
-  cam(xx);
-  brushRow(xx, L[16].text, L[16].t, L[16].e, 1, 2, T, { red: [7] });
-  brushRow(xx, L[17].text, L[17].t, L[17].e, 3, 3, T);
-  brushRow(xx, L[18].text, L[18].t, L[18].e, 5, 4, T);
-  for (const [row, t0, n0, n1, sd] of [[1, 26.45, 2, 10, 41], [3, 26.85, 3, 10, 42]]) {        // the first two lines are struck out
-    const p = eio(clamp((T - t0) / .32)); if (p <= 0) continue;
-    const y = GRID.y0 + (row + .5) * GRID.cell + 6;
-    inkLine(xx, GRID.x0 + n0 * GRID.cell - 20, y + 4, GRID.x0 + n1 * GRID.cell + 20, y - 6, 16, p, sd, '#0e0d0c');
+  const camX = walked(T, true) - 60, red = sstep(UMB.stop - .1, UMB.stop + .5, T);
+  const z = 1 - .3 * eio(clamp((T - UMB.alone) / 1.4)), meX = 820 + walked(T, true) - camX, meY = UMB.yMe;
+  sx.save(); sx.translate(meX, meY); sx.scale(z, z); sx.translate(-meX, -meY);
+  sx.fillStyle = '#0d0d0d'; sx.fillRect(-W, -H, W * 3, H * 3);
+  sx.save(); sx.globalCompositeOperation = 'lighter';                 // wet asphalt glints
+  for (let i = 0; i < 420; i++) { const x = ((hash1(i * 3.7) * W * 1.6 - camX) % (W * 1.6) + W * 1.6) % (W * 1.6) - W * .3, y = hash1(i * 9.1) * H * 1.5 - H * .25;
+    sx.fillStyle = `rgba(255,255,255,${.04 + .1 * hash1(i * 1.3)})`; sx.fillRect(x, y, 2 + 3 * hash1(i * 5.5), 2); }
+  sx.restore();
+  const bandY = H / 2 - 300, bandH = 600, sw = 72;                     // the zebra crossing, worn, shining in the wet
+  for (let k = -4; k < 40; k++) {
+    const x = k * sw * 2 - camX % (sw * 2) - sw; if (x < -W * .3 || x > W * 1.3) continue;
+    const g = sx.createLinearGradient(0, bandY, 0, bandY + bandH); g.addColorStop(0, 'rgba(210,210,206,.36)'); g.addColorStop(.5, 'rgba(225,225,220,.5)'); g.addColorStop(1, 'rgba(210,210,206,.32)');
+    sx.fillStyle = g; sx.fillRect(x, bandY, sw, bandH);
   }
-  xx.setTransform(1, 0, 0, 1, 0, 0);
-  // the ink spreads and swallows everything
-  if (T > L[19].t - .05) {
-    const r = 1500 * eout(clamp((T - L[19].t) / 1.5)) + 40 * env('bass', T);
-    xx.fillStyle = '#060606'; blob(xx, W / 2 + 40, H / 2 + 20, Math.max(r, 20), T);
-    for (let i = 0; i < 26; i++) { const a = hash1(i * 3.3) * TAU, d = r * (1.05 + .35 * hash1(i * 1.9)), rr = 6 + 28 * hash1(i * 7.2) * clamp(r / 300);
-      xx.beginPath(); xx.arc(W / 2 + 40 + Math.cos(a) * d, H / 2 + 20 + Math.sin(a) * d, rr, 0, TAU); xx.fill(); }
-    if (T > L[19].t + 1.4) xx.fillRect(0, 0, W, H);
-    sub(19, T, { y: H / 2 - 10, size: 112, ls: 12, font: F.brush, tr: false, halo: false });
-    sub(20, T, { y: H / 2, size: 58, ls: 22, font: F.zh, tr: false, halo: false });
+  sx.fillStyle = '#0d0d0d';                                           // worn patches
+  for (let i = 0; i < 160; i++) { const x = ((hash1(i * 2.9) * W * 1.6 - camX) % (W * 1.6) + W * 1.6) % (W * 1.6) - W * .3; sx.globalAlpha = .5 + .5 * hash1(i * 4.4);
+    sx.beginPath(); sx.ellipse(x, bandY + hash1(i * 6.1) * bandH, 3 + 12 * hash1(i * 1.7), 2 + 6 * hash1(i * 8.3), hash1(i) * 3, 0, TAU); sx.fill(); }
+  sx.globalAlpha = 1;
+  // the signal across the road: white while they walk, red from 可是我回到现在, its glow lying on the wet road
+  const sg = sx.createRadialGradient(W * .78, -120, 0, W * .78, -120, 900);
+  sg.addColorStop(0, red > 0 ? `rgba(226,26,46,${.5 * red})` : 'rgba(255,255,255,.18)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+  sx.save(); sx.globalCompositeOperation = 'lighter'; sx.fillStyle = sg; sx.fillRect(-W, -H, W * 3, H * 2.5);
+  if (red < 1) { const wg = sx.createRadialGradient(W * .78, -120, 0, W * .78, -120, 900); wg.addColorStop(0, `rgba(255,255,255,${.18 * (1 - red)})`); wg.addColorStop(1, 'rgba(0,0,0,0)'); sx.fillStyle = wg; sx.fillRect(-W, -H, W * 3, H * 2.5); }
+  sx.restore();
+  for (let i = 0; i < 40; i++) {                                      // drops hitting the road
+    const per = .6 + .6 * hash1(i * 2.3), ph = hash1(i * 5.9) * per, age = (T + ph) % per, cyc = Math.floor((T + ph) / per);
+    const x = hash2(i, cyc) * W * 1.2 - W * .1, y = hash2(i + 40, cyc) * H, k = age / per;
+    sx.strokeStyle = `rgba(230,230,230,${.5 * (1 - k)})`; sx.lineWidth = 1.5; sx.beginPath(); sx.arc(x, y, 3 + k * 22, 0, TAU); sx.stroke();
   }
-}, (T) => ({ ht: .6, cell: 5, col: .75, tint: AGED, grain: .045, paper: [.95, .93, .89] }), { wipe: .5 });
-
+  const step = T => Math.sin((T - UMB.t0) / BEAT * PI) * 3;          // the small sway of walking, on the beat
+  const redX = 820 + walked(T, false) - camX + 30, redA = 1 - sstep(UMB.crowd + .45, UMB.crowd + .85, T);
+  if (redA > 0) umbrella(sx, redX, UMB.yRed + step(T + .3), 108, .2 + (T - UMB.t0) * .05, ['#d11a2e', '#b30f26'], T, { alpha: redA, sheen: .3, drops: 8, seed: 3 });
+  // a crowd of umbrellas crossing the other way; when it has gone by, so has she
+  for (let i = 0; i < 34; i++) {
+    const lane = hash1(i * 4.1), y = lane < .72 ? H / 2 - 440 + lane / .72 * 300 : H / 2 + 300 + (lane - .72) / .28 * 280;   // they pass either side of him
+    const x = W + 120 + hash1(i * 9.7) * 600 - 620 * (T - UMB.crowd + .65), r = 82 + 34 * hash1(i * 2.2); if (x < -200 || x > W + 200) continue;
+    const g = Math.round(26 + 70 * hash1(i * 6.6)), clear = hash1(i * 8.8) < .15;
+    const cols = clear ? ['rgba(235,235,235,.28)', 'rgba(235,235,235,.2)'] : [`rgb(${g},${g},${g})`, `rgb(${g + 14},${g + 14},${g + 14})`];
+    umbrella(sx, x, y + Math.sin(T * 7 + i) * 3, r, hash1(i * 3.9) * 3, cols, T, { sheen: clear ? .1 : .16, rib: clear ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.5)' });
+  }
+  umbrella(sx, meX, meY + (T < UMB.stop ? step(T) : 0), 104, -.3 + Math.min(T, UMB.stop + .6) * .05, ['#161616', '#242424'], T, { sheen: .24, rib: 'rgba(150,150,150,.55)', rim: 'rgba(225,225,225,.55)', drops: T > UMB.alone - .3 ? 14 : 6, seed: 7 });
+  sx.restore();
+  sx.save(); sx.globalAlpha = .28; rain(sx, T, { n: 120, len: 26, speed: 900, ang: .02, seed: 33 }); sx.restore();
+  shade(930, .6, 140);
+  for (const i of [16, 17, 18, 19, 20]) sub(i, T);
+}, (T) => ({ ht: .8, cell: 5, col: .45, tint: AGED, grain: .045, shift: kickShake(T, .002) }), { wipe: .5 });
 
 // ---- 08 everything turns black and white ------------------------------------------------------------------------ 0:30.1 - 0:31.6
 scene(30.091, [21], (T, lt, P) => {
@@ -1431,7 +1455,6 @@ scene(89.294, [48], (T, lt, P) => {
   txt(xx, '下段', W / 2 - 300, 400, { font: F.zh, size: 34, ls: 14, color: col, alpha: a * sstep(0, .2, lt) });
   txt(xx, 'back to you,', W / 2 - 40, 470, { font: F.it, size: 96, color: col, alpha: a * sstep(.15, .35, lt) });
   txt(xx, 'yuki', W / 2 - 40, 650, { font: F.it, size: 250, color: col, alpha: a * sstep(.4, .65, lt) });
-  txt(xx, '雪', W / 2 + 290, 600, { font: F.brush, size: 120, color: RED, alpha: a * sstep(.55, .8, lt) });
 }, () => ({ grain: .04 }));
 scene(90.400, [49], (T, lt, P) => stillness(T, 49, 90.4, { snow: true }), () => ({ vig: .85, grain: .06 }));
 scene(93.237, [50, 51, 52, 53, 54], (T) => chorus(T, 50, 2), chorusPost(2));
