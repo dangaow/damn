@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小克的一回合</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  :root { --bg: #000; --fg: #f3ead8; --or: #ff8f5e; --dim: rgba(243,234,216,.55); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden; }
+  body { font-family: "Noto Sans TC", sans-serif; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; background: #000; display: block; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    background: radial-gradient(ellipse at center, #2a120c 0%, #000 70%); cursor: pointer; z-index: 5; text-align: center; padding: 16px; }
+  #start h1 { font-weight: 900; font-size: clamp(40px, 9vw, 120px); margin: 0; letter-spacing: .1em; color: var(--or); text-shadow: 0 0 40px rgba(255,143,94,.6); }
+  #start p { margin: 0; font-family: "Space Mono", monospace; letter-spacing: .3em; color: #e8b89a; font-size: clamp(12px, 2vw, 20px); }
+  #start button { margin-top: 16px; font: 700 18px "Noto Sans TC", sans-serif; color: #1a0d06; background: var(--or); border: 0; border-radius: 999px;
+    padding: 14px 34px; cursor: pointer; letter-spacing: .15em; }
+  #start small { color: var(--dim); font-size: 13px; letter-spacing: .1em; }
+  #ui { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px 16px; display: flex; gap: 14px; align-items: center;
+    background: linear-gradient(transparent, rgba(0,0,0,.75)); transition: opacity .4s; z-index: 4; font: 13px "Space Mono", monospace; color: #ddd; }
+  #ui.hide { opacity: 0; }
+  #ui button { background: none; border: 0; color: #fff; font-size: 18px; cursor: pointer; width: 32px; }
+  #bar { flex: 1; height: 5px; background: rgba(255,255,255,.2); border-radius: 3px; cursor: pointer; position: relative; }
+  #fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--or); border-radius: 3px; width: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="start">
+  <h1>小克的一回合</h1>
+  <p>ONE TURN · FRAME BY FRAME</p>
+  <button id="go">▶ 播放</button>
+  <small id="load">載入字型中…</small>
+</div>
+<div id="ui" class="hide"><button id="pp">❚❚</button><span id="tm">0:00</span><div id="bar"><div id="fill"></div></div><span id="dur">0:00</span><button id="fs">⛶</button></div>
+<audio id="au" preload="auto"></audio>
+<script>
+'use strict';
+// =====================================================================================================
+// 小克的一回合：你按下 Enter 之后，小克（Claude 的像素小螃蟹）做了什么。
+// 画面全部由 render(t) 画出，只依赖 t（不用 Math.random / Date.now），所以预览和逐帧导出完全一致。
+// 时间轴以小节为单位：120 BPM，一小节 = 2 秒。music.py 读 cues.json 里的段落和音效点来编曲。
+// =====================================================================================================
+const W = 1920, H = 1080, FPS = 30, BPM = 120, BEAT = 60 / BPM, BAR = BEAT * 4;
+const EXPORT = /[?&]export=1/.test(location.search);
+const PI = Math.PI, TAU = PI * 2;
+const clamp = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+const lerp = (a, b, t) => a + (b - a) * t;
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const eout = t => 1 - Math.pow(1 - clamp(t), 3);
+const eio = t => { t = clamp(t); return t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+const eback = t => { t = clamp(t); const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+const win = (t, a, b, fi = .4, fo = .4) => sstep(a, a + fi, t) * (1 - sstep(b - fo, b, t));
+const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+const F_ZH = '"Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif';
+const F_MONO = '"Space Mono", "Consolas", "Menlo", monospace';
+const F_BIG = '"Anton", "Impact", sans-serif';
+const OR = '#ff8f5e', CLAUDE = '#d97757', CREAM = '#f3ead8', DIM = 'rgba(243,234,216,.55)', TEAL = '#5ee6d0', RED = '#ff4d5e', GREEN = '#7dff9a';
+const INK = '#120a07';
+
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const OUTC = document.getElementById('c'), octx = OUTC.getContext('2d');
+const LAYER = mk(W, H), lctx = LAYER.getContext('2d');
+const ACC = mk(W, H), actx = ACC.getContext('2d');
+const B1 = mk(480, 270), b1 = B1.getContext('2d');
+const B2 = mk(240, 135), b2 = B2.getContext('2d');
+let ctx = lctx;                     // 当前画布：场景画在 LAYER 上，叠加层（字幕、HUD）画在输出画布上
+let FT = 0;                         // 当前这一帧的时间（运动模糊子帧之外的那个 t）
+
+// ------------------------------------------------------------------------------------- 小工具
+function text(s, x, y, o = {}) {
+  ctx.save();
+  ctx.font = `${o.weight || 400} ${o.size || 40}px ${o.font || F_ZH}`;
+  ctx.textAlign = o.align || 'center'; ctx.textBaseline = o.base || 'middle';
+  if (o.ls) ctx.letterSpacing = o.ls + 'px';
+  ctx.globalAlpha *= (o.alpha ?? 1);
+  if (o.glow) { ctx.shadowColor = o.glow; ctx.shadowBlur = o.blur || 20; }
+  ctx.fillStyle = o.color || CREAM;
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function measure(s, o = {}) {
+  ctx.save(); ctx.font = `${o.weight || 400} ${o.size || 40}px ${o.font || F_ZH}`; if (o.ls) ctx.letterSpacing = o.ls + 'px';
+  const w = ctx.measureText(s).width; ctx.restore(); return w;
+}
+const WRAP = new Map();
+function wrap(s, maxw, o = {}) {
+  const key = s + '|' + maxw + '|' + (o.size || 40) + (o.weight || 400) + (o.font || '');
+  if (WRAP.has(key)) return WRAP.get(key);
+  const lines = []; let cur = '';
+  for (const ch of s) { if (cur && measure(cur + ch, o) > maxw) { lines.push(cur); cur = ch.trim() ? ch : ''; } else cur += ch; }
+  if (cur) lines.push(cur);
+  WRAP.set(key, lines); return lines;
+}
+// 字被「故障」：红青错位
+function glitchText(s, x, y, o, amt) {
+  if (amt > .01) {
+    const dx = 14 * amt * (hash(Math.floor(FT * 30) * 3.1) - .3);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    text(s, x - dx, y, { ...o, color: '#ff2a4a', alpha: (o.alpha ?? 1) * .8 });
+    text(s, x + dx, y + 2 * amt, { ...o, color: '#2ad8ff', alpha: (o.alpha ?? 1) * .8 });
+    ctx.restore();
+  }
+  text(s, x, y, o);
+}
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function panel(x, y, w, h, o = {}) {
+  ctx.save(); ctx.globalAlpha *= (o.alpha ?? 1);
+  rr(x, y, w, h, o.r ?? 18); ctx.fillStyle = o.fill || 'rgba(22,15,12,.86)'; ctx.fill();
+  ctx.lineWidth = o.lw || 2; ctx.strokeStyle = o.stroke || 'rgba(255,143,94,.38)'; ctx.stroke();
+  ctx.restore();
+}
+function glowDot(x, y, r, rgb, a = 1) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(.2, `rgba(${rgb},${a * .8})`); g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+}
+function line(x0, y0, x1, y1, col, w = 2, a = 1) {
+  ctx.save(); ctx.globalAlpha *= a; ctx.strokeStyle = col; ctx.lineWidth = w;
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); ctx.restore();
+}
+const bez = (p0, p1, p2, p3, t) => { const u = 1 - t; return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3; };
+const pulse = (t, k = 7) => Math.exp(-((t % BEAT + BEAT) % BEAT) * k);          // 每拍一下的冲击（底鼓）
+
+// ------------------------------------------------------------------------------------- 背景
+function synthBg(t, o = {}) {
+  const hz = o.hz ?? 640, P = o.pulse ?? 0;
+  let g = ctx.createLinearGradient(0, 0, 0, hz);
+  g.addColorStop(0, '#05040a'); g.addColorStop(.62, '#170a15'); g.addColorStop(1, '#43170f');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, hz);
+  stars(t, 90, 7, hz * .8, .8);
+  if (o.sun !== false) {
+    const R = o.sunR ?? 250, cx = o.sunX ?? 960, cy = hz - (o.sunY ?? 40);
+    glowDot(cx, cy, R * 2.2, '255,120,80', .22 + P * .08);
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, hz); ctx.clip();
+    const sg = ctx.createLinearGradient(0, cy - R, 0, cy + R * .4);
+    sg.addColorStop(0, '#ffe08a'); sg.addColorStop(.35, '#ff9a6a'); sg.addColorStop(.7, '#e8456e'); sg.addColorStop(1, '#8e2a7a');
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+    const step = R * .13, off = (t * 24) % step;
+    for (let i = 0; i < 9; i++) {
+      const yy = cy - R * .2 + i * step + off, hh = 2 + i * 2.2 * (yy - cy + R * .2) / (R);
+      ctx.fillStyle = '#2d0f13'; ctx.fillRect(cx - R - 2, yy, 2 * R + 4, Math.max(1, hh));
+    }
+    ctx.restore();
+  }
+  ctx.fillStyle = '#070509'; ctx.fillRect(0, hz, W, H - hz);
+  const hg = ctx.createLinearGradient(0, hz - 50, 0, hz + 80);
+  hg.addColorStop(0, 'rgba(255,110,80,0)'); hg.addColorStop(.4, `rgba(255,120,80,${.45 + P * .25})`); hg.addColorStop(1, 'rgba(255,110,80,0)');
+  ctx.fillStyle = hg; ctx.fillRect(0, hz - 50, W, 130);
+  ctx.save(); ctx.lineWidth = 2;
+  const spd = o.speed ?? 1.1, ph = (t * spd) % 1;
+  for (let i = 0; i < 26; i++) {
+    const z = i + 1 - ph, y = hz + (H - hz) / (1 + z * .42), a = clamp((y - hz) / (H - hz) * 1.6) * (.55 + P * .45);
+    ctx.strokeStyle = `rgba(255,${110 + P * 60},${90 + P * 40},${a})`;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  for (let k = -22; k <= 22; k++) {
+    ctx.strokeStyle = `rgba(255,110,90,${.32 + P * .2})`;
+    ctx.beginPath(); ctx.moveTo(960 + k * 34, hz); ctx.lineTo(960 + k * 360, H + 40); ctx.stroke();
+  }
+  ctx.restore();
+}
+function stars(t, n, seed, maxY = H, a = 1) {
+  ctx.save();
+  for (let i = 0; i < n; i++) {
+    const x = hash(seed * 31 + i) * W, y = hash(seed * 17 + i * 1.7) * maxY, tw = .4 + .6 * Math.abs(Math.sin(t * (1 + hash(i) * 2) + i));
+    ctx.globalAlpha = a * tw * (.3 + hash(i * 3.3) * .7); ctx.fillStyle = CREAM;
+    const s = 1 + (hash(i * 9.1) > .9 ? 1.5 : 0); ctx.fillRect(x, y, s, s);
+  }
+  ctx.restore();
+}
+function dust(t, n, seed, o = {}) {
+  ctx.save();
+  for (let i = 0; i < n; i++) {
+    const vx = (hash(seed + i * 2.1) - .5) * 40 + (o.vx || 0), vy = -12 - hash(seed + i * 5.3) * 30 + (o.vy || 0);
+    const x = ((hash(seed + i) * W + t * vx) % W + W) % W, y = ((hash(seed + i * 7.7) * H + t * vy) % H + H) % H;
+    ctx.globalAlpha = (o.a ?? .5) * (.3 + .7 * hash(i * 1.37)) * (.6 + .4 * Math.sin(t * 2 + i));
+    ctx.fillStyle = o.color || OR; const s = 1.5 + hash(i * 4.4) * 2.5; ctx.fillRect(x, y, s, s);
+  }
+  ctx.restore();
+}
+function darkBg(t, o = {}) {
+  const g = ctx.createRadialGradient(W / 2, H * .45, 50, W / 2, H / 2, W * .75);
+  g.addColorStop(0, o.c0 || '#1d0f0b'); g.addColorStop(1, o.c1 || '#050404');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (o.grid !== false) {   // 很淡的点阵
+    ctx.save(); ctx.fillStyle = 'rgba(255,143,94,.10)';
+    const off = (t * 10) % 48;
+    for (let x = -48; x < W + 48; x += 48) for (let y = -48; y < H + 48; y += 48) ctx.fillRect(x + off, y, 2, 2);
+    ctx.restore();
+  }
+}
+
+// ------------------------------------------------------------------------------------- 小克
+//  ▐▛███▜▌
+// ▝▜█████▛▘     照着 Claude Code 欢迎页那只像素小螃蟹：18 × 10 个方块（终端里一格是两个方块高）
+//   ▘▘ ▝▝
+const CLAWD = (() => {
+  const a = [], add = (gx, gy, part) => a.push({ gx, gy, part, i: a.length });
+  for (let r = 0; r < 4; r++) for (let gx = 3; gx <= 14; gx++) for (let s = 0; s < 2; s++) add(gx, r * 2 + s, 'body');
+  for (const gx of [1, 2]) for (let s = 0; s < 2; s++) add(gx, 4 + s, 'armL');
+  for (const gx of [15, 16]) for (let s = 0; s < 2; s++) add(gx, 4 + s, 'armR');
+  [4, 6, 11, 13].forEach((gx, li) => { for (let s = 0; s < 2; s++) add(gx, 8 + s, 'leg' + li); });
+  return a;
+})();
+function clawd(x, y, u, o = {}) {
+  const as = o.assemble ?? 1, lp = Math.sin((o.walk || 0) * TAU), seed = o.seed || 1;
+  ctx.save(); ctx.globalAlpha *= (o.alpha ?? 1);
+  if (o.squash) { ctx.translate(x, y + 5 * u); ctx.scale(1 + o.squash * .5, 1 - o.squash); ctx.translate(-x, -y - 5 * u); }
+  if (o.glow) glowDot(x, y, u * 16, '255,130,90', o.glow * .35);
+  if (o.outline && as >= 1) {            // 深色描边：站在亮的背景（太阳）前面也看得清
+    const ow = u * o.outline; ctx.fillStyle = INK;
+    ctx.fillRect(x - 6 * u - ow, y - 5 * u - ow, 12 * u + 2 * ow, 8 * u + 2 * ow);
+    ctx.fillRect(x - 8 * u - ow, y - 1 * u - ow - (o.arms || 0) * u * 1.4 - (o.wave || 0) * u * 2, 2 * u + 2 * ow, 2 * u + 2 * ow);
+    ctx.fillRect(x + 6 * u - ow, y - 1 * u - ow - (o.arms || 0) * u * 1.4, 2 * u + 2 * ow, 2 * u + 2 * ow);
+    for (const gx of [4, 6, 11, 13]) ctx.fillRect(x + (gx - 9) * u - ow, y + 3 * u - ow, u + 2 * ow, 2 * u + 2 * ow);
+  }
+  ctx.fillStyle = o.color || OR;
+  for (const s of CLAWD) {
+    let px = x + (s.gx - 9) * u, py = y + (s.gy - 5) * u, sz = u + .7;
+    if (s.part === 'armL') py -= (o.arms || 0) * u * 1.4 + (o.wave || 0) * u * 2;
+    if (s.part === 'armR') py -= (o.arms || 0) * u * 1.4 + (o.waveR || 0) * u * 2;
+    if (s.part[0] === 'l' && s.part[1] === 'e') { const li = +s.part[3]; py -= Math.max(0, li % 2 ? -lp : lp) * u * .9; }
+    if (as < 1) {
+      const d = hash(s.i * 1.91 + seed) * .45, k = eout((as - d) / .55);
+      if (k <= 0) continue;
+      const ang = hash(s.i * 3.7 + seed) * TAU, r = (o.spread || 900) * (.4 + hash(s.i * 5.1 + seed) * .6);
+      px = lerp(x + Math.cos(ang) * r, px, k); py = lerp(y + Math.sin(ang) * r, py, k);
+      sz *= .3 + .7 * k;
+      ctx.globalAlpha = (o.alpha ?? 1) * clamp(k * 2);
+    }
+    ctx.fillRect(px, py, sz, sz);
+  }
+  ctx.globalAlpha = o.alpha ?? 1;
+  if (as > .92) {                     // 眼睛
+    const ea = clamp((as - .92) / .08);
+    for (const gx of [5, 12]) {
+      const ex = x + (gx - 9 + (o.look || 0) * .35) * u, ey = y + (2 - 5) * u;
+      ctx.globalAlpha = (o.alpha ?? 1) * ea; ctx.fillStyle = INK;
+      if (o.blink > .5) ctx.fillRect(ex, ey + u * 1.4, u + .5, u * .6);
+      else {
+        ctx.fillRect(ex, ey, u + .5, 2 * u + .5);
+        ctx.fillStyle = CREAM; ctx.fillRect(ex + u * .15, ey + u * .2, u * .38, u * .5);
+      }
+    }
+  }
+  ctx.restore();
+}
+const blinkAt = (t, period = 3.3, off = 0) => ((t + off) % period) < .12 ? 1 : 0;
+
+// ------------------------------------------------------------------------------------- 文字素材（都是这一回合真实发生的事）
+const MSG1 = '小克小克 你在我問你問題的時候做了哪些事情哇 可以給我做個視頻看看嘛 拿你的可愛小螃蟹形象';
+const MSG2 = '可以再炫酷一點呀 然後再長一點 具體一點 然後實現方法可以像png無損去導出哦 實現方式類似於 abstract-algebra-promo 一樣';
+const TYPE0 = 1.0, TYPE_CPS = 17, TYPE_END = TYPE0 + [...MSG2].length / TYPE_CPS, ENTER = TYPE_END + .5;
+const TOOLS = ['Bash', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'Agent', 'WebSearch', '+ 30…'];
+const CTX_BLOCKS = [
+  { tag: 'SYSTEM', zh: '系統提示', body: '我是誰 · 做事原則 · 什麼要先問你 · 怎麼回報' },
+  { tag: 'TOOLS', zh: '工具定義', body: null },
+  { tag: 'ENV', zh: '環境', body: '倉庫 dangaow/damn · 分支 ccr-1eb0ef20-a63hi9 · Linux · 2026-10-11' },
+  { tag: 'HISTORY', zh: '前情', body: '上一回合：46 秒小影片 · 1374 幀 · Python PIL 畫圖 + ffmpeg' },
+  { tag: 'YOU', zh: '你的訊息', body: '可以再炫酷一點呀 然後再長一點 具體一點 …PNG 無損導出…' },
+];
+const KEYWORDS = ['更炫酷', '更長', '更具體', 'PNG 無損導出', '照 abstract-algebra-promo 的做法'];
+const PLAN = ['讀懂範例倉庫怎麼做', '對照你的 mv/ 慣例', '分鏡：10 段 · 2 分半', '畫面：HTML Canvas 逐幀', '音樂：Python 合成', '導出：Chrome → PNG → FFmpeg'];
+const CALLS = [
+  ['git clone --depth 1 …/abstract-algebra-promo', '16 個檔案 · 28 MB'],
+  ['cat README.md export.mjs build.py', '畫面 Canvas 逐幀 → 無頭 Chrome → FFmpeg'],
+  ['grep -n "__frame" promo.html', '__frame(t) → canvas.toDataURL(…)'],
+  ['ls mv mv2', '咦？你的 mv/ 早就是同一套做法'],
+  ['cat mv/export.mjs', '已經有 --png：無損傳幀'],
+  ['node --version; ls /opt/pw-browsers', 'v22.22.0 · chromium-1194'],
+  ['curl fonts.googleapis.com/css2?…', '200 · 字型下載得到'],
+  ['pip install scipy', '裝好了 · 給 music.py 用'],
+];
+const LOOP_NODES = [['想', 'THINK'], ['呼叫工具', 'CALL'], ['讀結果', 'READ'], ['下一步？', 'DECIDE']];
+const LOOP_JOBS = ['讀 README', '讀 export.mjs', '看 mv/', '查 Chromium', '下載字型', '寫分鏡', '寫 clawd.html', '寫 music.py', '寫 export.mjs', '截圖檢查', '修畫面', '導出 PNG', '合成 MP4', 'commit'];
+const FINAL_CALLS = 46;            // 这一回合实际的工具调用次数（做完后数的）
+const LOOP_W0 = 1.2, LOOP_A = .55, LOOP_END = 12;
+const loopAng = lt => LOOP_W0 * lt + .5 * LOOP_A * lt * lt;
+
+// ------------------------------------------------------------------------------------- 场景
+// 每个场景：bars 小节数、mus 编曲段落（music.py 用）、kick 有没有底鼓（画面跟拍）、subs 字幕、sfx 音效点
+function sCold(lt, d, t) {
+  ctx.fillStyle = '#050404'; ctx.fillRect(0, 0, W, H);
+  dust(t, 40, 3, { a: .25 });
+  const k = sstep(ENTER + .2, d - .4, lt);                                            // 送出后整个画面被吸进一个点
+  ctx.save();
+  const s = lerp(1, .02, eio(k)); ctx.translate(960, 540); ctx.scale(s, s); ctx.translate(-960, -540);
+  ctx.globalAlpha = 1 - sstep(.75, 1, k);
+  const a0 = sstep(.1, .9, lt);
+  // 上一回合（淡淡的）
+  const l1 = wrap(MSG1, 760, { size: 28 });
+  panel(1840 - 820, 150, 820, 30 + l1.length * 42, { alpha: .45 * a0, fill: 'rgba(80,36,22,.6)' });
+  l1.forEach((ln, i) => text(ln, 1840 - 790, 185 + i * 42, { size: 28, align: 'left', alpha: .5 * a0 }));
+  panel(80, 290, 700, 72, { alpha: .45 * a0 });
+  text('影片做好啦～ 46 秒，主角是像素小螃蟹', 110, 326, { size: 28, align: 'left', alpha: .5 * a0 });
+  // 输入框
+  const sent = lt > ENTER, sk = eout((lt - ENTER) / .5);
+  const n = Math.floor(clamp((lt - TYPE0) * TYPE_CPS, 0, 999));
+  const typed = [...MSG2].slice(0, n).join('');
+  const lines = wrap(typed || ' ', 1500, { size: 40 });
+  const bx = 160, bw = 1600, bh = 60 + Math.max(1, lines.length) * 56, by = lerp(840 - bh / 2, 560 - bh / 2, sk);
+  panel(bx, by, bw, bh, { stroke: sent ? OR : 'rgba(243,234,216,.3)', lw: sent ? 4 : 2, fill: sent ? 'rgba(70,30,18,.9)' : 'rgba(18,14,12,.9)' });
+  lines.forEach((ln, i) => text(ln, bx + 40, by + 58 + i * 56, { size: 40, align: 'left' }));
+  if (!sent && Math.floor(lt * 2.2) % 2 === 0) {
+    const lw = measure(lines[lines.length - 1] || '', { size: 40 });
+    ctx.fillStyle = OR; ctx.fillRect(bx + 44 + lw, by + 36 + (lines.length - 1) * 56, 4, 46);
+  }
+  if (!sent) text('Enter ↵', bx + bw - 30, by + bh + 34, { size: 22, font: F_MONO, align: 'right', color: DIM, alpha: sstep(TYPE_END - .4, TYPE_END, lt) });
+  if (sent) text('已送出', bx + bw - 30, by + bh + 34, { size: 22, align: 'right', color: OR, alpha: sk });
+  ctx.restore();
+  if (k > .6) glowDot(960, 540, lerp(10, 220, sstep(.6, 1, k)), '255,160,110', sstep(.6, 1, k));
+  if (lt < .9) text('一則訊息', 960, 540, { size: 30, color: DIM, alpha: win(lt, 0, .9, .2, .3), ls: 12 });
+}
+
+function sTitle(lt, d, t) {
+  const P = pulse(t);
+  synthBg(t, { pulse: P, hz: 660, sunR: 330, sunY: 190 });
+  dust(t, 50, 11, { a: .5 });
+  const as = eout((lt - .1) / 1.8);
+  const bob = lt > 2 ? -P * 14 : 0;
+  clawd(960, 540 + bob, 24, { assemble: as, spread: 1300, seed: 3, blink: blinkAt(lt, 2.6, .4), arms: lt > 2.5 ? P * .6 : 0, glow: as * .5, squash: lt > 2 ? P * .06 : 0, outline: .45 });
+  const ta = sstep(1.7, 2.1, lt);
+  if (ta > 0) glitchText('小克的一回合', 960, 780, { size: 140, weight: 900, ls: 26, alpha: ta, glow: 'rgba(255,90,60,.55)', blur: 30, color: CREAM }, 1 - clamp((lt - 1.7) / .6) + (lt > 5.9 && lt < 6.15 ? .8 : 0));
+  text('ONE TURN · FRAME BY FRAME', 960, 895, { size: 28, font: F_MONO, ls: 14, color: OR, alpha: sstep(2.3, 2.8, lt) });
+  text('你按下 Enter 之後，到我回你之前 —— 我到底做了什麼？', 960, 950, { size: 32, color: CREAM, alpha: sstep(3.1, 3.7, lt) });
+}
+
+function sContext(lt, d, t) {
+  darkBg(t);
+  const P = pulse(t) * .6;
+  const X0 = 120, BW = 980, BH = 112, Y0 = 210, GAP = 22;
+  const CX = 1530, CY = 560;
+  const ingest = sstep(10, 15.5, lt);
+  clawd(CX, CY - P * 8, 16, { blink: blinkAt(lt, 2.8), look: -1, glow: .4 + ingest * 1.2, arms: ingest > .05 && ingest < .98 ? .4 + .4 * Math.sin(lt * 18) : 0 });
+  // 上下文计数
+  const tok = Math.round(40000 * eio(ingest));
+  text('TOKENS IN', CX, CY + 150, { size: 20, font: F_MONO, ls: 6, color: DIM });
+  text(tok ? '≈ ' + tok.toLocaleString('en-US') : '0', CX, CY + 200, { size: 54, font: F_BIG, color: OR, glow: 'rgba(255,120,80,.6)', ls: 2 });
+  CTX_BLOCKS.forEach((b, i) => {
+    const t0 = .8 + i * 1.8, k = eback((lt - t0) / .7);
+    if (lt < t0) return;
+    const y = Y0 + i * (BH + GAP), x = lerp(-1100, X0, k);
+    const emitted = clamp((lt - (10 + i * .4)) / 3.2);
+    const a = 1 - sstep(.3, 1, emitted);
+    if (a <= 0) return;
+    const you = b.tag === 'YOU';
+    panel(x, y, BW, BH, { alpha: a, stroke: you ? OR : 'rgba(255,143,94,.35)', lw: you ? 3 : 2, fill: you ? 'rgba(80,32,18,.9)' : 'rgba(22,15,12,.86)' });
+    text(b.tag, x + 30, y + 34, { size: 18, font: F_MONO, ls: 5, color: you ? OR : TEAL, align: 'left', alpha: a });
+    text(b.zh, x + 30, y + 74, { size: 32, weight: 700, align: 'left', alpha: a });
+    if (b.body) text(b.body, x + 230, y + 74, { size: 24, align: 'left', color: you ? CREAM : DIM, alpha: a });
+    else {
+      let cx = x + 230;
+      TOOLS.forEach((tn, j) => {
+        const ca = sstep(t0 + .5 + j * .09, t0 + .7 + j * .09, lt) * a; if (ca <= 0) return;
+        const w = measure(tn, { size: 20, font: F_MONO }) + 22;
+        if (cx + w > x + BW - 20) return;
+        panel(cx, y + 56, w, 36, { r: 8, alpha: ca, fill: 'rgba(94,230,208,.08)', stroke: 'rgba(94,230,208,.45)' });
+        text(tn, cx + w / 2, y + 75, { size: 20, font: F_MONO, color: TEAL, alpha: ca });
+        cx += w + 10;
+      });
+    }
+  });
+  // 切成 token，一路流进小克
+  if (lt > 10) {
+    for (let i = 0; i < 5; i++) {
+      const y = Y0 + i * (BH + GAP) + BH / 2;
+      for (let j = 0; j < 26; j++) {
+        const st = 10 + i * .4 + j * .12, k = clamp((lt - st) / 1.3);
+        if (k <= 0 || k >= 1) continue;
+        const e = eio(k), sx = X0 + 60 + j * 35, sy = y + (hash(i * 40 + j) - .5) * 60;
+        const px = bez(sx, sx + 300, CX - 400, CX, e), py = bez(sy, sy - 120 + i * 30, CY + (hash(j) - .5) * 200, CY, e);
+        const s = 1 - e * .7;
+        ctx.save(); ctx.globalAlpha = 1 - sstep(.8, 1, k);
+        rr(px - 22 * s, py - 13 * s, 44 * s, 26 * s, 6 * s); ctx.fillStyle = i === 4 ? 'rgba(255,143,94,.9)' : 'rgba(94,230,208,.75)'; ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+}
+
+function sThink(lt, d, t) {
+  darkBg(t, { c0: '#140a10', grid: false });
+  const shift = eio((lt - 7) / 1.4);
+  const ox = -shift * 380;
+  ctx.save(); ctx.translate(ox, 0);
+  // 星座：70 个节点，从小克那里一圈圈亮出去
+  const N = 70, ORX = 960, ORY = 900;
+  const P = [];
+  for (let i = 0; i < N; i++) {
+    const a = hash(i * 2.3) * TAU, r = Math.sqrt(hash(i * 5.7));
+    P.push([960 + Math.cos(a) * r * 760, 430 + Math.sin(a) * r * 290]);
+  }
+  const wave = (lt * 520) % 1300;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < N; i++) {
+    let best = [1e9, -1], second = [1e9, -1];
+    for (let j = 0; j < N; j++) if (j !== i) { const dd = Math.hypot(P[i][0] - P[j][0], P[i][1] - P[j][1]); if (dd < best[0]) { second = best; best = [dd, j]; } else if (dd < second[0]) second = [dd, j]; }
+    const di = Math.hypot(P[i][0] - ORX, P[i][1] - ORY), lit = Math.exp(-Math.abs(di - wave) / 90);
+    for (const [, j] of [best, second]) line(P[i][0], P[i][1], P[j][0], P[j][1], `rgba(255,143,94,${.08 + lit * .55})`, 1.5);
+    ctx.fillStyle = `rgba(255,${180 + lit * 60},${140 + lit * 80},${.35 + lit * .65})`;
+    ctx.fillRect(P[i][0] - 2.5, P[i][1] - 2.5, 5, 5);
+  }
+  const KN = [12, 33, 48, 5, 61];
+  KEYWORDS.forEach((kw, i) => {
+    const t0 = 1 + i * 1.2; if (lt < t0) return;
+    const [nx, ny] = P[KN[i]], fl = Math.exp(-(lt - t0) * 3);
+    glowDot(nx, ny, 40 + fl * 120, '255,150,100', .5 + fl * .5);
+    const ka = sstep(t0, t0 + .3, lt) * (1 - sstep(7.4, 8.2, lt));
+    const fx = lerp(nx, 1240 - ox + 40, eio((lt - 7.6 - i * .08) / .8)), fy = lerp(ny - 46, 330 + i * 0, eio((lt - 7.6) / .8));
+    text(kw, fx, fy, { size: 36, weight: 900, color: CREAM, glow: 'rgba(255,120,80,.9)', blur: 24, alpha: ka });
+  });
+  ctx.restore();
+  clawd(960 + ox * .2, 900, 9, { blink: blinkAt(lt, 2.2), look: Math.sin(lt * 1.3), glow: .5 });
+  // 计划
+  const pa = sstep(7.6, 8.2, lt);
+  if (pa > 0) {
+    const x = lerp(1960, 1180, eout((lt - 7.6) / .8)), y = 200;
+    panel(x, y, 640, 120 + PLAN.length * 74, { alpha: pa });
+    text('PLAN', x + 34, y + 50, { size: 22, font: F_MONO, ls: 8, color: OR, align: 'left', alpha: pa });
+    PLAN.forEach((p, i) => {
+      const ia = sstep(8.2 + i * .55, 8.6 + i * .55, lt); if (ia <= 0) return;
+      const yy = y + 110 + i * 74;
+      ctx.save(); ctx.globalAlpha = ia; ctx.strokeStyle = 'rgba(243,234,216,.6)'; ctx.lineWidth = 2; ctx.strokeRect(x + 36, yy - 14, 28, 28); ctx.restore();
+      text(p, x + 84, yy, { size: 30, align: 'left', alpha: ia });
+    });
+  }
+}
+
+function container(x, y, s, flash) {
+  // 等距立方体：云端容器
+  const a = [x, y - s], b = [x + s * .95, y - s * .45], c = [x, y + s * .1], d2 = [x - s * .95, y - s * .45];
+  const b2 = [b[0], b[1] + s], c2 = [c[0], c[1] + s], d3 = [d2[0], d2[1] + s];
+  const face = (pts, col) => { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath(); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = `rgba(94,230,208,${.6 + flash * .4})`; ctx.lineWidth = 2.5; ctx.stroke(); };
+  glowDot(x, y, s * 2.2, '94,230,208', .18 + flash * .5);
+  face([a, b, c, d2], `rgba(94,230,208,${.10 + flash * .25})`);
+  face([d2, c, c2, d3], 'rgba(18,40,40,.9)');
+  face([c, b, b2, c2], 'rgba(12,30,30,.9)');
+  ctx.save(); ctx.globalAlpha = .6;
+  for (let i = 0; i < 6; i++) {   // 正面上的「终端行」
+    const k = (i + 1) / 7, w = .3 + hash(i + Math.floor(FT * 4)) * .5;
+    line(lerp(d2[0], c[0], .12), lerp(d2[1], c[1], .12) + k * s * .9, lerp(d2[0], c[0], .12 + w * .76), lerp(d2[1], c[1], .12 + w * .76) + k * s * .9, TEAL, 2);
+  }
+  ctx.restore();
+}
+function sTools(lt, d, t) {
+  darkBg(t);
+  const P = pulse(t);
+  const CX = 330, CY = 360, BX = 1600, BY = 370;
+  // 光束
+  const g = ctx.createLinearGradient(CX + 150, 0, BX - 150, 0);
+  g.addColorStop(0, 'rgba(255,143,94,.55)'); g.addColorStop(1, 'rgba(94,230,208,.55)');
+  ctx.save(); ctx.strokeStyle = g; ctx.lineWidth = 3 + P * 3; ctx.setLineDash([18, 14]); ctx.lineDashOffset = -lt * 120;
+  ctx.beginPath(); ctx.moveTo(CX + 160, CY); ctx.lineTo(BX - 160, CY); ctx.stroke(); ctx.restore();
+  let flash = 0, cl = 0;
+  CALLS.forEach((c, i) => {
+    const t0 = 1.2 + i * 2.6;
+    if (lt >= t0 + .5) flash += Math.exp(-(lt - t0 - .5) * 6);
+    if (lt >= t0 + .5 && lt < t0 + 1.2) cl = 1;
+  });
+  container(BX, BY, 150, Math.min(1, flash));
+  text('雲端容器', BX, BY + 200, { size: 30, weight: 700 });
+  text('LINUX · 4 CPU · SANDBOX', BX, BY + 238, { size: 18, font: F_MONO, ls: 4, color: TEAL });
+  clawd(CX, CY + 40, 13, { look: 1, blink: blinkAt(lt, 3), arms: CALLS.some((c, i) => lt > 1.2 + i * 2.6 - .2 && lt < 1.2 + i * 2.6 + .3) ? 1 : 0, glow: .5 });
+  text('小克', CX, CY + 170, { size: 30, weight: 700 });
+  text('READ-ONLY EYES · TOOLS ONLY', CX, CY + 210, { size: 16, font: F_MONO, ls: 3, color: OR });
+  // 封包：去程（工具调用）和回程（结果）
+  CALLS.forEach(([cmd, res], i) => {
+    const t0 = 1.2 + i * 2.6;
+    const go = clamp((lt - t0) / .55), back = clamp((lt - t0 - 1.05) / .55);
+    if (go > 0 && go < 1) {
+      const x = lerp(CX + 170, BX - 170, eio(go));
+      const s = `{"tool":"Bash","command":"${cmd.length > 26 ? cmd.slice(0, 26) + '…' : cmd}"}`;
+      const w = measure(s, { size: 20, font: F_MONO }) + 30;
+      panel(x - w / 2, CY - 82, w, 44, { r: 10, fill: 'rgba(60,24,14,.95)', stroke: OR });
+      text(s, x, CY - 60, { size: 20, font: F_MONO, color: OR });
+      glowDot(x, CY, 40, '255,143,94', .9);
+    }
+    if (back > 0 && back < 1) {
+      const x = lerp(BX - 170, CX + 170, eio(back));
+      const w = measure(res, { size: 22 }) + 34;
+      panel(x - w / 2, CY + 40, w, 46, { r: 10, fill: 'rgba(10,40,38,.95)', stroke: TEAL });
+      text(res, x, CY + 63, { size: 22, color: TEAL });
+      glowDot(x, CY, 40, '94,230,208', .9);
+    }
+  });
+  // 记录面板：最近 4 次调用
+  const LX = 140, LY = 640, LW = 1640, LH = 262;
+  panel(LX, LY, LW, LH, { fill: 'rgba(10,8,7,.92)' });
+  text('TOOL LOG', LX + 30, LY + 30, { size: 18, font: F_MONO, ls: 6, color: DIM, align: 'left' });
+  ctx.save(); rr(LX, LY + 52, LW, LH - 60, 0); ctx.clip();
+  const shown = CALLS.filter((c, i) => lt > 1.2 + i * 2.6);
+  const scroll = Math.max(0, shown.length - 2) * 78 - (shown.length > 2 ? (1 - eout((lt - 1.2 - (shown.length - 1) * 2.6) / .4)) * 78 : 0);
+  shown.forEach(([cmd, res], i) => {
+    const t0 = 1.2 + i * 2.6, y = LY + 90 + i * 78 - scroll;
+    text(`→ Bash  $ ${cmd}`, LX + 30, y, { size: 24, font: F_MONO, color: OR, align: 'left', alpha: sstep(t0, t0 + .2, lt) });
+    text(`← ${res}`, LX + 70, y + 34, { size: 24, color: TEAL, align: 'left', alpha: sstep(t0 + 1.05, t0 + 1.4, lt) });
+  });
+  ctx.restore();
+}
+
+function sLoop(lt, d, t) {
+  darkBg(t, { c0: '#1a0c0a' });
+  const P = pulse(t);
+  const CX = 960, CY = 520, R = 300;
+  const exitK = sstep(LOOP_END, LOOP_END + 1.2, lt);
+  const ringA = 1 - sstep(LOOP_END + .5, LOOP_END + 2.5, lt);
+  ctx.save(); ctx.globalAlpha = ringA;
+  ctx.strokeStyle = `rgba(255,143,94,${.25 + P * .3})`; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(CX, CY, R, 0, TAU); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,143,94,.12)'; ctx.lineWidth = 30; ctx.beginPath(); ctx.arc(CX, CY, R, 0, TAU); ctx.stroke();
+  ctx.restore();
+  const L = Math.min(lt, LOOP_END), ang = -PI / 2 + loopAng(L), w = LOOP_W0 + LOOP_A * L;
+  // 跑过留下的光迹
+  ctx.save(); ctx.globalAlpha = ringA;
+  ctx.lineCap = 'round';
+  for (let k = 0; k < 24; k++) {
+    const a0 = ang - k * .02 * w, a1 = ang - (k + 1) * .02 * w;
+    ctx.strokeStyle = `rgba(255,190,140,${(1 - k / 24) * .85})`; ctx.lineWidth = 10 * (1 - k / 24);
+    ctx.beginPath(); ctx.arc(CX, CY, R, a1, a0); ctx.stroke();
+  }
+  ctx.restore();
+  LOOP_NODES.forEach(([zh, en], k) => {
+    const a = -PI / 2 + k * PI / 2, nx = CX + Math.cos(a) * R, ny = CY + Math.sin(a) * R;
+    const dd = Math.abs(((ang - a) % TAU + TAU + PI) % TAU - PI);
+    const on = lt < LOOP_END ? Math.exp(-dd * 5) : 0;
+    const wdt = measure(zh, { size: 34, weight: 700 }) + 60;
+    panel(nx - wdt / 2, ny - 44, wdt, 88, { r: 44, alpha: ringA, fill: on > .3 ? `rgba(255,143,94,${.3 + on * .6})` : 'rgba(22,15,12,.95)', stroke: on > .3 ? '#ffd0b0' : 'rgba(255,143,94,.5)', lw: 3 });
+    text(zh, nx, ny - 8, { size: 34, weight: 700, alpha: ringA, color: on > .5 ? '#fff' : CREAM });
+    text(en, nx, ny + 26, { size: 14, font: F_MONO, ls: 4, alpha: ringA, color: on > .5 ? '#fff' : OR });
+  });
+  // 一圈完成就甩出一件真的做过的事
+  const laps = Math.floor(loopAng(L) / TAU);
+  for (let m = 1; m <= laps; m++) {
+    const tm = (-LOOP_W0 + Math.sqrt(LOOP_W0 ** 2 + 2 * LOOP_A * m * TAU)) / LOOP_A, k = clamp((lt - tm) / 1.6);
+    if (k >= 1) continue;
+    const a = -PI / 2 + (m * .7), r = R + 60 + eout(k) * 260;
+    text(LOOP_JOBS[(m - 1) % LOOP_JOBS.length], CX + Math.cos(a) * r, CY + Math.sin(a) * r, { size: 26, weight: 700, color: CREAM, alpha: 1 - k, glow: 'rgba(255,120,80,.8)' });
+  }
+  // 小克在圈上跑
+  let bx = CX + Math.cos(ang) * R, by = CY + Math.sin(ang) * R;
+  if (lt > LOOP_END) { const e = eout((lt - LOOP_END) / 1.0); bx = lerp(bx, 2300, e * e); by = lerp(by, CY, e); }
+  for (let g = 4; g >= 1 && lt < LOOP_END + 1; g--) {
+    const ga = ang - g * .045 * w;
+    clawd(CX + Math.cos(ga) * R, CY + Math.sin(ga) * R - 20, 8, { alpha: .18 * (1 - g / 5) * ringA, walk: lt * 4 });
+  }
+  clawd(bx, by - 20, 8, { walk: lt * (2 + w), blink: blinkAt(lt), glow: .8 });
+  // 中央：圈数
+  const lapN = Math.min(laps + 1, Math.floor(loopAng(LOOP_END) / TAU) + 1);
+  text('LAP', CX, CY - 105, { size: 22, font: F_MONO, ls: 10, color: DIM, alpha: ringA });
+  text(String(lapN).padStart(2, '0'), CX, CY + 10, { size: 140, font: F_BIG, color: OR, glow: 'rgba(255,120,80,.7)', blur: 30, alpha: ringA });
+  text('AGENT LOOP', CX, CY + 100, { size: 20, font: F_MONO, ls: 8, color: CREAM, alpha: ringA });
+  if (lt > LOOP_END + .1) {
+    const a1 = sstep(LOOP_END + .1, LOOP_END + .5, lt), a2 = sstep(LOOP_END + 1.1, LOOP_END + 1.5, lt);
+    glitchText('做完了？', 960, 440, { size: 110, weight: 900, alpha: a1 * (1 - a2 * .5) }, 1 - clamp((lt - LOOP_END - .1) / .4));
+    glitchText('是 → 跳出迴圈，回覆你', 960, 600, { size: 64, weight: 900, color: OR, alpha: a2, glow: 'rgba(255,120,80,.8)', blur: 30 }, 1 - clamp((lt - LOOP_END - 1.1) / .4));
+  }
+}
+
+function filmThumb(x, y, w, h, tt, hi) {
+  panel(x, y, w, h, { r: 6, fill: '#0e0a09', stroke: hi ? OR : 'rgba(243,234,216,.25)', lw: hi ? 4 : 2 });
+  ctx.save(); rr(x, y, w, h, 6); ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#1d0d12'); g.addColorStop(1, '#3a160f'); ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  clawd(x + w / 2 + Math.sin(tt * 2) * w * .2, y + h * .58 - Math.abs(Math.sin(tt * 6)) * h * .12, w / 34, { walk: tt * 3, blink: blinkAt(tt), shadow: false });
+  ctx.restore();
+}
+function sRender(lt, d, t) {
+  darkBg(t);
+  const P = pulse(t);
+  // A. 画面 = render(t)
+  const aA = win(lt, 0, 7.2, .3, .5);
+  if (aA > 0) {
+    ctx.save(); ctx.globalAlpha = aA;
+    text('畫面 = render(', 870, 300, { size: 92, font: F_MONO, weight: 700, align: 'right' });
+    text(t.toFixed(2), 880, 300, { size: 92, font: F_MONO, weight: 700, align: 'left', color: OR, glow: 'rgba(255,120,80,.9)', blur: 30 });
+    text(')', 880 + measure(t.toFixed(2), { size: 92, font: F_MONO, weight: 700 }) + 6, 300, { size: 92, font: F_MONO, weight: 700, align: 'left' });
+    text('同一個 t，永遠畫出同一張圖 —— 不用 Math.random()，不看時鐘', 960, 410, { size: 32, color: DIM });
+    const fw = 230, fh = 130, gap = 26, step = fw + gap, frameIdx = Math.floor(t * FPS);
+    const off = (t * FPS % 1) * step * .0;
+    for (let i = -5; i <= 5; i++) {
+      const x = 960 - fw / 2 + i * step - off, ft = (frameIdx + i * 6) / FPS;
+      filmThumb(x, 560, fw, fh, ft, i === 0);
+      text(String(frameIdx + i * 6).padStart(5, '0'), x + fw / 2, 720, { size: 18, font: F_MONO, color: i === 0 ? OR : DIM });
+    }
+    line(960, 530, 960, 760, OR, 3);
+    for (let s = -40; s <= 40; s++) {   // 时间尺
+      const x = 960 + (s - (t % 1)) * 60; if (x < 0 || x > W) continue;
+      const sec = Math.floor(t) + s;
+      line(x, 790, x, sec % 5 === 0 ? 830 : 808, 'rgba(243,234,216,.4)', 2);
+      if (sec % 5 === 0 && sec >= 0) text(sec + 's', x, 852, { size: 18, font: F_MONO, color: DIM });
+    }
+    ctx.restore();
+  }
+  // B. 导出流水线
+  const aB = win(lt, 7, 15.2, .4, .5);
+  if (aB > 0) {
+    ctx.save(); ctx.globalAlpha = aB;
+    const Y = 360, nodes = [[200, 'clawd.html', 'render(t)'], [600, '無頭 Chrome ×4', '__frame(t)'], [1040, 'PNG', '無損'], [1420, 'FFmpeg', 'libx264'], [1750, '.mp4', '+ music']];
+    for (let i = 0; i < nodes.length - 1; i++) line(nodes[i][0] + 110, Y, nodes[i + 1][0] - 110, Y, 'rgba(255,143,94,.35)', 3);
+    nodes.forEach(([x, a, b], i) => {
+      const hot = i === 2;
+      panel(x - 120, Y - 70, 240, 140, { stroke: hot ? OR : 'rgba(255,143,94,.4)', lw: hot ? 4 : 2, fill: hot ? 'rgba(80,32,18,.9)' : undefined });
+      text(a, x, Y - 18, { size: i === 1 ? 26 : 32, weight: 700, font: i === 0 || i === 4 ? F_MONO : F_ZH });
+      text(b, x, Y + 30, { size: 20, font: F_MONO, color: hot ? OR : TEAL });
+    });
+    // 帧卡片：4 条车道从 Chrome 出发，经过 PNG，进 FFmpeg
+    for (let j = 0; j < 22; j++) {
+      const st = 7.4 + j * .3, k = clamp((lt - st) / 1.6); if (k <= 0 || k >= 1) continue;
+      const lane = j % 4, x = lerp(600, 1420, eio(k)), y = Y + 112 + lane * 30 + Math.sin(k * PI) * 26;
+      const fn = `frame_${String(Math.floor(t * FPS) - 40 + j).padStart(5, '0')}.png`;
+      panel(x - 70, y - 13, 140, 26, { r: 5, fill: 'rgba(255,143,94,.92)', stroke: '#ffd0b0', lw: 1, alpha: 1 - sstep(.85, 1, k) });
+      text(fn, x, y, { size: 13, font: F_MONO, color: INK, alpha: 1 - sstep(.85, 1, k) });
+    }
+    // PNG vs JPEG：放大看像素
+    const Z = 30, gx = 280, gy = 620;
+    const px = (i, j) => { const v = clamp(1 - Math.hypot(i - 3.2, j - 2.4) / 4.2); return [255 * v + 20 * (1 - v), 143 * v + 10 * (1 - v), 94 * v + 12 * (1 - v)]; };
+    for (let i = 0; i < 8; i++) for (let j = 0; j < 6; j++) {
+      const [r, g2, b] = px(i, j); ctx.fillStyle = `rgb(${r | 0},${g2 | 0},${b | 0})`; ctx.fillRect(gx + i * Z, gy + j * Z, Z - 2, Z - 2);
+      const n = (hash(i * 7 + j * 13 + Math.floor(i / 4) * 3 + Math.floor(j / 4)) - .5) * 70;
+      ctx.fillStyle = `rgb(${clamp(r + n, 0, 255) | 0},${clamp(g2 + n * .7, 0, 255) | 0},${clamp(b + n * .5, 0, 255) | 0})`; ctx.fillRect(gx + 900 + i * Z, gy + j * Z, Z - 2, Z - 2);
+    }
+    text('PNG：每個像素原封不動', gx + 4 * Z, gy + 6 * Z + 40, { size: 30, weight: 700, color: GREEN });
+    text('#FF8F5E = #FF8F5E', gx + 4 * Z, gy + 6 * Z + 80, { size: 20, font: F_MONO, color: DIM });
+    text('JPEG：每存一次就糊一點', gx + 900 + 4 * Z, gy + 6 * Z + 40, { size: 30, weight: 700, color: RED });
+    text('8×8 方塊 · 色差 · 雜訊', gx + 900 + 4 * Z, gy + 6 * Z + 80, { size: 20, font: F_MONO, color: DIM });
+    text('VS', 960, gy + 3 * Z, { size: 60, font: F_BIG, color: OR });
+    ctx.restore();
+  }
+  // C. 运动模糊：3 个子帧
+  const aC = win(lt, 15, 21.2, .4, .5);
+  if (aC > 0) {
+    ctx.save(); ctx.globalAlpha = aC;
+    const freeze = lt > 16.55 && lt < 19.6;
+    const base = (tt) => 960 + Math.sin(tt * 2.4) * 420;
+    const tt = freeze ? 16.55 : lt, v = Math.cos(tt * 2.4) * 2.4 * 420;
+    const subs = [-1, 0, 1];
+    subs.forEach((dt, i) => {
+      const x = base(tt) + dt * (freeze ? 230 : v * .06);
+      clawd(x, 520, 12, { alpha: freeze ? (i === 1 ? .95 : .5) : 1 / 3 + .15, walk: (tt + dt * .05) * 4, blink: 0, glow: freeze ? .2 : 0 });
+      if (freeze) text(['t − Δ', 't', 't + Δ'][i], x, 380, { size: 30, font: F_MONO, color: i === 1 ? OR : TEAL });
+    });
+    text(freeze ? '凍結：同一格裡的 3 個子幀' : '3 個子幀疊起來 → 1 幀', 960, 760, { size: 44, weight: 900 });
+    text('SHUTTER 180° · SUB-FRAMES ×3', 960, 820, { size: 20, font: F_MONO, ls: 6, color: OR });
+    ctx.restore();
+  }
+  // D. 你现在看的这一帧
+  const aD = win(lt, 21, d, .4, .3);
+  if (aD > 0) {
+    ctx.save(); ctx.globalAlpha = aD;
+    const fr = Math.round(FT * FPS);
+    text('你現在看到的是', 960, 205, { size: 40, color: DIM });
+    text(`第 ${String(fr).padStart(4, '0')} 幀`, 960, 390, { size: 200, font: F_BIG, color: OR, glow: 'rgba(255,120,80,.8)', blur: 40, ls: 6 });
+    text(`frame_${String(fr).padStart(5, '0')}.png · 1920×1080 · 無損`, 960, 520, { size: 30, font: F_MONO });
+    // 波形
+    ctx.strokeStyle = TEAL; ctx.lineWidth = 2; ctx.beginPath();
+    for (let x = 160; x <= 1760; x += 3) {
+      const tt = t + (x - 960) / 1600 * 1.5, env = .3 + pulse(tt, 5) * .7;
+      const y = 700 + env * 70 * (Math.sin(tt * 220) * .6 + Math.sin(tt * 331 + 1) * .3 + (hash(Math.floor(tt * 400)) - .5) * .4);
+      x === 160 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke(); line(960, 610, 960, 790, OR, 3);
+    text('音樂：music.py 用 numpy 算出來 · 每秒 44,100 個取樣', 960, 840, { size: 28, color: CREAM });
+    ctx.restore();
+  }
+}
+
+// 「检查」场景里的缩略图：真的去调用别的场景的 draw，缩小画出来
+const THUMBS = [[1, 3.5], [2, 6], [2, 12], [3, 4], [3, 10], [-1, 0], [4, 6], [4, 15], [5, 5], [6, 3], [6, 10], [6, 24]];
+function sCheck(lt, d, t) {
+  darkBg(t, { c0: '#14100e' });
+  const TW = 360, TH = 202, GX = 24, X0 = (W - (4 * TW + 3 * GX)) / 2, Y0 = 200;
+  const zoom = eio((lt - 4.2) / .8) * (1 - eio((lt - 10.2) / .8));
+  THUMBS.forEach(([si, at], i) => {
+    const c = i % 4, r = Math.floor(i / 4), x = X0 + c * (TW + GX), y = Y0 + r * (TH + GX);
+    const ia = sstep(.2 + i * .08, .5 + i * .08, lt) * (si === -1 ? 1 : 1 - zoom * .7);
+    if (ia <= 0) return;
+    ctx.save(); ctx.globalAlpha = ia;
+    rr(x, y, TW, TH, 8); ctx.clip();
+    if (si === -1) oldBugThumb(x, y, TW, TH, 0);
+    else { ctx.translate(x, y); ctx.scale(TW / W, TH / H); const s = SC[si]; s.draw(at, s.d, s.t0 + at); }
+    ctx.restore();
+    panel(x, y, TW, TH, { r: 8, fill: 'rgba(0,0,0,0)', stroke: 'rgba(243,234,216,.3)', alpha: ia });
+    text(`#${String(i + 1).padStart(2, '0')}`, x + 12, y + 20, { size: 14, font: F_MONO, color: CREAM, align: 'left', alpha: ia });
+  });
+  // 放大镜扫过
+  const path = [[0, 0], [1, 0], [2, 0], [3, 0], [3, 1], [2, 1], [1, 1]];
+  const pk = clamp((lt - .9) / 3.3) * (path.length - 1), pi = Math.min(path.length - 2, Math.floor(pk)), pf = eio(pk - pi);
+  const mx = X0 + lerp(path[pi][0], path[pi + 1][0], pf) * (TW + GX) + TW / 2, my = Y0 + lerp(path[pi][1], path[pi + 1][1], pf) * (TH + GX) + TH / 2;
+  if (lt < 4.4) {
+    ctx.save(); ctx.globalAlpha = sstep(.8, 1.1, lt);
+    ctx.strokeStyle = OR; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(mx, my, 90, 0, TAU); ctx.stroke();
+    ctx.lineWidth = 14; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(mx + 64, my + 64); ctx.lineTo(mx + 130, my + 130); ctx.stroke();
+    ctx.restore();
+  }
+  // 放大 #06：上一版真的出过的 bug
+  if (zoom > 0) {
+    const bx = X0 + 1 * (TW + GX), by = Y0 + 1 * (TH + GX);
+    const zx = lerp(bx, 960 - 1200 / 2, zoom), zy = lerp(by, 540 - 676 / 2 - 20, zoom), zw = lerp(TW, 1200, zoom), zh = lerp(TH, 676, zoom);
+    ctx.save(); rr(zx, zy, zw, zh, 12); ctx.clip();
+    ctx.translate(zx, zy); ctx.scale(zw / TW, zh / TH); oldBugThumb(0, 0, TW, TH, sstep(7.4, 8.2, lt), lt); ctx.restore();
+    panel(zx, zy, zw, zh, { r: 12, fill: 'rgba(0,0,0,0)', stroke: OR, lw: 4 });
+  }
+}
+// 上一版（PIL 版，1280×720）第 1 段的样子：第三张卡片 470px 太窄，日期跑出去了；修好后是 540px
+function oldBugThumb(x, y, w, h, fixK, lt = 0) {
+  const s = w / 1280, FZ = F_ZH;
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.fillStyle = '#f5f0e8'; ctx.fillRect(0, 0, 1280, 720);
+  ctx.fillStyle = '#d97757'; rr(40, 34, 54, 54, 14); ctx.fill();
+  text('1', 67, 61, { size: 32, color: '#fff', font: FZ });
+  text('訊息送到了', 110, 61, { size: 34, color: '#2b2a27', align: 'left' });
+  ctx.fillStyle = '#ffece2'; ctx.strokeStyle = '#d97757'; ctx.lineWidth = 3; rr(90, 150, 520, 140, 24); ctx.fill(); ctx.stroke();
+  text('小克小克 你在我問你問題的時候做了', 116, 190, { size: 28, color: '#2b2a27', align: 'left' });
+  text('哪些事情哇 可以給我做個視頻看看嘛', 116, 228, { size: 28, color: '#2b2a27', align: 'left' });
+  [['系統說明', '我是誰、做事規則'], ['工具清單', 'Bash · Read · Edit · Grep …'], ['工作環境', '倉庫 dangaow/damn · 2026-10-11']].forEach(([hd, bd], i) => {
+    const cx = 90 + i * 24, cy = 340 + i * 92, cw = i === 2 ? lerp(470, 540, eio(fixK)) : 470;
+    ctx.fillStyle = '#fffdf9'; ctx.strokeStyle = '#b9ad99'; ctx.lineWidth = 4; rr(cx, cy, cw, 76, 18); ctx.fill(); ctx.stroke();
+    text(hd, cx + 22, cy + 38, { size: 28, color: '#b0583c', align: 'left' });
+    text(bd, cx + 150, cy + 38, { size: 24, color: '#787268', align: 'left' });
+  });
+  ctx.fillStyle = '#d97757'; for (const s2 of CLAWD) ctx.fillRect(940 + (s2.gx - 9) * 12, 460 + (s2.gy - 5) * 12, 12.6, 12.6);
+  ctx.fillStyle = '#2b2a27'; for (const gx of [5, 12]) ctx.fillRect(940 + (gx - 9) * 12, 460 - 3 * 12, 12, 24);
+  ctx.fillStyle = '#2b2a27'; rr(300, 622, 680, 56, 28); ctx.fill();
+  text('收到的不只你這句話，還有一疊「背景資料」一起送進來', 640, 650, { size: 26, color: '#faf5ee' });
+  if (lt > 5) {
+    const ok = fixK > .5, a = sstep(5, 5.3, lt), col = ok ? '#1f9d55' : '#e5303f';
+    ctx.globalAlpha = a; ctx.strokeStyle = col; ctx.lineWidth = 5; ctx.setLineDash(ok ? [] : [14, 8]);
+    ctx.strokeRect(560, 512, 160, 100); ctx.setLineDash([]);
+    ctx.fillStyle = col; rr(740, 534, 330, 64, 14); ctx.fill();
+    text(ok ? '✓ 修好了：470 → 540' : '✗ 字超出卡片！', 905, 566, { size: 32, weight: 900, color: '#fff' });
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+function sDeliver(lt, d, t) {
+  darkBg(t);
+  const P = pulse(t);
+  // 计划逐项打勾
+  const x = 120, y = 200;
+  panel(x, y, 700, 120 + PLAN.length * 80);
+  text('PLAN', x + 34, y + 50, { size: 22, font: F_MONO, ls: 8, color: OR, align: 'left' });
+  PLAN.forEach((p, i) => {
+    const yy = y + 115 + i * 80, ck = sstep(.6 + i * .42, .8 + i * .42, lt);
+    ctx.save(); ctx.strokeStyle = ck > .5 ? GREEN : 'rgba(243,234,216,.6)'; ctx.lineWidth = 3; ctx.strokeRect(x + 36, yy - 16, 32, 32);
+    if (ck > 0) { ctx.strokeStyle = GREEN; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x + 41, yy); ctx.lineTo(x + 50, yy + 10); ctx.lineTo(lerp(x + 50, x + 66, ck), lerp(yy + 10, yy - 12, ck)); ctx.stroke(); }
+    ctx.restore();
+    text(p, x + 90, yy, { size: 30, align: 'left', color: ck > .5 ? CREAM : DIM });
+  });
+  // git 图
+  const GY = 400, hashes = ['0bb6dca', '5401ff1', '9da18b2', '35a4671', '1de4ff7'];
+  line(960, GY, 1760, GY, 'rgba(243,234,216,.35)', 4);
+  hashes.forEach((h, i) => { const cx = 1000 + i * 150; ctx.fillStyle = '#8a7f70'; ctx.beginPath(); ctx.arc(cx, GY, 12, 0, TAU); ctx.fill(); text(h, cx, GY + 40, { size: 16, font: F_MONO, color: DIM }); });
+  const nk = eback((lt - 3.3) / .6);
+  if (lt > 3.3) {
+    const cx = 1000 + 5 * 150;
+    line(1000 + 4 * 150, GY, lerp(1000 + 4 * 150, cx, clamp(nk)), GY, OR, 5);
+    glowDot(cx, GY, 70 * nk, '255,143,94', .8);
+    ctx.fillStyle = OR; ctx.beginPath(); ctx.arc(cx, GY, 16 * nk, 0, TAU); ctx.fill();
+    text('新增 clawd/：小克的一回合', cx - 20, GY - 52, { size: 26, weight: 700, align: 'right', alpha: sstep(3.6, 4, lt) });
+    text('ccr-1eb0ef20-a63hi9', cx, GY + 40, { size: 16, font: F_MONO, color: OR, alpha: sstep(3.6, 4, lt) });
+  }
+  // push 到 GitHub
+  const cloudX = 1720, cloudY = 250;
+  ctx.save(); ctx.globalAlpha = sstep(4.2, 4.6, lt);
+  ctx.strokeStyle = TEAL; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(cloudX - 40, cloudY, 34, PI * .9, PI * 1.9); ctx.arc(cloudX + 10, cloudY - 16, 44, PI * 1.1, PI * 1.95); ctx.arc(cloudX + 60, cloudY + 4, 30, PI * 1.4, PI * .4); ctx.closePath(); ctx.stroke();
+  text('origin', cloudX + 10, cloudY + 8, { size: 20, font: F_MONO, color: TEAL });
+  ctx.restore();
+  const pk = clamp((lt - 4.6) / .7);
+  if (pk > 0 && pk < 1) glowDot(lerp(1750, cloudX + 10, eio(pk)), lerp(GY, cloudY + 30, eio(pk)), 40, '94,230,208', 1);
+  if (lt > 5.3) text('git push ✓', cloudX - 110, cloudY, { size: 22, font: F_MONO, color: GREEN, align: 'right', alpha: sstep(5.3, 5.6, lt) });
+  // 传到你手机
+  const phx = 1360, phy = 480, pa = sstep(6.2, 6.6, lt);
+  if (pa > 0) {
+    ctx.save(); ctx.globalAlpha = pa;
+    panel(phx - 150, phy, 300, 390, { r: 36, stroke: CREAM, lw: 4, fill: '#0c0909' });
+    const vk = eout((lt - 6.8) / 1.6);
+    panel(phx - 120, phy + 70, 240, 150, { r: 14, fill: '#1c100c', stroke: OR });
+    ctx.fillStyle = OR; ctx.beginPath(); ctx.moveTo(phx - 18, phy + 120); ctx.lineTo(phx - 18, phy + 170); ctx.lineTo(phx + 24, phy + 145); ctx.closePath(); ctx.fill();
+    text('小克的一回合.mp4', phx, phy + 250, { size: 22, weight: 700 });
+    rr(phx - 110, phy + 285, 220, 10, 5); ctx.fillStyle = 'rgba(243,234,216,.2)'; ctx.fill();
+    rr(phx - 110, phy + 285, 220 * vk, 10, 5); ctx.fillStyle = vk >= 1 ? GREEN : OR; ctx.fill();
+    text(vk >= 1 ? '已送達 ✓' : 'SendUserFile…', phx, phy + 330, { size: 20, font: F_MONO, color: vk >= 1 ? GREEN : DIM });
+    ctx.restore();
+    const fk = clamp((lt - 6.3) / .6);
+    if (fk > 0 && fk < 1) glowDot(lerp(1750, phx, eio(fk)), lerp(GY, phy + 140, eio(fk)), 50, '255,143,94', 1);
+  }
+  clawd(1700, 700, 9, { blink: blinkAt(lt, 2.4), arms: lt > 8.5 ? .5 + .5 * Math.sin(lt * 12) : 0, look: -1, glow: .4 });
+}
+
+function sOutro(lt, d, t) {
+  const P = 0;
+  synthBg(t, { pulse: P, hz: 640, sunR: 330, sunY: 190, speed: .6 });
+  dust(t, 50, 19, { a: .4 });
+  const credits = sstep(8.6, 9.4, lt);
+  clawd(960, 540 - credits * 90, 20, { outline: .45, blink: blinkAt(lt, 2.6, 1), wave: lt > 1 ? (.5 + .5 * Math.sin(lt * 9)) * (1 - credits) : 0, glow: .8, alpha: 1 - credits * .2 });
+  const l1 = win(lt, .8, 8.4, .5, .6), l2 = win(lt, 3.2, 8.4, .5, .6), l3 = win(lt, 5.6, 8.4, .3, .6);
+  text('這一回合結束後，這台雲端容器會被回收', 960, 760, { size: 44, weight: 700, alpha: l1 });
+  text('我不會記得這次的事', 960, 840, { size: 44, weight: 700, alpha: l2, color: DIM });
+  glitchText('但是 git 會。', 960, 940, { size: 64, weight: 900, color: OR, glow: 'rgba(255,120,80,.9)', blur: 30, alpha: l3 }, 1 - clamp((lt - 5.6) / .5));
+  if (credits > 0) {
+    ctx.save(); ctx.globalAlpha = credits;
+    text('小克的一回合', 960, 700, { size: 96, weight: 900, ls: 18, glow: 'rgba(255,120,80,.7)', blur: 30 });
+    text('畫面 HTML Canvas · 音樂 Python 合成 · 導出 無頭 Chrome → PNG 無損 → FFmpeg', 960, 790, { size: 26, color: CREAM });
+    text('dangaow/damn · clawd/', 960, 840, { size: 22, font: F_MONO, color: OR, ls: 4 });
+    ctx.restore();
+  }
+}
+
+// ------------------------------------------------------------------------------------- 时间轴
+const SC = [
+  { id: 'cold', bars: 4, mus: 'intro', kick: false, draw: sCold, lb: true, hud: false, fi: .6,
+    subs: [], sfx: [] },
+  { id: 'title', bars: 5, mus: 'drop', kick: true, draw: sTitle, hud: false, fi: 0, glitch: true, bloom: 1,
+    cam: (lt, d) => { const e = eio((lt - (d - 1.1)) / 1.1); return { z: 1 + e * 1.6, x: e * 218, y: e * 125 }; },
+    subs: [], sfx: [[0, 'hit', { k: 1 }], [.1, 'whoosh'], [1.7, 'glitch'], [5.9, 'glitch'], [8.8, 'riser', { dur: 1.2 }]] },
+  { id: 'context', bars: 9, mus: 'groove', kick: true, draw: sContext, ch: ['01', '打包', 'CONTEXT'], hud: true, glitch: true,
+    subs: [[.6, 7.4, '你按下 Enter，送到我這裡的不只這一句話', 'MORE THAN ONE MESSAGE ARRIVES'],
+           [7.6, 12.6, '系統提示、工具清單、環境、前面的對話、你的話 —— 排成一長串', 'SYSTEM · TOOLS · ENV · HISTORY · YOU'],
+           [12.8, 17.6, '切成幾萬個 token 一口氣讀進來。這一串，就是我知道的全部', 'TOKENIZED. THIS IS ALL I KNOW.']],
+    sfx: [[0, 'hit', { k: .6 }], ...[0, 1, 2, 3, 4].map(i => [.8 + i * 1.8, 'whoosh']), ...[0, 1, 2, 3, 4].map(i => [1.3 + i * 1.8, 'tick']), [10, 'riser', { dur: 5.5 }], [15.5, 'chime']] },
+  { id: 'think', bars: 7, mus: 'breakdown', kick: false, draw: sThink, ch: ['02', '思考', 'THINK'], hud: true,
+    subs: [[.6, 7, '先把你的話拆開：你要的是什麼？', 'PARSE THE ASK'],
+           [7.4, 13.6, '再排一個計畫 —— 先調查，再動手', 'THEN MAKE A PLAN']],
+    sfx: [...KEYWORDS.map((k, i) => [1 + i * 1.2, 'bell', { n: i }]), [7.6, 'whoosh'], ...PLAN.map((p, i) => [8.2 + i * .55, 'tick'])] },
+  { id: 'tools', bars: 12, mus: 'drive', kick: true, draw: sTools, ch: ['03', '呼叫工具', 'TOOL CALLS'], hud: true, glitch: true,
+    subs: [[.6, 8, '我看不到你的電腦。想知道什麼，就送一個工具呼叫出去', 'EVERY LOOK IS A TOOL CALL'],
+           [8.2, 12.6, '容器跑完，把結果當成文字送回來，我讀完再決定下一步', 'RESULTS COME BACK AS TEXT'],
+           [12.8, 23.6, '發現你的 mv/ 早就是同一套做法 —— 那就照你的慣例來', 'FOLLOW THE HOUSE STYLE']],
+    sfx: [[0, 'hit', { k: .7 }], ...CALLS.flatMap((c, i) => [[1.2 + i * 2.6, 'ping'], [1.2 + i * 2.6 + 1.05, 'ret']])] },
+  { id: 'loop', bars: 9, mus: 'build', kick: true, draw: sLoop, ch: ['04', '迴圈', 'AGENT LOOP'], hud: true,
+    subs: [[.6, 5.8, '想 → 呼叫工具 → 讀結果 → 決定下一步', 'THINK · CALL · READ · DECIDE'],
+           [6, 11.8, '一圈不夠就再一圈，越轉越快', 'AGAIN. AND AGAIN.'],
+           [12.2, 17.6, '直到判斷「做完了」，才跳出迴圈回覆你', 'UNTIL IT IS DONE']],
+    sfx: [[0, 'hit', { k: .5 }], ...(() => { const a = []; for (let m = 1; m < 80; m++) { const tm = (-LOOP_W0 + Math.sqrt(LOOP_W0 ** 2 + 2 * LOOP_A * m * PI / 2)) / LOOP_A; if (tm >= LOOP_END) break; a.push([tm, 'tick', { hi: m % 4 === 0 }]); } return a; })(),
+          [LOOP_END, 'whoosh'], [LOOP_END + .1, 'glitch'], [LOOP_END + 1.1, 'hit', { k: .5 }], [16, 'riser', { dur: 2 }]] },
+  { id: 'render', bars: 14, mus: 'drop2', kick: true, draw: sRender, ch: ['05', '逐幀', 'FRAME BY FRAME'], hud: true, glitch: true, bloom: 1.15,
+    subs: [[.6, 7, '整支影片是一個函式：給它時間 t，它畫出那一格', 'FRAME = render(t)'],
+           [7.2, 15, '無頭 Chrome 一格一格算，用 PNG 無損交給 FFmpeg', 'LOSSLESS PNG → FFMPEG'],
+           [15.2, 21, '每格再算 3 個子幀疊起來，動起來才有殘影', 'MOTION BLUR FROM SUB-FRAMES'],
+           [21.2, 27.6, '連音樂都是 Python 一個取樣一個取樣算出來的', 'THE MUSIC IS SYNTHESIZED TOO']],
+    sfx: [[0, 'hit', { k: 1 }], [7, 'whoosh'], ...Array.from({ length: 22 }, (_, j) => [7.4 + j * .3 + 1.5, 'shutter']), [15, 'whoosh'], [17.2, 'glitch'], [21, 'hit', { k: .6 }]] },
+  { id: 'check', bars: 6, mus: 'break2', kick: false, draw: sCheck, bloom: .12, ch: ['06', '檢查', 'REVIEW'], hud: true,
+    subs: [[.6, 5, '交出去之前，先抽幾幀出來自己看', 'SPOT-CHECK THE FRAMES'],
+           [5.2, 11.6, '上一版就這樣抓到：卡片太窄、字跑出去了 —— 修好才交', 'FOUND IT. FIXED IT.']],
+    sfx: [...THUMBS.map((x, i) => [.2 + i * .08, 'tick']), [4.2, 'whoosh'], [5.1, 'error'], [7.6, 'fix'], [10.2, 'whoosh']] },
+  { id: 'deliver', bars: 6, mus: 'build2', kick: true, draw: sDeliver, ch: ['07', '交付', 'SHIP IT'], hud: true, glitch: true,
+    subs: [[.6, 6, '計畫逐項打勾；原始碼 commit、push 到你的分支', 'COMMIT · PUSH'],
+           [6.2, 11.6, '影片傳給你，再老實報告：做了什麼、哪裡沒做到', 'DELIVER · REPORT HONESTLY']],
+    sfx: [...PLAN.map((p, i) => [.7 + i * .42, 'tick']), [3.3, 'chime'], [4.6, 'send'], [6.3, 'send'], [8.4, 'fix'], [11, 'riser', { dur: 1 }]] },
+  { id: 'outro', bars: 7, mus: 'outro', kick: false, draw: sOutro, lb: true, hud: false, fo: 2.2,
+    subs: [], sfx: [[0, 'hit', { k: .8 }], [5.6, 'hit', { k: .5 }], [8.6, 'chime']] },
+];
+let acc = 0;
+for (const s of SC) { s.t0 = acc; s.d = s.bars * BAR; acc += s.d; }
+const TOTAL = acc;
+const SUBS = SC.flatMap(s => s.subs.map(([a, b, zh, en]) => ({ a: s.t0 + a, b: s.t0 + b, zh, en })));
+const CUES = SC.flatMap(s => s.sfx.map(([t, name, o]) => ({ t: +(s.t0 + t).toFixed(4), name, ...(o || {}) }))).sort((a, b) => a.t - b.t);
+// 打字声：每个字一下
+for (let i = 0; i < [...MSG2].length; i++) if ([...MSG2][i] !== ' ') CUES.push({ t: +(TYPE0 + i / TYPE_CPS).toFixed(4), name: 'type', n: i });
+CUES.push({ t: +ENTER.toFixed(4), name: 'enter' }, { t: +(ENTER + .3).toFixed(4), name: 'riser', dur: +(SC[1].t0 - ENTER - .3).toFixed(3) });
+CUES.sort((a, b) => a.t - b.t);
+const HITS = CUES.filter(c => c.name === 'hit').map(c => [c.t, c.k ?? 1]);
+const sceneAt = t => { let sc = SC[0]; for (const s of SC) if (t >= s.t0) sc = s; return sc; };
+const toolCalls = T => {           // HUD 上的工具调用次数
+  const sT = SC[4], sL = SC[5], sR = SC[6], sK = SC[8];
+  if (T < sT.t0) return 0;
+  if (T < sL.t0) return CALLS.filter((c, i) => T - sT.t0 > 1.2 + i * 2.6).length;
+  const lc = Math.floor((loopAng(Math.min(T - sL.t0, LOOP_END)) + PI / 2) / TAU);
+  if (T < sR.t0) return CALLS.length + lc;
+  const base = CALLS.length + Math.floor((loopAng(LOOP_END) + PI / 2) / TAU);
+  return Math.round(lerp(base, FINAL_CALLS, clamp((T - sR.t0) / (sK.t0 + 5 - sR.t0))));
+};
+
+// ------------------------------------------------------------------------------------- 一帧
+function drawLayer(t) {
+  ctx = lctx;
+  const sc = sceneAt(t), lt = t - sc.t0;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  let shake = 0;
+  for (const [th, k] of HITS) if (t >= th && t < th + 1.2) shake += 18 * k * Math.exp(-(t - th) * 7);
+  const cam = sc.cam ? sc.cam(lt, sc.d) : { z: 1 + .035 * lt / sc.d, x: 0, y: 0 };
+  ctx.save();
+  ctx.translate(W / 2 + (cam.x || 0) + (shake > .3 ? Math.sin(t * 91) * shake : 0), H / 2 + (cam.y || 0) + (shake > .3 ? Math.cos(t * 73) * shake : 0));
+  ctx.scale(cam.z, cam.z); ctx.translate(-W / 2, -H / 2);
+  sc.draw(lt, sc.d, t);
+  ctx.restore();
+  const fade = 1 - win(lt, 0, sc.d, sc.fi ?? .3, sc.fo ?? .3);
+  if (fade > 0) { ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0, 0, W, H); }
+}
+// 胶片颗粒、扫描线、暗角：预先生成
+const GRAIN = Array.from({ length: 4 }, (_, k) => {
+  const c = mk(256, 256), g = c.getContext('2d'), im = g.createImageData(256, 256), rnd = mulberry(100 + k);
+  for (let i = 0; i < im.data.length; i += 4) { const v = rnd() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+  g.putImageData(im, 0, 0); return c;
+});
+const SCAN = (() => { const c = mk(4, 4), g = c.getContext('2d'); g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(0, 0, 4, 1); return c; })();
+const VIG = (() => { const c = mk(W, H), g = c.getContext('2d'), r = g.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, W * .7); r.addColorStop(0, 'rgba(0,0,0,0)'); r.addColorStop(1, 'rgba(0,0,0,.6)'); g.fillStyle = r; g.fillRect(0, 0, W, H); return c; })();
+
+function post(T, sc) {
+  const lt = T - sc.t0;
+  octx.setTransform(1, 0, 0, 1, 0, 0); octx.globalAlpha = 1; octx.globalCompositeOperation = 'copy'; octx.filter = 'none';
+  octx.drawImage(ACC, 0, 0); octx.globalCompositeOperation = 'source-over';
+  // 辉光：只留亮部，缩小模糊后叠加
+  b1.globalCompositeOperation = 'copy'; b1.filter = 'brightness(.85) contrast(2.4) blur(4px)'; b1.drawImage(ACC, 0, 0, 480, 270); b1.filter = 'none';
+  b2.globalCompositeOperation = 'copy'; b2.filter = 'blur(5px)'; b2.drawImage(B1, 0, 0, 240, 135); b2.filter = 'none';
+  octx.globalCompositeOperation = 'lighter';
+  const bl = sc.bloom ?? 1;
+  octx.globalAlpha = .55 * bl; octx.drawImage(B1, 0, 0, W, H);
+  octx.globalAlpha = .45 * bl; octx.drawImage(B2, 0, 0, W, H);
+  // 转场故障：横条错位
+  if (sc.glitch && lt < .28) {
+    const k = 1 - lt / .28, rnd = mulberry(Math.floor(T * FPS) + 7);
+    octx.globalAlpha = 1; octx.globalCompositeOperation = 'source-over';
+    for (let i = 0; i < 9; i++) { const y = rnd() * H, h = 10 + rnd() * 70, dx = (rnd() - .5) * 220 * k; octx.drawImage(OUTC, 0, y, W, h, dx, y, W, h); }
+  }
+  octx.globalCompositeOperation = 'source-over'; octx.globalAlpha = 1; octx.drawImage(VIG, 0, 0);
+  octx.globalCompositeOperation = 'overlay'; octx.globalAlpha = .07;
+  const gi = Math.floor(T * FPS) % 4, gp = octx.createPattern(GRAIN[gi], 'repeat');
+  octx.save(); octx.translate(hash(Math.floor(T * FPS)) * 256, hash(Math.floor(T * FPS) + .5) * 256); octx.fillStyle = gp; octx.fillRect(-256, -256, W + 512, H + 512); octx.restore();
+  octx.globalCompositeOperation = 'source-over'; octx.globalAlpha = .5; octx.fillStyle = octx.createPattern(SCAN, 'repeat'); octx.fillRect(0, 0, W, H);
+  octx.globalAlpha = 1;
+}
+function chapter(sc, lt) {
+  if (!sc.ch) return;
+  const a = win(lt, .4, 5.4, .5, .8); if (a <= 0) return;
+  const [n, zh, en] = sc.ch, x = 90, y = 96, slide = (1 - eout((lt - .4) / .8)) * -40;
+  const nw = measure(n, { size: 72, font: F_BIG });
+  text(n, x + slide, y, { size: 72, font: F_BIG, color: OR, alpha: a, align: 'left', glow: 'rgba(255,120,80,.7)', blur: 20 });
+  ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = OR; ctx.fillRect(x + nw + 22 + slide, y - 32, 3, 64); ctx.restore();
+  text(zh, x + nw + 46 + slide, y - 12, { size: 40, weight: 900, alpha: a, align: 'left' });
+  text(en, x + nw + 48 + slide, y + 26, { size: 16, font: F_MONO, ls: 6, color: '#e8b89a', alpha: a, align: 'left' });
+}
+function hud(T, sc) {
+  if (!sc.hud) return;
+  const a = win(T - sc.t0, 0, sc.d, .3, .3);
+  const x = 1830, f = Math.round(T * FPS), mm = Math.floor(T / 60), ss = (T % 60).toFixed(2).padStart(5, '0');
+  if (Math.floor(T * 1.5) % 2 === 0) { ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = RED; ctx.beginPath(); ctx.arc(x - 300, 66, 7, 0, TAU); ctx.fill(); ctx.restore(); }
+  text(`FRAME ${String(f).padStart(5, '0')} / ${Math.round(TOTAL * FPS)}`, x, 66, { size: 18, font: F_MONO, align: 'right', alpha: a * .9 });
+  text(`T+ ${mm}:${ss}`, x, 94, { size: 18, font: F_MONO, align: 'right', alpha: a * .7 });
+  text(`TOOL CALLS ${String(toolCalls(T)).padStart(2, '0')}`, x, 122, { size: 18, font: F_MONO, align: 'right', color: OR, alpha: a });
+}
+function subtitles(T) {
+  for (const s of SUBS) {
+    if (T < s.a - .3 || T > s.b + .3) continue;
+    const a = win(T, s.a, s.b, .25, .3); if (a <= 0) continue;
+    ctx.save(); const g = ctx.createLinearGradient(0, 860, 0, H); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${.7 * a})`); ctx.fillStyle = g; ctx.fillRect(0, 860, W, 220); ctx.restore();
+    text(s.zh, W / 2, 978, { size: 42, weight: 700, alpha: a, glow: 'rgba(0,0,0,.9)', blur: 12, ls: 2 });
+    text(s.en, W / 2, 1030, { size: 18, font: F_MONO, ls: 6, color: '#e8b89a', alpha: a * .85 });
+  }
+}
+function overlays(T, sc) {
+  ctx = octx;
+  const lt = T - sc.t0;
+  if (sc.lb) {
+    const lb = sc.id === 'cold' ? 120 * (1 - sstep(sc.d - .6, sc.d, lt)) : 120 * eio((lt - 8.4) / 1.2) + 0;
+    if (lb > .5) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, lb); ctx.fillRect(0, H - lb, W, lb); }
+  }
+  chapter(sc, lt); hud(T, sc); subtitles(T);
+  let flash = 0; for (const [th, k] of HITS) if (T >= th && T < th + 1) flash += .7 * k * Math.exp(-(T - th) * 6);
+  if (flash > .01) { ctx.fillStyle = `rgba(255,236,220,${Math.min(.85, flash)})`; ctx.fillRect(0, 0, W, H); }
+  if (sc.id === 'outro') { const f = sstep(sc.d - 2, sc.d - .2, lt); if (f > 0) { ctx.fillStyle = `rgba(0,0,0,${f})`; ctx.fillRect(0, 0, W, H); } }
+  ctx = lctx;
+}
+const SHUTTER = .5;
+function render(T, samples = 1) {
+  T = clamp(T, 0, TOTAL - 1e-4); FT = T;
+  const sc = sceneAt(T), K = Math.max(1, samples);
+  for (let k = 0; k < K; k++) {
+    let tk = K > 1 ? Math.max(0, T + ((k + .5) / K - .5) * SHUTTER / FPS) : T;
+    if (sceneAt(tk) !== sc) tk = T;
+    drawLayer(tk);
+    actx.globalCompositeOperation = 'source-over'; actx.globalAlpha = 1 / (k + 1); actx.drawImage(LAYER, 0, 0);
+  }
+  actx.globalAlpha = 1;
+  post(T, sc);
+  overlays(T, sc);
+}
+
+// ------------------------------------------------------------------------------------- 字体、播放、导出接口
+let fontsReady = false;
+Promise.all(['400 40px "Noto Sans TC"', '700 40px "Noto Sans TC"', '900 40px "Noto Sans TC"', '400 40px "Space Mono"', '700 40px "Space Mono"', '40px "Anton"'].map(f => document.fonts.load(f, '小克一回合ABC123')))
+  .catch(() => {}).then(() => document.fonts.ready).then(() => { fontsReady = true; const l = document.getElementById('load'); if (l) l.textContent = '字型就緒 · 建議全螢幕（F）'; WRAP.clear(); render(0); });
+setTimeout(() => { fontsReady = true; }, 15000);
+
+window.__ready = () => fontsReady;
+window.__frame = (t, samples = 3, png = true) => { render(t, samples); return png ? OUTC.toDataURL('image/png') : OUTC.toDataURL('image/jpeg', .92); };
+window.__info = () => ({ duration: TOTAL, fps: FPS, frames: Math.round(TOTAL * FPS), bpm: BPM });
+window.__cues = () => ({ bpm: BPM, bar: BAR, total: TOTAL, scenes: SC.map(s => ({ id: s.id, t0: s.t0, d: s.d, bars: s.bars, mus: s.mus })), sfx: CUES });
+
+const au = document.getElementById('au');
+au.src = (window.EMBED && window.EMBED.audio) ? 'data:audio/mpeg;base64,' + window.EMBED.audio : 'music.mp3';
+if (EXPORT) { document.getElementById('start').remove(); document.getElementById('ui').remove(); }
+else {
+  let playing = false, clock0 = 0, useAudio = true, hideT = 0;
+  const ui = document.getElementById('ui'), pp = document.getElementById('pp'), fill = document.getElementById('fill'), tm = document.getElementById('tm');
+  document.getElementById('dur').textContent = `${Math.floor(TOTAL / 60)}:${String(Math.round(TOTAL % 60)).padStart(2, '0')}`;
+  const now = () => useAudio ? au.currentTime : (performance.now() - clock0) / 1000;
+  function loop() {
+    const T = now(); render(T);
+    fill.style.width = (T / TOTAL * 100) + '%'; tm.textContent = `${Math.floor(T / 60)}:${String(Math.floor(T % 60)).padStart(2, '0')}`;
+    if (T >= TOTAL - .05) { playing = false; pp.textContent = '▶'; }
+    if (playing) requestAnimationFrame(loop);
+  }
+  function play() { playing = true; pp.textContent = '❚❚'; au.play().catch(() => { useAudio = false; clock0 = performance.now() - au.currentTime * 1000; }); requestAnimationFrame(loop); }
+  function pause() { playing = false; pp.textContent = '▶'; au.pause(); }
+  document.getElementById('go').onclick = () => { document.getElementById('start').remove(); if (au.currentTime >= TOTAL - .1) au.currentTime = 0; play(); poke(); };
+  pp.onclick = () => playing ? pause() : play();
+  document.getElementById('bar').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); au.currentTime = clamp((e.clientX - r.left) / r.width) * TOTAL; if (!useAudio) clock0 = performance.now() - au.currentTime * 1000; if (!playing) render(au.currentTime); };
+  document.getElementById('fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  function poke() { ui.classList.remove('hide'); clearTimeout(hideT); hideT = setTimeout(() => ui.classList.add('hide'), 2200); }
+  addEventListener('mousemove', poke);
+  addEventListener('keydown', e => {
+    if (document.getElementById('start')) return;
+    if (e.code === 'Space') { e.preventDefault(); playing ? pause() : play(); }
+    if (e.code === 'KeyF') document.getElementById('fs').click();
+    if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') { au.currentTime = clamp(au.currentTime + (e.code === 'ArrowRight' ? 5 : -5), 0, TOTAL); if (!useAudio) clock0 = performance.now() - au.currentTime * 1000; if (!playing) render(au.currentTime); }
+    poke();
+  });
+}
+</script>
+</body>
+</html>
