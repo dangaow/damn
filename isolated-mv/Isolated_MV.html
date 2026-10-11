@@ -1086,7 +1086,7 @@ scene(16.401, [11], (T, lt, P) => {
     spike(sx, x0, y0, x0 + Math.cos(a) * l * p, y0 + Math.sin(a) * l * p, 22 + 30 * hash1(k * 2.2), (hash1(k * 9.9) - .5) * .3);
   });
   sub(11, T, { size: 64, haloColor: 'rgba(0,0,0,.95)' });
-}, (T) => ({ inv: 1, cell: 8, shift: [ringAt(NM_HITS, T, 5, 9) * .008, ring(A.kicks, T, 4, 9) * .006], zoom: 1 + .02 * pulse(A.kicks, T) }));
+}, (T) => ({ inv: 1, cell: 8, shift: [ringAt(NM_HITS, T, 5, 9) * .004, ring(A.kicks, T, 4, 9) * .003], zoom: 1 + .012 * pulse(A.kicks, T) }));
 
 // ---- 05b rain falling into a puddle; the street lamp is only there in the water ------------------------- 0:18.1 - 0:20.7
 scene(18.103, [12, 13], (T, lt, P) => {
@@ -1113,8 +1113,8 @@ scene(20.675, [14, 15], (T, lt, P) => {
 // an umbrella from above: eight panels between ribs, scalloped rim, a wet sheen, rain landing on it
 function umbrella(c, x, y, r, rot, cols, T, o = {}) {
   c.save(); c.globalAlpha *= o.alpha ?? 1;
-  c.fillStyle = 'rgba(0,0,0,.45)'; c.beginPath(); c.ellipse(x + r * .18, y + r * .22, r * 1.02, r * .98, 0, 0, TAU); c.fill();   // its shadow on the wet road
-  c.translate(x, y); c.rotate(rot);
+  if (o.shadow !== false) { c.fillStyle = 'rgba(0,0,0,.45)'; c.beginPath(); c.ellipse(x + r * .18, y + r * .22, r * 1.02, r * .98, 0, 0, TAU); c.fill(); }   // its shadow on the wet road
+  c.translate(x, y); if (o.squash) c.scale(1, o.squash); c.rotate(rot);
   const tip = k => [Math.cos(k / 8 * TAU) * r, Math.sin(k / 8 * TAU) * r];
   for (let k = 0; k < 8; k++) {
     const [ax, ay] = tip(k), [bx, by] = tip(k + 1), mx = (ax + bx) / 2 * .9, my = (ay + by) / 2 * .9;
@@ -1133,12 +1133,66 @@ function umbrella(c, x, y, r, rot, cols, T, o = {}) {
   }
   c.restore();
 }
-const UMB = { t0: 23.359, stop: L[18].t, crowd: L[19].t, alone: L[20].t, v: 150, yRed: H / 2 - 95, yMe: H / 2 + 70 };
-// metres walked: steady, with an eased stop for the one who stops
-const walked = (T, stops) => { const d = T - UMB.t0; if (!stops || T < UMB.stop) return UMB.v * d; const s = Math.min(T - UMB.stop, .6); return UMB.v * (UMB.stop - UMB.t0) + UMB.v * (s - s * s / 1.2); };
+// someone walking under an umbrella, seen from high up at an angle: the canopy is a tilted disc, and under its front rim
+// the coat and the legs show; the legs stride, the canopy bobs with each step, water runs off the rim, the wet road
+// holds a long smear of reflection. wx = place on the road, s = distance walked, dir = +1 walking right, amp = stride
+function walker(c, wx, y, r, s, dir, T, o = {}) {
+  const camX = o.camX || 0, x = wx - camX, amp = o.amp ?? 1, stepLen = 64, ph = s / stepLen * PI, sq = .52;
+  const bob = -Math.abs(Math.sin(ph)) * 5 * amp, lean = Math.sin(ph) * .035 * amp + (o.idle || 0) * Math.sin(T * 1.3 + (o.seed || 0)) * .012;
+  const hip = y + r * .78, footY = y + r * 1.42, coat = o.legs || '#0a0a0a', edge = o.rimLight || 'rgba(205,205,205,.34)', cy = y + bob;
+  c.save(); c.globalAlpha *= o.alpha ?? 1;
+  // the reflection: a long vertical smear of the canopy's colour on the wet road
+  const rg = c.createLinearGradient(0, footY, 0, footY + r * 1.6); rg.addColorStop(0, o.refl || 'rgba(120,120,120,.22)'); rg.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = rg; c.fillRect(x - r * .5, footY, r, r * 1.6);
+  // splashes where the last steps came down
+  const k = Math.floor(ph / PI);
+  for (let j = 0; j < 3 && amp > .05; j++) {
+    const kk = k - j, age = (s - kk * stepLen) / stepLen; if (age < 0 || age > 3) continue;
+    const fx = wx - dir * (s - kk * stepLen) + dir * 18 - camX, fy = footY + (kk % 2 ? -5 : 5);
+    c.strokeStyle = `rgba(235,235,235,${.4 * (1 - age / 3) * amp})`; c.lineWidth = 1.5;
+    c.beginPath(); c.ellipse(fx, fy + 4, 4 + age * 13, (4 + age * 13) * .35, 0, 0, TAU); c.stroke();
+  }
+  // legs: two strides out of phase; the back foot lifts as it swings through
+  for (const [side, phase] of [[-1, ph + PI], [1, ph]]) {
+    const sw = Math.sin(phase) * 26 * amp * dir, up = Math.max(0, -Math.cos(phase)) * 8 * amp;
+    const hx = x + side * 9 + dir * 2, fx = x + sw + side * 4, fy = footY - up + (side < 0 ? -4 : 0), kx = (hx + fx) / 2 + dir * 4 * amp, ky = (hip + fy) / 2;
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    for (const [col, lw] of [[edge, 16], [coat, 12]]) { c.strokeStyle = col; c.lineWidth = lw; c.beginPath(); c.moveTo(hx, hip); c.quadraticCurveTo(kx, ky, fx, fy); c.stroke(); }
+    c.fillStyle = coat; c.beginPath(); c.ellipse(fx + dir * 7, fy + 3, 13, 6, 0, 0, TAU); c.fill();
+    c.fillStyle = 'rgba(235,235,235,.45)'; c.beginPath(); c.ellipse(fx + dir * 12, fy + 1, 4, 1.6, 0, 0, TAU); c.fill();     // wet shoe catching the light
+  }
+  // the coat, from under the canopy to the knees, swinging a little with the stride
+  c.save(); c.translate(x, cy + r * .1); c.rotate(lean);
+  const hw = r * .3, hem = hip - cy + 6, flare = 5 * Math.sin(ph) * amp * dir;
+  c.beginPath(); c.moveTo(-hw * .55, 0); c.lineTo(hw * .55, 0); c.quadraticCurveTo(hw * .62, hem * .45, hw * .95 + flare, hem - 3);
+  c.quadraticCurveTo(flare, hem + 6, -hw * .95 + flare, hem - 3); c.quadraticCurveTo(-hw * .62, hem * .45, -hw * .55, 0); c.closePath();
+  c.strokeStyle = edge; c.lineWidth = 4; c.stroke(); c.fillStyle = coat; c.fill();
+  c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 2; c.beginPath(); c.moveTo(0, r * .2); c.lineTo(flare * .5, hem - 4); c.stroke();      // the coat's front edge
+  c.restore();
+  // water running off the front rim
+  for (let d = 0; d < 6; d++) {
+    const per = .55 + .3 * hash1(d * 3.1 + (o.seed || 0)), age = ((T + hash1(d * 7.7) * per) % per) / per, a = PI * (.1 + .8 * hash1(d * 5.3 + (o.seed || 0)));
+    const dx = x + Math.cos(a) * r * .97, dy0 = cy + Math.sin(a) * r * sq * .97;
+    c.strokeStyle = `rgba(235,235,235,${.55 * (1 - age)})`; c.lineWidth = 2; c.beginPath(); c.moveTo(dx, dy0 + age * 70); c.lineTo(dx, dy0 + age * 70 + 10); c.stroke();
+  }
+  c.restore();
+  // the canopy, tilted towards us, its shadow thrown down behind it
+  c.save(); c.globalAlpha *= (o.alpha ?? 1) * .5; c.fillStyle = '#000'; c.beginPath(); c.ellipse(x + r * .1, footY - r * .06, r * .9, r * .26, 0, 0, TAU); c.fill(); c.restore();
+  umbrella(c, x, cy, r, (o.rot || 0) + .04 * Math.sin(ph * .5) * amp, o.cols, T, { ...o, squash: sq, shadow: false, alpha: o.alpha ?? 1 });
+  // the hand on the handle, just below the front rim: the stick comes down out of the canopy into it
+  const hx = x + dir * 5 + lean * 40, hy = cy + r * .68, ax = x - dir * r * .16, ay = cy + r * .86;
+  c.save(); c.globalAlpha *= o.alpha ?? 1; c.lineCap = 'round';
+  c.strokeStyle = '#2a2a2a'; c.lineWidth = 4; c.beginPath(); c.moveTo(x + lean * 30, cy + r * sq * .9); c.lineTo(hx, hy); c.stroke();
+  for (const [col, lw] of [[edge, 13], [coat, 9]]) { c.strokeStyle = col; c.lineWidth = lw; c.beginPath(); c.moveTo(ax, ay); c.quadraticCurveTo(hx - dir * 4, hy + 16, hx, hy + 3); c.stroke(); }   // the forearm
+  c.fillStyle = o.hand || '#cfcac0'; c.beginPath(); c.ellipse(hx, hy + 2, 6, 5, 0, 0, TAU); c.fill();                       // knuckles catching the light
+  c.restore();
+}
+const UMB = { t0: 23.359, stop: L[18].t, crowd: L[19].t, alone: L[20].t, v: 140, yRed: H / 2 - 230, yMe: H / 2 - 10, cv: 330, c0: 26.4 };
+// distance walked: a slow stroll, and an eased stop for the one who stops
+const walked = (T, stops) => { const d = T - UMB.t0; if (!stops || T < UMB.stop) return UMB.v * d; const s = Math.min(T - UMB.stop, .7); return UMB.v * (UMB.stop - UMB.t0) + UMB.v * (s - s * s / 1.4); };
 scene(23.359, [16, 17, 18, 19, 20], (T, lt, P) => {
   const camX = walked(T, true) - 60, red = sstep(UMB.stop - .1, UMB.stop + .5, T);
-  const z = 1 - .3 * eio(clamp((T - UMB.alone) / 1.4)), meX = 820 + walked(T, true) - camX, meY = UMB.yMe;
+  const z = 1.25 - .4 * eio(clamp((T - UMB.alone) / 1.4)), meWX = 820 + walked(T, true), meX = meWX - camX, meY = UMB.yMe;   // close enough to see them walk; rising at the end
   sx.save(); sx.translate(meX, meY); sx.scale(z, z); sx.translate(-meX, -meY);
   sx.fillStyle = '#0d0d0d'; sx.fillRect(-W, -H, W * 3, H * 3);
   sx.save(); sx.globalCompositeOperation = 'lighter';                 // wet asphalt glints
@@ -1166,23 +1220,26 @@ scene(23.359, [16, 17, 18, 19, 20], (T, lt, P) => {
     const x = hash2(i, cyc) * W * 1.2 - W * .1, y = hash2(i + 40, cyc) * H, k = age / per;
     sx.strokeStyle = `rgba(230,230,230,${.5 * (1 - k)})`; sx.lineWidth = 1.5; sx.beginPath(); sx.arc(x, y, 3 + k * 22, 0, TAU); sx.stroke();
   }
-  const step = T => Math.sin((T - UMB.t0) / BEAT * PI) * 3;          // the small sway of walking, on the beat
-  const redX = 820 + walked(T, false) - camX + 30, redA = 1 - sstep(UMB.crowd + .45, UMB.crowd + .85, T);
-  if (redA > 0) umbrella(sx, redX, UMB.yRed + step(T + .3), 108, .2 + (T - UMB.t0) * .05, ['#d11a2e', '#b30f26'], T, { alpha: redA, sheen: .3, drops: 8, seed: 3 });
-  // a crowd of umbrellas crossing the other way; when it has gone by, so has she
-  for (let i = 0; i < 34; i++) {
-    const lane = hash1(i * 4.1), y = lane < .72 ? H / 2 - 440 + lane / .72 * 300 : H / 2 + 300 + (lane - .72) / .28 * 280;   // they pass either side of him
-    const x = W + 120 + hash1(i * 9.7) * 600 - 620 * (T - UMB.crowd + .65), r = 82 + 34 * hash1(i * 2.2); if (x < -200 || x > W + 200) continue;
+  // she keeps walking; when the crowd has passed, she is gone
+  const redA = 1 - sstep(28.35, 28.8, T);
+  if (redA > 0) walker(sx, 850 + walked(T, false), UMB.yRed, 108, walked(T, false), 1, T, { camX, alpha: redA, cols: ['#d11a2e', '#b30f26'], sheen: .3, drops: 8, seed: 3, rot: .2, legs: '#120809', refl: 'rgba(210,26,46,.35)' });
+  // a crowd crossing the other way, at a brisk walk, either side of him
+  for (let i = 0; i < 30; i++) {
+    const lane = hash1(i * 4.1), y = lane < .7 ? H / 2 - 470 + lane / .7 * 330 : H / 2 + 250 + (lane - .7) / .3 * 200;
+    const d = UMB.cv * (T - UMB.c0) + hash1(i * 13.3) * 40, wx = camX + W + 120 + hash1(i * 9.7) * 700 - d, r = 82 + 30 * hash1(i * 2.2);
+    if (wx - camX < -220 || wx - camX > W + 220) continue;
     const g = Math.round(26 + 70 * hash1(i * 6.6)), clear = hash1(i * 8.8) < .15;
     const cols = clear ? ['rgba(235,235,235,.28)', 'rgba(235,235,235,.2)'] : [`rgb(${g},${g},${g})`, `rgb(${g + 14},${g + 14},${g + 14})`];
-    umbrella(sx, x, y + Math.sin(T * 7 + i) * 3, r, hash1(i * 3.9) * 3, cols, T, { sheen: clear ? .1 : .16, rib: clear ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.5)' });
+    walker(sx, wx, y, r, d + hash1(i * 5.1) * 140, -1, T, { camX, cols, hand: '#3a3a3a', rot: hash1(i * 3.9) * 3, sheen: clear ? .1 : .16, rib: clear ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.5)', seed: i });
   }
-  umbrella(sx, meX, meY + (T < UMB.stop ? step(T) : 0), 104, -.3 + Math.min(T, UMB.stop + .6) * .05, ['#161616', '#242424'], T, { sheen: .24, rib: 'rgba(150,150,150,.55)', rim: 'rgba(225,225,225,.55)', drops: T > UMB.alone - .3 ? 14 : 6, seed: 7 });
+  // him: walks, slows, stops, and stands
+  const amp = T < UMB.stop ? 1 : 1 - eio(clamp((T - UMB.stop) / .7));
+  walker(sx, meWX, meY, 104, walked(T, true), 1, T, { camX, amp, idle: 1 - amp, cols: ['#161616', '#242424'], sheen: .24, rib: 'rgba(150,150,150,.55)', rim: 'rgba(225,225,225,.55)', drops: T > UMB.alone - .3 ? 14 : 6, seed: 7, rot: -.3, legs: '#090909', rimLight: 'rgba(215,215,215,.45)' });
   sx.restore();
   sx.save(); sx.globalAlpha = .28; rain(sx, T, { n: 120, len: 26, speed: 900, ang: .02, seed: 33 }); sx.restore();
   shade(930, .6, 140);
   for (const i of [16, 17, 18, 19, 20]) sub(i, T);
-}, (T) => ({ ht: .8, cell: 5, col: .45, tint: AGED, grain: .045, shift: kickShake(T, .002) }));
+}, (T) => ({ ht: .62, cell: 4.5, col: .45, tint: AGED, grain: .04, shift: kickShake(T, .002) }));
 
 // ---- 08 everything turns black and white ------------------------------------------------------------------------ 0:30.1 - 0:31.6
 scene(30.091, [21], (T, lt, P) => {
@@ -1218,11 +1275,11 @@ scene(31.554, [22, 23], (T, lt, P) => {
   stamp(xx, '我现在', 905, 520, 80, .1, STAMP2, T, { box: false });
   stamp(xx, '活该', 1260, 720, 270, .1, STAMP2 + .03, T);
 }, (T) => { const st = [STAMP1 + .06, STAMP2 + .09];
-  return { bit: 1, ht: 0, grain: .035, shift: [ringAt(st, T, 5, 10) * .012, ringAt(st, T, 6.5, 10) * .01], zoom: 1 + .02 * st.reduce((a, t) => a + (T > t ? Math.exp(-(T - t) * 9) : 0), 0) }; });
+  return { bit: 1, ht: 0, grain: .035, shift: [ringAt(st, T, 5, 10) * .006, ringAt(st, T, 6.5, 10) * .005], zoom: 1 + .012 * st.reduce((a, t) => a + (T > t ? Math.exp(-(T - t) * 9) : 0), 0) }; });
 
 // ---- 09 / 17 stillness: one street lamp in the dark, and the red thread ------------------------------------------- 0:34.7 - 0:37.4, 1:30.5 - 1:33.2
 function thread(c, T, t0, o = {}) {
-  const p = eout(clamp((T - t0) / 1.8)), sway = Math.sin(T * 1.3) * 22, yEnd = 80 + 470 * p;
+  const p = eio(clamp((T - t0 - .2) / 2.5)), sway = Math.sin(T * .75) * 14 + Math.sin(T * 1.9) * 3, yEnd = 60 + 490 * p;
   c.save(); c.strokeStyle = RED; c.lineWidth = 5; c.lineCap = 'round';
   c.beginPath(); c.moveTo(W / 2 + 6, -10); c.quadraticCurveTo(W / 2 + sway * .5, yEnd * .5, W / 2 + sway, yEnd); c.stroke();
   c.lineWidth = 2;                                                    // a frayed end
@@ -1236,7 +1293,7 @@ function stillness(T, i, t0, o = {}) {
   sx.fillStyle = '#020202'; sx.fillRect(0, 0, W, H);
   const z = 1 + lt * .012;                                           // one street lamp, nothing else; the camera creeps in
   sx.save(); sx.translate(W / 2, H * .45); sx.scale(z, z); sx.translate(-W / 2, -H * .45);
-  const on = sstep(.05, .12, lt) * (1 - .8 * win(lt, .2, .34, .02, .03)) * (.55 + .45 * sstep(.34, .6, lt));   // the bulb stutters on
+  const on = sstep(.05, .7, lt) * (1 - .3 * win(lt, .3, .5, .06, .1));   // the old bulb warms up, dipping once
   const cone = lonelyLamp(sx, T, { on });
   sx.restore();
   const flakes = (a) => o.snow ? snow(sx, T, { n: 220, speed: 45, r: 5, alpha: a, wind: 4 }) : dust(sx, T, { n: 160, alpha: a });
@@ -1261,11 +1318,12 @@ function chorus(T, b, v) {
     else {
       const d = T - tDrop;
       backdrop(sx, 1, T, { a: [1.3, .36, .78, 5.5 * eio(clamp(d / 1.1)) - 1.2], b: [.04, .75, 1.5, 0] });
-      if (d < .5) {                                                  // the red thread snaps
-        const sway = Math.sin(T * 1.3) * 22;
+      if (d < .8) {                                                  // the red thread snaps
+        const sway = Math.sin(T * .75) * 14 + Math.sin(T * 1.9) * 3, q = clamp(d / .8);
         sx.save(); sx.strokeStyle = RED; sx.lineWidth = 5; sx.lineCap = 'round';
-        sx.beginPath(); sx.moveTo(W / 2 + 6, -10); sx.lineTo(W / 2 + sway, Math.max(-10, 320 * (1 - ein(d / .35)))); sx.stroke();
-        sx.beginPath(); sx.moveTo(W / 2 + sway, 320 + d * d * 4200); sx.lineTo(W / 2 + sway + d * 160, 550 + d * d * 4400); sx.stroke();
+        sx.beginPath(); sx.moveTo(W / 2 + 6, -10); sx.lineTo(W / 2 + sway * (1 - q), 300 * (1 - eout(q)) - 10); sx.stroke();     // the top half is drawn back up
+        sx.globalAlpha = 1 - q; sx.translate(W / 2 + sway + 30 * q, 300 + 420 * q * q); sx.rotate(.5 * q);                       // the loose piece drifts down
+        sx.beginPath(); sx.moveTo(0, 0); sx.quadraticCurveTo(10 * q, 120, -6, 250); sx.stroke();
         sx.restore();
       }
     }
@@ -1320,7 +1378,7 @@ function chorus(T, b, v) {
   }
   if (v === 2) snow(sx, T, { n: 170, speed: 160, r: 6, alpha: .9, wind: 30, seed: 8 });
 }
-const chorusPost = v => T => ({ cell: v === 2 ? 8.5 : 7, shift: kickShake(T, v === 2 ? .007 : .005), zoom: 1 + .03 * pulse(A.kicks, T), tca: .004 * pulse(A.snares, T) });
+const chorusPost = v => T => ({ cell: v === 2 ? 8.5 : 7, shift: kickShake(T, v === 2 ? .0045 : .003), zoom: 1 + .018 * pulse(A.kicks, T), tca: .004 * pulse(A.snares, T) });
 const chorusScenes = (b, v, t0) => [t0, L[b + 1].t, L[b + 2].t, L[b + 3].t, L[b + 4].t].forEach((t, k) => scene(t, [b + k], T => chorus(T, b, v), chorusPost(v)));
 chorusScenes(25, 1, 37.415);
 
@@ -1431,7 +1489,7 @@ scene(71.549, [38], (T, lt, P) => {
     if (T < CUT + .02) { xx.save(); xx.strokeStyle = '#fff'; xx.lineWidth = 10; xx.lineCap = 'round'; xx.beginPath(); xx.moveTo(p0[0], p0[1]); xx.lineTo(lerp(p0[0], p1[0], lp), lerp(p0[1], p1[1], lp)); xx.stroke(); xx.restore(); }
     else sliceLayers(p0, p1, 70 * eout(clamp((T - CUT) / .6)), RED);
   }
-}, (T) => ({ flash: T > CUT ? .55 * Math.exp(-(T - CUT) * 12) : 0, shift: [0, T > CUT ? ringAt([CUT], T, 6, 8) * .01 : 0] }));
+}, (T) => ({ flash: T > CUT ? .3 * Math.exp(-(T - CUT) * 10) : 0, shift: [0, T > CUT ? ringAt([CUT], T, 5, 8) * .005 : 0] }));
 
 // ---- 13c replay: the memory crumbles, rewinds, crumbles again ------------------------------------------------------- 1:14.3 - 1:17.1
 scene(74.314, [39], (T, lt, P) => {
@@ -1637,7 +1695,7 @@ function drawPass(sc, Td, T) {
     txt(xx, who, 132, 66, { font: F.mono, size: 26, ls: 6, align: 'left', color: '#d9d7d1', alpha: a });
   }
   for (const s of SC) if (s.wipe) { const p = (T - s.t0) / s.wipe + .5; if (p > 0 && p < 1) inkWipe(xx, p, s.t0 * 7.3); }
-  for (const d of DROPS) if (T >= d && T < d + 1) P.flash = Math.max(P.flash, .85 * Math.exp(-(T - d) * 7));
+  for (const d of DROPS) if (T >= d && T < d + 1) P.flash = Math.max(P.flash, .5 * Math.exp(-(T - d) * 6));
   return P;
 }
 // the link (if any) whose window holds T: lk.dur seconds, lk.at of it before the cut
