@@ -73,19 +73,6 @@ function typewriter(c, str, t, t0, o = {}) {
   if (mod(t, .9) < .5 || n < chars.length) c.fillRect(x - full / 2 + part + 6, y - size * .5, size * .55, size);
   c.letterSpacing = '0px'; c.restore();
 }
-// 名牌：左下角，一条细线 + 名字（等宽、宽字距）+ 小字
-function nameplate(c, name, sub, t, t0, t1) {
-  const k = t - t0; if (k < 0 || t > t1 + .4) return;
-  const a = clamp(k / .25) * (1 - clamp((t - t1) / .4));
-  c.save(); c.globalAlpha *= a;
-  const x = 120, y = H - 250, lw = 340 * easeOut(k / .5);
-  c.fillStyle = C.ice; c.fillRect(x, y, lw, 2);
-  const n = Math.floor(clamp((k - .15) * 24, 0, name.length));
-  text(c, name.slice(0, n), x, y - 38, 46, { fam: GROT, w: 700, align: 'left', spacing: 10, fill: C.white });
-  text(c, sub, x, y + 30, 20, { fam: MONO, w: 400, align: 'left', spacing: 6, fill: 'rgba(238,243,247,.65)' });
-  c.restore();
-}
-
 // ---------------------------------------------------------------- 光
 // 头顶的灯管：x, y 灯的位置，on 亮度 0..1
 function tubeLamp(c, x, y, w, on, col = '#eef6ff') {
@@ -428,5 +415,65 @@ function fogLayer(c, t, a, o = {}) {
     const off = mod(t * sp * (k ? 1.6 : 1) + k * 400, w);
     for (let x = -off; x < W; x += w) c.drawImage(FOG, x, y - (k ? 60 : 0), w, h);
   }
+  c.restore();
+}
+
+// ---------------------------------------------------------------- 金属铭牌（场景里的东西，不是字幕）
+// 拉丝金属 + 斜边 + 四颗螺丝 + 刻进去的字；wet = 被雨淋湿（水痕、水珠）
+const PLAQUES = new Map();
+function plaqueTex(name, sub, wet) {
+  const key = name + '|' + wet; if (PLAQUES.has(key)) return PLAQUES.get(key);
+  const w = 1000, h = 300, cv = mk(w, h), x = cv.getContext('2d'), r = rand(name.length * 31 + (wet ? 7 : 0));
+  const g = x.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#5e666e'); g.addColorStop(.45, '#a9b1b9'); g.addColorStop(.55, '#8d959d'); g.addColorStop(1, '#4b5259');
+  x.fillStyle = g; x.fillRect(0, 0, w, h);
+  for (let i = 0; i < 700; i++) { x.fillStyle = r() < .5 ? `rgba(255,255,255,${r() * .08})` : `rgba(0,0,0,${r() * .1})`; x.fillRect(r() * w - 200, r() * h, 200 + r() * 600, 1); }   // 拉丝
+  for (let i = 0; i < 6; i++) { const px = r() * w, py = r() * h, R = 60 + r() * 140, sg = x.createRadialGradient(px, py, 0, px, py, R); sg.addColorStop(0, 'rgba(20,24,28,.18)'); sg.addColorStop(1, 'rgba(20,24,28,0)'); x.fillStyle = sg; x.fillRect(px - R, py - R, R * 2, R * 2); }   // 旧了，有点脏
+  x.lineWidth = 6; x.strokeStyle = 'rgba(255,255,255,.35)'; x.beginPath(); x.moveTo(4, h - 4); x.lineTo(4, 4); x.lineTo(w - 4, 4); x.stroke();
+  x.strokeStyle = 'rgba(0,0,0,.5)'; x.beginPath(); x.moveTo(w - 4, 4); x.lineTo(w - 4, h - 4); x.lineTo(4, h - 4); x.stroke();
+  for (const [sx, sy] of [[40, 40], [w - 40, 40], [40, h - 40], [w - 40, h - 40]]) {   // 螺丝
+    x.fillStyle = '#3a4047'; x.beginPath(); x.arc(sx, sy, 13, 0, 6.283); x.fill(); x.fillStyle = '#9aa2aa'; x.beginPath(); x.arc(sx - 1, sy - 1, 11, 0, 6.283); x.fill();
+    x.save(); x.translate(sx, sy); x.rotate(r() * 3); x.fillStyle = '#2b3035'; x.fillRect(-9, -1.5, 18, 3); x.restore();
+  }
+  const engrave = (str, cx, cy, size, fam, wgt, sp) => {                         // 刻字：下右亮边 + 上左暗边 + 字底
+    x.font = fnt(size, wgt, fam); x.letterSpacing = `${sp}px`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillStyle = 'rgba(235,240,245,.55)'; x.fillText(str, cx + sp / 2 + 2, cy + 2);
+    x.fillStyle = 'rgba(10,12,14,.9)'; x.fillText(str, cx + sp / 2 - 1, cy - 1);
+    x.fillStyle = '#2c3238'; x.fillText(str, cx + sp / 2, cy);
+    x.letterSpacing = '0px';
+  };
+  engrave(name, w / 2, sub ? 128 : h / 2, 112, GROT, 700, 16);
+  if (sub) { x.fillStyle = 'rgba(0,0,0,.35)'; x.fillRect(110, 192, w - 220, 2); engrave(sub, w / 2, 232, 26, MONO, 400, 7); }
+  if (wet) {
+    for (let i = 0; i < 14; i++) { const px = r() * w, len = 40 + r() * 200, gg = x.createLinearGradient(0, 0, 0, len); gg.addColorStop(0, 'rgba(210,225,240,.0)'); gg.addColorStop(1, 'rgba(210,225,240,.22)'); x.fillStyle = gg; x.save(); x.translate(px, r() * h * .6); x.fillRect(0, 0, 3 + r() * 3, len); x.restore(); }
+    for (let i = 0; i < 90; i++) { const px = r() * w, py = r() * h, R = 2 + r() * 6; x.fillStyle = 'rgba(20,28,38,.35)'; x.beginPath(); x.arc(px, py + 1, R, 0, 6.283); x.fill(); x.fillStyle = 'rgba(225,238,250,.5)'; x.beginPath(); x.arc(px - R * .3, py - R * .3, R * .45, 0, 6.283); x.fill(); }
+  }
+  PLAQUES.set(key, cv); return cv;
+}
+// 把一张图贴到一个透视的竖直平面上：左边 x=xL 上下 yLt..yLb，右边 x=xR 上下 yRt..yRb（近大远小，透视正确）
+function plane(c, img, xL, yLt, yLb, xR, yRt, yRb, o = {}) {
+  const qL = yLb - yLt, qR = yRb - yRt, n = 90, iw = img.width, ih = img.height;
+  const at = u => { const d = (1 - u) * qL + u * qR; const k = u * qR / d; return [lerp(xL, xR, k), lerp(yLt, yRt, k), lerp(yLb, yRb, k)]; };
+  c.save(); c.globalAlpha *= o.a ?? 1;
+  for (let i = 0; i < n; i++) {
+    const [x0, t0, b0] = at(i / n), [x1, t1, b1] = at((i + 1) / n);
+    c.drawImage(img, iw * i / n, 0, iw / n + .5, ih, x0, (t0 + t1) / 2, x1 - x0 + .6, (b0 + b1) / 2 - (t0 + t1) / 2);
+  }
+  // 反光：一道亮带扫过去（spec 0..1 的位置），light 整体受光
+  const clip = () => { c.beginPath(); c.moveTo(xL, yLt); c.lineTo(xR, yRt); c.lineTo(xR, yRb); c.lineTo(xL, yLb); c.closePath(); };
+  if (o.dark) { c.save(); clip(); c.fillStyle = `rgba(0,0,0,${o.dark})`; c.fill(); c.restore(); }
+  if (o.spec != null && o.spec > -.3 && o.spec < 1.3) {
+    c.save(); clip(); c.clip(); c.globalCompositeOperation = 'lighter';
+    const sx = lerp(xL, xR, o.spec), g = c.createLinearGradient(sx - 160, 0, sx + 160, 0);
+    g.addColorStop(0, 'rgba(220,235,250,0)'); g.addColorStop(.5, `rgba(220,235,250,${o.specA ?? .55})`); g.addColorStop(1, 'rgba(220,235,250,0)');
+    c.fillStyle = g; c.fillRect(Math.min(xL, xR) - 200, Math.min(yLt, yRt), Math.abs(xR - xL) + 400, Math.max(yLb, yRb) - Math.min(yLt, yRt)); c.restore();
+  }
+  c.restore();
+}
+// 一块水泥面（透视四边形），带一点颗粒
+function concrete(c, pts, top, bot) {
+  c.save(); c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p)); c.closePath();
+  const ys = pts.map(p => p[1]), g = c.createLinearGradient(0, Math.min(...ys), 0, Math.max(...ys)); g.addColorStop(0, top); g.addColorStop(1, bot);
+  c.fillStyle = g; c.fill(); c.clip();
+  const r = rand(pts[0][0] | 0); for (let i = 0; i < 260; i++) { c.fillStyle = r() < .5 ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.12)'; const s = 1 + r() * 3; c.fillRect(Math.min(...pts.map(p => p[0])) + r() * 900, Math.min(...ys) + r() * 600, s, s); }
   c.restore();
 }

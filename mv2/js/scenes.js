@@ -5,7 +5,7 @@
 //   bg(t)   GL 背景 { mode, a, b, c, amt, speed, pulse }
 //   draw(c, t, lt)  2D 层
 //   fx(t, lt)       后期参数（覆盖 FX0）
-// 字幕、名牌、片尾字幕在 overlay() 里，画在后期之后。
+// 字幕、片尾字幕在 overlay() 里，画在后期之后。名字只出现在场景里的金属铭牌上（stepPlaque / pillarPlaque）。
 // ============================================================================
 const FX0 = {
   zoom: 1, rot: 0, barrel: .02, shift: [0, 0], sq: [1, 1], ca: .6, split: 0, glitch: 0, gseed: 0, wave: 0, tear: 0,
@@ -82,6 +82,28 @@ function lampPath(c, t, t0, o = {}) {
     c.restore();
   }
 }
+// YuKIluv7 的铭牌：灯下房间左下角一级水泥台阶，正面钉着金属牌，斜着拍。on 灯的亮度，spec 反光扫过的位置
+function stepPlaque(c, t, o = {}) {
+  const on = o.on ?? 1, dy = o.dy ?? 0;
+  const fT = x => lerp(690, 736, (x - 100) / 700) + dy, fB = x => lerp(880, 872, (x - 100) / 700) + dy;
+  concrete(c, [[100, fT(100)], [250, 636 + dy], [890, 700 + dy], [800, fT(800)]], '#545b63', '#3a4047');                 // 台面（被灯照到）
+  concrete(c, [[100, fT(100)], [800, fT(800)], [800, fB(800)], [100, fB(100)]], '#262b31', '#121518');                 // 正面
+  const xL = 200, xR = 640, pl = (x, k) => lerp(fT(x), fB(x), k);
+  plane(c, plaqueTex('YuKIluv7', 'VOCAL / LYRICS / COMPOSITION / ARRANGEMENT', false), xL, pl(xL, .2), pl(xL, .74), xR, pl(xR, .24), pl(xR, .72), { spec: o.spec, dark: (1 - on) * .85 + .12 });
+  if (o.snow) { c.save(); c.globalAlpha = o.snow; c.filter = 'blur(2px)'; c.fillStyle = '#dfe6ec'; c.beginPath(); c.moveTo(100, fT(100)); c.lineTo(250, 636 + dy); c.lineTo(890, 700 + dy); c.lineTo(800, fT(800)); c.closePath(); c.fill(); c.restore(); c.filter = 'none'; }
+}
+// dangao_w 的铭牌：天桥底下前景一根水泥柱子，柱子侧面钉着金属牌，被雨淋湿
+function pillarPlaque(c, t, o = {}) {
+  const yT = x => lerp(-120, 70, (x + 20) / 490), yB = x => lerp(H + 120, 1000, (x + 20) / 490);
+  concrete(c, [[-20, yT(-20)], [470, yT(470)], [470, yB(470)], [-20, yB(-20)]], '#0c1424', '#04070d');
+  c.save(); c.beginPath(); c.moveTo(-20, yT(-20)); c.lineTo(470, yT(470)); c.lineTo(470, yB(470)); c.lineTo(-20, yB(-20)); c.closePath(); c.clip();
+  rain(c, t * .25, { seed: 31, n: 70, spd: 300, len: 160, wind: 0, alpha: .18, col: 'rgb(160,200,240)' });          // 柱子上往下流的水
+  c.restore();
+  const xL = 80, xR = 400, mid = x => lerp(yT(x), yB(x), .44), hh = x => (yB(x) - yT(x)) * .085;
+  plane(c, plaqueTex('dangao_w', 'VOCAL / LYRICS / COMPOSITION', true), xL, mid(xL) - hh(xL), mid(xL) + hh(xL), xR, mid(xR) - hh(xR), mid(xR) + hh(xR), { spec: o.spec, specA: .7, dark: .38 });
+  c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = 'rgba(127,212,255,.06)'; c.fillRect(xL, mid(xL) - hh(xL), xR - xL, hh(xL) * 2); c.restore();
+  c.fillStyle = 'rgba(160,210,255,.25)'; c.fillRect(466, yT(470), 4, yB(470) - yT(470));                               // 柱子边缘的一道蓝光
+}
 // 落下来的拍立得：从 t0 开始，每隔 gap 落一张，落到地上停住
 function polaroidFall(c, t, t0, o = {}) {
   const n = o.n ?? 9;
@@ -109,7 +131,7 @@ function lineWord(c, t, t0, t1, str, o = {}) { if (t >= t0 && t < t1 + .3) bigWo
 const lampFlicker = (t, t0) => { const k = t - t0; return k < 0 ? 0 : k < .07 ? 1 : k < .17 ? 0 : k < .22 ? .8 : k < .34 ? .1 : 1; };
 scene({ name: '开灯', t0: 0, t1: .966,
   bg(t) { return FOGBG(.9, lampFlicker(t, .25)); },
-  draw(c, t) { lampSpace(c, t, { on: lampFlicker(t, .25) }); fogLayer(c, t, .2 * lampFlicker(t, .25)); },
+  draw(c, t) { lampSpace(c, t, { on: lampFlicker(t, .25) }); stepPlaque(c, t, { on: lampFlicker(t, .25) * .9 }); fogLayer(c, t, .2 * lampFlicker(t, .25)); },
   fx(t) { return { dark: 1 - clamp(t / .25) * 0 }; },
 });
 
@@ -122,6 +144,7 @@ scene({ name: '前奏', t0: .966, t1: 7.046,
     const rainN = t < 5.57 ? 0 : lerp(60, 260, span(t, 5.57, 6.8));
     const strobe = t > 4.1 ? 1 - kickFx(t, .55, 18) : 1;
     lampSpace(c, t, { on: strobe, rain: rainN });
+    stepPlaque(c, t, { on: .9 * strobe, spec: lerp(-.3, 1.3, span(t, 1.3, 2.6)) });
     // MEMORY：越来越淡、越来越糊
     if (t < 2.85) bigWord(c, 'MEMORY', t, .966, { size: 220, y: 470, a: 1 - span(t, 1.9, 2.8) * .9, blur: span(t, 1.6, 2.8) * 14, dur: 1.4, slam: false });
     // HISTORY：砸出来，一道线划掉
@@ -413,11 +436,13 @@ scene({ name: 'dangao_w', t0: 56.49, t1: 89.98,
     // a 忘记你一次：打出来，再删掉；全静时雨冻住
     if (t < 58.766) {
       underpass(c, t); dgRain(c, t);
+      const hk = span(rainT(t), 56.75, 57.75); headlights(c, hk, 640, .55);                 // 车灯扫过，铭牌闪一下
+      pillarPlaque(c, t, { spec: lerp(1.4, -.4, hk) });
       const s = '我试着再忘记你一次', typed = wordsSung(LN(56.68), t), del = Math.floor(span(t, 57.55, 57.88) * s.length);
       const str = [...s].slice(0, Math.max(0, typed - del)).join('');
       c.save(); c.font = fnt(70, 300, SANS); c.letterSpacing = '14px'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = C.white;
-      const full = c.measureText(s).width; c.fillText(str, W / 2 - full / 2, 520); const pw = c.measureText(str).width;
-      if (mod(t, .8) < .45) c.fillRect(W / 2 - full / 2 + pw + 8, 485, 4, 70); c.restore();
+      const full = c.measureText(s).width, cx = W / 2 + 200; c.fillText(str, cx - full / 2, 520); const pw = c.measureText(str).width;
+      if (mod(t, .8) < .45) c.fillRect(cx - full / 2 + pw + 8, 485, 4, 70); c.restore();
       return;
     }
     // b/c 牢笼：百叶窗的影子一根根收紧，字被关在后面、被挤扁
@@ -523,7 +548,7 @@ scene({ name: 'dangao_w', t0: 56.49, t1: 89.98,
     }
     // l back to you, yuki：雨里的蓝光一下切回冷白
     if (t < 89.46) { underpass(c, t); dgRain(c, t); bigWord(c, 'back to you, yuki', t, 89.294, { size: 70, y: 540, track: 16, slam: false }); }
-    else { lampSpace(c, t, { rain: 120 }); bigWord(c, 'back to you, yuki', t, 89.294, { size: 70, y: 540, track: 16, slam: false, a: 1 - span(t, 89.7, 89.98) }); }
+    else { lampSpace(c, t, { rain: 120 }); stepPlaque(c, t, { spec: lerp(-.3, 1.3, span(t, 89.5, 89.95)) }); bigWord(c, 'back to you, yuki', t, 89.294, { size: 70, y: 540, track: 16, slam: false, a: 1 - span(t, 89.7, 89.98) }); }
   },
   fx(t) {
     const i = lastAt(DG, t);
@@ -556,10 +581,9 @@ scene({ name: '间奏二', t0: 103.94, t1: 112.31,
   bg(t) { const n = M.between('kick', 103.9, t + 1e-3).length + (t > 109.5 ? M.between('snare', 109.5, t + 1e-3).length : 0); return n % 2 ? CITY(1) : { ...FOGBG(), pulse: kickFx(t, .5) }; },
   draw(c, t) {
     const n = M.between('kick', 103.9, t + 1e-3).length + (t > 109.5 ? M.between('snare', 109.5, t + 1e-3).length : 0);
-    if (n % 2) { underpass(c, t); dgRain(c, t); if (n % 4 === 1) crack(c, 700 + hash(n, 1) * 500, 400 + hash(n, 2) * 200, 900, 1, n); }
-    else { lampSpace(c, t, { pile: .5 }); snow(c, t, { n: 200 }); }
-    const k = M.last('kick', t);
-    if (k.since < .25) bigWord(c, n % 2 ? 'dangao_w' : 'YuKIluv7', t, k.t, { size: 110, y: 540, track: 40, a: 1 - k.since / .25 });
+    const k = M.last('kick', t), sp = lerp(-.3, 1.3, span(k.since, 0, .4));
+    if (n % 2) { underpass(c, t); dgRain(c, t); pillarPlaque(c, t, { spec: sp }); if (n % 4 === 1) crack(c, 900 + hash(n, 1) * 500, 400 + hash(n, 2) * 200, 900, 1, n); }
+    else { lampSpace(c, t, { pile: .5 }); stepPlaque(c, t, { spec: sp, snow: .55 }); snow(c, t, { n: 200 }); }
     fogLayer(c, t, .15);
   },
   fx(t) {
@@ -587,16 +611,13 @@ scene({ name: '尾奏', t0: 112.31, t1: MV_END,
 function lampFlicker2(t) { const k = t - OFF; return k < 0 ? 1 : k < .08 ? .1 : k < .16 ? 1 : k < .22 ? 0 : k < .28 ? .7 : k < .4 ? .2 : 0; }
 
 // ============================================================================
-// 后期之后：字幕、名牌、片尾字幕
+// 后期之后：字幕、片尾字幕
 // ============================================================================
 const NOSUB = [[34.17, 36.96], [89.98, 92.77]];                                      // 打字机那两段不用字幕
 function overlay(c, t) {
   c.save();
   const { line } = M.lyric(t);
   if (line && !NOSUB.some(([a, b]) => t >= a && t < b)) subtitle(c, line, t, { y: H - 70 });
-  nameplate(c, 'YuKIluv7', 'VOCAL / LYRICS / COMPOSITION / ARRANGEMENT', t, 1.0, 5.2);
-  nameplate(c, 'dangao_w', 'VOCAL / LYRICS / COMPOSITION', t, 56.7, 60.8);
-  nameplate(c, 'YuKIluv7', 'VOCAL', t, 89.6, 92.6);
   // 片尾
   if (t > OFF + .5) {
     const rows = [[OFF + .6, 'ISOLATED', 90, GROT, 300, 40, 380], [OFF + 1.4, 'YuKIluv7 / dangao_w', 34, GROT, 700, 10, 480],
