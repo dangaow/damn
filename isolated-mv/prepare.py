@@ -103,8 +103,8 @@ for key, val in tags.items():
             m = re.match(r'\[(\d+:\d+(?:\.\d+)?)\](.*?)\s*\(翻译：(.*)\)\s*$', ln.strip())
             if m: trans[lrc_time(m.group(1))] = m.group(3).strip()
 for L in lines:
-    tr = trans.get(L['t'], '')
-    if tr and tr.replace(' ', '') != L['text'].replace(' ', ''): L['tr'] = tr
+    tr = trans.get(L['t'], '')                                          # Chinese lines need no translation; the LRC is the authority for the words
+    if tr and re.search(r'[A-Za-z]', L['text']) and tr.replace(' ', '') != L['text'].replace(' ', ''): L['tr'] = tr
 meta = {k: tags.get(k, '') for k in ('title', 'artist', 'album', 'date')}
 
 # ---------------------------------------------------------------- cover
