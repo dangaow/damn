@@ -167,7 +167,7 @@ function stormView(c, t, L) {
   const sig = mod(t, 6) < 3 ? '255,26,58' : '80,255,160';                              // 红绿灯
   glowAt(s, W * .22, H * .5, 90, sig, .7); glowAt(s, W * .22, H * .5, 260, sig, .18);
   for (let i = 0; i < 3; i++) {                                                         // 开过去的车：一对白色车头灯，另一个方向一对红色尾灯
-    const per = 2.6 + i * .9, k = mod(t + i * 1.3, per) / per, dir = i % 2 ? -1 : 1, x = dir > 0 ? lerp(-300, W + 300, k) : lerp(W + 300, -300, k), y = H * (.66 + i * .04);
+    const per = 7 + i * 2.4, k = mod(t + i * 3.1, per) / per, dir = i % 2 ? -1 : 1, x = dir > 0 ? lerp(-300, W + 300, k) : lerp(W + 300, -300, k), y = H * (.66 + i * .04);
     const col = dir > 0 ? '235,240,255' : '255,30,50';
     glowAt(s, x, y, 70, col, .8); glowAt(s, x + 90, y, 70, col, .8); glowAt(s, x + 45, y, 300, col, .14);
     const rg = s.createLinearGradient(0, y, 0, H); rg.addColorStop(0, `rgba(${col},.25)`); rg.addColorStop(1, `rgba(${col},0)`); s.fillStyle = rg; s.fillRect(x - 10, y, 110, H - y);

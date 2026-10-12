@@ -880,7 +880,7 @@ const L_HURT = lineAt(67.86), T_HURT = wordT(L_HURT, '伤');
 function hurtRed(t) { return Math.max(M.hit('snare', t, 6), .55 * M.hit('hat', t, 9)); }
 const warmth = t => t < T_HURT ? 1 : lerp(1, .12, ease((t - T_HURT) / 4.5));
 const T_PRERAIN = lineAt(73.7).t - 1.1;
-// 两支仙女棒：火花往四周炸、落下的火星有重力，尖端在空中画的圈留下长曝光的光迹
+// 两支仙女棒：火星一颗颗飞出去、减速、下坠，有的炸成小星；落下的火星有重力，尖端在空中画的圈留下长曝光的光迹
 const sparkTip = (x, y, t, seed) => [x + Math.sin(t * 1.7 + seed) * 70 + Math.sin(t * 3.4 + seed * 2) * 26, y + Math.sin(t * 3.4 + seed) * 38];
 function sparkler(c, t, x, y, seed, life = 1, hot = 1) {
   const tip = sparkTip(x, y, t, seed);
@@ -894,18 +894,24 @@ function sparkler(c, t, x, y, seed, life = 1, hot = 1) {
   }
   c.strokeStyle = 'rgba(40,30,24,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(tip[0], tip[1]); c.lineTo(tip[0] - 60, tip[1] + 330); c.stroke();   // 铁丝
   if (life <= .02) { c.fillStyle = 'rgba(120,30,20,.8)'; c.beginPath(); c.arc(tip[0], tip[1], 4, 0, 7); c.fill(); return tip; }
-  const f = frameNo(t), r = rand(f * 7 + seed * 1000 | 0);
   c.save(); c.globalCompositeOperation = 'lighter';
-  const R = 150 * life * (1 + .2 * hot), g = c.createRadialGradient(tip[0], tip[1], 0, tip[0], tip[1], R);
-  g.addColorStop(0, `rgba(255,250,235,${.95 * life})`); g.addColorStop(.12, `rgba(255,210,150,${.6 * life})`); g.addColorStop(1, 'rgba(255,140,60,0)');
+  const R = 80 * life * (1 + .15 * hot), g = c.createRadialGradient(tip[0], tip[1], 0, tip[0], tip[1], R);   // 芯：很小很亮的一点，外面一圈不大的暖光
+  g.addColorStop(0, `rgba(255,252,240,${.95 * life})`); g.addColorStop(.08, `rgba(255,225,170,${.55 * life})`); g.addColorStop(.35, `rgba(255,170,90,${.16 * life})`); g.addColorStop(1, 'rgba(255,140,60,0)');
   c.fillStyle = g; c.fillRect(tip[0] - R, tip[1] - R, 2 * R, 2 * R);
-  const n = Math.round(70 * life * (.7 + .3 * hot));                                   // 噼啪的火花：每帧重新炸一次，带分叉
+  // 火星：每颗有自己的一小段寿命，从尖端飞出去，越飞越慢、往下坠，画成短短一截拖影；飞到后半程有的炸成一朵很小的星
+  const n = Math.round(110 * life * (.75 + .25 * hot));
   for (let i = 0; i < n; i++) {
-    const a = r() * 6.2832, len = (20 + r() * 110) * life, ex = tip[0] + Math.cos(a) * len, ey = tip[1] + Math.sin(a) * len;
-    c.strokeStyle = `rgba(255,${220 + r() * 35 | 0},${150 + r() * 80 | 0},${.5 + r() * .5})`; c.lineWidth = .8 + r() * 1.4;
-    c.beginPath(); c.moveTo(tip[0] + Math.cos(a) * 8, tip[1] + Math.sin(a) * 8); c.lineTo(ex, ey);
-    if (r() < .4) { const b = a + (r() - .5) * 1.4; c.lineTo(ex + Math.cos(b) * len * .3, ey + Math.sin(b) * len * .3); }
-    c.stroke();
+    const per = .18 + hash(i, seed + 11) * .3, ph = hash(i, seed + 12) * per, age = mod(t + ph, per), cyc = Math.floor((t + ph) / per), k = age / per, id = i * 31 + cyc;
+    const [bx, by] = sparkTip(x, y, t - age, seed), a = hash(id, seed + 13) * 6.2832, v = 380 + hash(id, seed + 14) * 620;
+    const pos = s2 => { const d = (1 - Math.exp(-5 * s2)) / 5; return [bx + Math.cos(a) * v * d, by + Math.sin(a) * v * d + 260 * s2 * s2]; };
+    const [px, py] = pos(age), [qx, qy] = pos(Math.max(0, age - .022)), hc = 1 - k;
+    c.strokeStyle = `rgba(255,${lerp(150, 245, hc) | 0},${lerp(60, 200, hc) | 0},${(.35 + .6 * hc) * life})`; c.lineWidth = .7 + hc * .9;
+    c.beginPath(); c.moveTo(qx, qy); c.lineTo(px, py); c.stroke();
+    if (k > .55 && hash(id, seed + 15) < .45) {
+      const m = 3 + (hash(id, seed + 16) * 2 | 0), L = (5 + hash(id, seed + 17) * 9) * (k - .55) / .45, b0 = hash(id, seed + 18) * 6.2832;
+      c.lineWidth = .6; c.strokeStyle = `rgba(255,${lerp(170, 235, hc) | 0},${lerp(80, 170, hc) | 0},${.7 * (1 - k) * 2 * life})`;
+      for (let q = 0; q < m; q++) { const b = b0 + q * 6.2832 / m; c.beginPath(); c.moveTo(px, py); c.lineTo(px + Math.cos(b) * L, py + Math.sin(b) * L); c.stroke(); }
+    }
   }
   for (let i = 0; i < 60; i++) {                                                       // 落下的火星
     const per = .7 + hash(i, seed + 3) * .6, age = mod(t + hash(i, seed + 4) * per, per), birth = t - age, [bx, by] = sparkTip(x, y, birth, seed);
@@ -983,7 +989,6 @@ scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
   draw(c, t, lt) {
     const g = M.gap(t), rf = g ? g[0] : t, heavy = t < T_WASH ? 1 : 1 - clamp((t - T_WASH) / 1.5) * .5;
     stormView(c, rf, lightning(t));                                                 // 隔着窗：失焦的街、车灯，闪电时远处的楼亮出剪影
-    rivulets(c, rf, 26, heavy);                                                      // 窗玻璃上一道道往下流的雨水
     if (lt < 2) {                                                                   // 转场：桥段剩下的那个光点，留在原位变成路灯
       const k = lt / 2, x = W / 2 - 625, y = H * .37, R = lerp(70, 150, k);
       const col = [lerp(255, 120, k), lerp(220, 160, k), lerp(170, 255, k)].map(v => v | 0).join(',');
