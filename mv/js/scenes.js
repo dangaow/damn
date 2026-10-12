@@ -62,6 +62,7 @@ function POLY(t) {
   const s = { a: .85, amp: 1, lie: 0, spike: 0 };
   if (t < 1.2) s.a = (t - .6) / .6 * .85;
   if (t >= 41.88 && t < 44.26) { s.lie = 1; s.amp = 1.8; }                     // "你总说……"
+  if (t >= 41.88 && t < 47.3) s.a = .85 * clamp(1 - (t - 41.88) / .25) + .85 * clamp((t - 47.0) / .3);   // 对质：整页就是测谎仪，底部那条先让开
   // 回忆里没有测谎仪；大雨那段画面有上下黑边，测谎仪被压在下黑边里只会露出一点边（点题冲顶时还会戳出一截线），所以也不画，到余震再出来
   if (t >= 62.9 && t < T_TV + .4) s.a = .85 * clamp(1 - (t - 62.9) / .4) + .85 * clamp((t - T_TV) / .4);
   if (t >= 80.0 && t < 80.4) s.amp = 0;                                          // 鼓停，针也停
@@ -605,68 +606,88 @@ scene({ name: '连击', t0: lineAt(32.44).t, t1: lineAt(41.88).t,
   bg: t => ({ mode: 'smoke', a: '#040002', b: '#4a0712', c: '#ff2a48', amt: .95, speed: 1.6, pulse: M.hit('kick', t, 8) }),
   draw: (c, t, lt) => hookDraw(c, t, lt, false), fx: hookFx(false) });
 
-// ================================================================ 4 · 对质：聊天记录
-const CHAT = [{ l: lineAt(41.88), who: 'L', t: lineAt(41.88).t }, { l: lineAt(43.46), who: 'L', t: lineAt(43.46).t },
-  { l: lineAt(44.9), who: 'R', t: D.kicks.find(k => k > 44.5 && k < 45) }, { l: lineAt(45.96), who: 'R', t: M.gap(46)?.[1] ?? 46.17 }];
-const DEL = D.hats.filter(h => h > 46.45).slice(0, 4);                               // 一条一条删除
-const PHONE = { x: (W - 720) / 2, y: 26, w: 720, h: 900 };
+// ================================================================ 4 · 对质：测谎记录纸
+// 底部那条测谎仪的线在这里放大成整页记录纸：纸往左走，四支笔画呼吸 / 皮肤电 / 心跳 / 人声。
+// 她说的两句（你总说……）心跳那条变红乱跳；他回的两句写在下面。每句像打字一样写在纸上、跟着纸走，带证词时间戳。
+// 鼓停：纸和笔一起停住。最后四下踩镲把这几句一条条涂黑。
+const CHAT = [{ l: lineAt(41.88), who: 'Q' }, { l: lineAt(43.46), who: 'Q' }, { l: lineAt(44.9), who: 'A' }, { l: lineAt(45.96), who: 'A' }];
+const DEL = D.hats.filter(h => h > 46.45).slice(0, 4);                               // 一条一条涂黑
+const PEN_X = W * .74, PAPER_V = 360;
+const CH_Y = [430, 560, 690, 820], CH_NAME = ['PNEUMO', 'GSR', 'CARDIO', 'VOICE'];
+const lieAt = tt => tt >= 41.88 && tt < 44.6 ? 1 : 0;                              // 她说话的时候
+function trace(ch, tt) {
+  const kick = M.hit('kick', tt, 12), lie = lieAt(tt);
+  if (ch === 0) return Math.sin(tt * 1.9) * 26 * (1 + lie * .8) + Math.sin(tt * 4.3) * 8 * lie - kick * 18;
+  if (ch === 1) return Math.sin(tt * .35) * 30 - lie * 40 * ease((tt - 41.88) / 2) - kick * 10;
+  if (ch === 2) { const f = lie ? 2.6 : 1.6, ph = mod(tt * f, 1), beat = ph < .08 ? -Math.sin(ph / .08 * Math.PI) * (lie ? 70 : 42) : ph < .14 ? Math.sin((ph - .08) / .06 * Math.PI) * 16 : 0;
+    return beat + (hash(Math.floor(tt * 40), 5) - .5) * 12 * lie - kick * 30; }
+  return -M.vocal(tt) * 62 * Math.sin(tt * 2 * Math.PI * 9) - M.vocal(tt) * 10 * Math.sin(tt * 2 * Math.PI * 23);   // 人声：音量包络调出来的一条波
+}
+// 纸上某一点对应的歌曲时间（paperT 的反函数）
+function songT(p) { let x = p; for (const g of CHAT_GAPS) if (x >= g[0]) x += Math.min(g[1] - g[0], Math.max(0, x - g[0])); return x; }
+// 记录纸的时间：鼓停时纸停住，鼓回来接着走（不会一下子跳过去）
+const CHAT_GAPS = D.gaps.filter(g => g[0] >= 41.8 && g[0] < 47.5);
+const paperT = x => x - CHAT_GAPS.reduce((a, g) => a + clamp(x - g[0], 0, g[1] - g[0]), 0);
+function chartLines(c, t, tf) {                                                      // 记录纸上的几句：每个字唱到时写到笔下，之后跟着纸走
+  return CHAT.map((m, n) => {
+    const l = m.l, size = 74; c.font = fnt(size, 900);
+    const shown = l.words.filter(w => paperT(w.t) <= tf); if (!shown.length) return null;
+    const last = shown[shown.length - 1], wAll = c.measureText(l.text).width, wShown = c.measureText(shown.map(w => w.w).join('')).width;
+    const x0 = PEN_X - (tf - paperT(last.t)) * PAPER_V - wShown, y = n % 2 ? 300 : 186;   // 前后两句一上一下，不会叠在一起
+    return { m, n, x0, y, size, wAll, shown: shown.map(w => w.w).join(''), done: shown.length === l.words.length };
+  }).filter(Boolean);
+}
 scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
-  weather: t => ({ rain: .16, street: .1, rt: M.gap(t)?.[0] ?? t }),
-  bg: t => ({ mode: 'smoke', a: '#04060b', b: '#121a2c', c: '#3a4a7a', amt: .7, speed: .6, pulse: M.hit('kick', t, 6) }),
+  weather: t => ({ rain: .06, street: 0, rt: M.gap(t)?.[0] ?? t }),
+  bg: () => ({ mode: 'solid', a: '#05060a' }),
   draw(c, t, lt) {
-    scrollRows(c, t * .5, '你总说', { size: 220, rows: 4, spd: 40, col: 'rgba(255,255,255,.04)', fam: SERIF });
-    const P = PHONE, open = easeOut(lt / .28);
-    if (open < 1) {                                                                 // 转场：CRT 关机的横线，变成手机屏幕"开机"展开
-      c.fillStyle = `rgba(255,255,255,${1 - open})`; c.fillRect(P.x - 200 * (1 - open), H / 2 - 2, P.w + 400 * (1 - open), 4);
-      c.save(); c.beginPath(); c.rect(0, H / 2 - P.h / 2 * open, W, P.h * open); c.clip();
-    } else c.save();
-    const glow = c.createRadialGradient(W / 2, P.y + P.h * .55, P.w * .3, W / 2, P.y + P.h * .55, P.w * 1.15);   // 屏幕照出来的冷光，让手机从背景里浮出来
-    glow.addColorStop(0, 'rgba(110,140,255,.16)'); glow.addColorStop(1, 'rgba(110,140,255,0)'); c.fillStyle = glow; c.fillRect(0, 0, W, H);
-    c.save();
-    c.fillStyle = '#0f1119'; c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.fill();
-    c.strokeStyle = 'rgba(205,215,255,.38)'; c.lineWidth = 3; c.stroke();
-    const rim = c.createLinearGradient(0, P.y, 0, P.y + 220); rim.addColorStop(0, 'rgba(160,180,255,.10)'); rim.addColorStop(1, 'rgba(160,180,255,0)');
-    c.fillStyle = rim; c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.fill();
-    c.beginPath(); c.roundRect(P.x, P.y, P.w, P.h, 54); c.clip();
-    if (M.gap(t)) { c.fillStyle = '#000'; c.fillRect(P.x, P.y, P.w, P.h); c.restore(); return; }   // 鼓停 = 屏幕黑掉
-    text(c, '你', W / 2, P.y + 80, 34);
-    const typing = t > 43.0 && t < CHAT[1].t;
-    text(c, typing ? '对方正在输入…' : '在线', W / 2, P.y + 124, 22, { w: 400, fill: 'rgba(255,255,255,.45)' });
-    c.fillStyle = 'rgba(255,255,255,.08)'; c.fillRect(P.x, P.y + 160, P.w, 2);
-    const items = CHAT.filter(m => t >= m.t).map((m, k) => ({ ...m, k }));
-    if (typing) items.push({ typing: true, who: 'L', t: 43.0, k: 9 });
-    c.fillStyle = 'rgba(255,255,255,.08)'; c.beginPath(); c.roundRect(W / 2 - 80, P.y + 196, 160, 36, 18); c.fill();   // 时间分隔
-    text(c, '昨天 23:47', W / 2, P.y + 214, 18, { w: 400, fill: 'rgba(255,255,255,.45)' });
-    let y = P.y + P.h - 70;
-    for (let n = items.length - 1; n >= 0; n--) {
-      const m = items[n], del = m.typing ? -1 : DEL[m.k] ?? 1e9, gone = clamp((t - del) / .25);
-      const txt = m.typing ? '·  ·  ·' : m.l.text, size = 54;
-      c.font = fnt(size, 900); const bw = c.measureText(txt).width + 76, bh = 104;
-      const app = m.typing ? 1 : easeOut((t - m.t) / .14), s = .8 + .2 * app;
-      const bx = m.who === 'L' ? P.x + 40 : P.x + P.w - 40 - bw, by = y - bh - gone * 260;
-      c.save(); c.globalAlpha = app * (1 - gone); c.translate(bx + bw / 2, by + bh / 2); c.scale(s, s);
-      if (m.who === 'R' && t - m.t < .2) c.translate((hash(frameNo(t), 3) - .5) * 30, (hash(frameNo(t), 4) - .5) * 20);
-      c.fillStyle = m.who === 'L' ? '#272830' : C.red; c.beginPath(); c.roundRect(-bw / 2, -bh / 2, bw, bh, 28); c.fill();
-      if (m.typing) { [...'···'].forEach((_, j) => { c.fillStyle = '#ddd'; c.beginPath(); c.arc(-24 + j * 24, -10 * M.hit('hat', t - j * .05, 14), 7, 0, 7); c.fill(); }); }
-      else {
-        text(c, txt, 0, 2, size);
-        if (txt.includes('bullshxt')) { const full = c.measureText(txt).width, cut = c.measureText(txt.replace('shxt', '')).width; mosaic(c, -full / 2 + cut, -size * .45, full - cut, size * .9, t, { cell: 11 }); }
-        if (m.who === 'R' && n === items.length - 1) { c.globalAlpha = .45 * app; text(c, '已读', -bw / 2 - 40, bh / 2 - 14, 18, { w: 400 }); }
-        const ts = `[${String(m.l.t / 60 | 0).padStart(2, '0')}:${(m.l.t % 60).toFixed(2).padStart(5, '0')}]`;   // 和雨夜的证词同一个格式：聊天记录像呈堂证据
-        c.globalAlpha = .8 * app; text(c, ts, m.who === 'L' ? -bw / 2 + 6 : bw / 2 - 6, bh / 2 + 16, 16, { w: 400, fam: MONO, align: m.who === 'L' ? 'left' : 'right', fill: C.blue });
+    const tf = paperT(t), off = tf * PAPER_V, open = easeOut(lt / .28);
+    if (open < 1) { c.fillStyle = `rgba(255,255,255,${1 - open})`; c.fillRect(0, H / 2 - 2, W, 4); c.save(); c.beginPath(); c.rect(0, H / 2 - H / 2 * open, W, H * open); c.clip(); }   // 转场：CRT 关机的横线展开成记录纸
+    else c.save();
+    const pg = c.createLinearGradient(0, 0, 0, H); pg.addColorStop(0, '#aeb3bd'); pg.addColorStop(.5, '#c4c8d0'); pg.addColorStop(1, '#a6abb5');
+    c.fillStyle = pg; c.fillRect(0, 70, W, H - 140);
+    c.lineWidth = 1;                                                                  // 方格，跟着纸走
+    for (let x = -mod(off, 24); x < W; x += 24) { const major = Math.round((x + off) / 24) % 5 === 0; c.strokeStyle = major ? 'rgba(40,62,120,.32)' : 'rgba(40,62,120,.12)'; c.beginPath(); c.moveTo(x, 70); c.lineTo(x, H - 70); c.stroke(); }
+    for (let y = 70; y < H - 70; y += 24) { c.strokeStyle = (y - 70) % 120 === 0 ? 'rgba(40,62,120,.32)' : 'rgba(40,62,120,.12)'; c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
+    c.fillStyle = 'rgba(20,24,34,.85)'; CH_NAME.forEach((nm, k) => text(c, nm, 40, CH_Y[k] - 52, 18, { w: 700, fam: MONO, align: 'left', fill: 'rgba(20,30,60,.7)' }));
+    c.fillStyle = 'rgba(20,30,60,.5)'; for (let x = -mod(off, PAPER_V); x < W; x += PAPER_V) {    // 每秒一个时间刻度
+      const sec = Math.round((x + off) / PAPER_V); c.fillRect(x, 70, 2, 16); text(c, `${String(sec / 60 | 0).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`, x + 6, 98, 16, { w: 400, fam: MONO, align: 'left', fill: 'rgba(20,30,60,.55)' }); }
+    for (let ch = 0; ch < 4; ch++) {                                                  // 四条笔迹
+      c.beginPath();
+      for (let x = 0; x <= PEN_X; x += 3) { const tt = songT(tf - (PEN_X - x) / PAPER_V), y = CH_Y[ch] + trace(ch, tt); x ? c.lineTo(x, y) : c.moveTo(x, y); }
+      c.strokeStyle = ch === 2 ? '#7d0614' : '#14161d'; c.lineWidth = ch === 3 ? 2 : 2.6; c.stroke();
+      if (ch === 2) {                                                                  // 说谎时那段心跳描成红色
+        c.save(); c.beginPath(); const xa = PEN_X - (tf - paperT(41.88)) * PAPER_V, xb = PEN_X - (tf - paperT(44.6)) * PAPER_V; c.rect(Math.max(0, xa), 70, Math.max(0, Math.min(PEN_X, xb) - Math.max(0, xa)), H); c.clip();
+        c.beginPath(); for (let x = 0; x <= PEN_X; x += 3) { const tt = songT(tf - (PEN_X - x) / PAPER_V), y = CH_Y[2] + trace(2, tt); x ? c.lineTo(x, y) : c.moveTo(x, y); }
+        c.strokeStyle = C.red; c.lineWidth = 4; c.stroke(); c.restore();
       }
-      c.restore();
-      y -= (bh + 30) * (1 - gone);
     }
-    c.restore();
-    // 屏幕反光（字前面）
-    const g = c.createLinearGradient(P.x, P.y, P.x + P.w, P.y + P.h); g.addColorStop(0, 'rgba(255,255,255,.06)'); g.addColorStop(.35, 'rgba(255,255,255,0)'); g.addColorStop(.6, 'rgba(255,255,255,.03)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = g; c.fillRect(P.x, P.y, P.w, P.h);
+    chartLines(c, t, tf).forEach(L => {                                               // 写在纸上的话
+      const { m, x0, y, size } = L, red = m.who === 'Q';
+      text(c, m.who + '.', x0 - 18, y, 30, { fam: ANTON, w: 400, align: 'right', fill: red ? C.red : '#1d2f78' });
+      text(c, L.shown, x0, y, size, { align: 'left', fill: '#0d0f16' });
+      if (L.shown.includes('bullsh')) { c.font = fnt(size, 900); const pre = c.measureText(L.shown.slice(0, L.shown.indexOf('sh'))).width, w = c.measureText(L.shown.slice(L.shown.indexOf('sh'))).width;
+        mosaic(c, x0 + pre, y - size * .45, w, size * .9, t, { cell: 10 }); }
+      const ts = `[${String(m.l.t / 60 | 0).padStart(2, '0')}:${(m.l.t % 60).toFixed(2).padStart(5, '0')}]  ${red ? 'Q' : 'A'} ${String(L.n + 1).padStart(2, '0')}/04`;
+      text(c, ts, x0, y + 46, 18, { w: 400, fam: MONO, align: 'left', fill: '#1d2f78' });
+      redact(c, x0 - 60, y - 40, L.wAll + 80, 96, (t - (DEL[L.n] ?? 1e9)) / .22);
+    });
+    c.fillStyle = '#0b0c11'; c.fillRect(PEN_X + 26, 70, W - PEN_X - 26, H - 140);       // 右边：测谎仪的机身，笔从这里伸出来
+    c.fillStyle = '#1a1c24'; c.fillRect(PEN_X + 26, 70, 6, H - 140);
+    for (let ch = 0; ch < 4; ch++) {
+      const y = CH_Y[ch] + (M.gap(t) ? trace(ch, M.gap(t)[0]) : trace(ch, t)), py = CH_Y[ch];
+      c.strokeStyle = metal(c, PEN_X, py - 10, W, py + 10, SILVER); c.lineWidth = 7; c.beginPath(); c.moveTo(W - 120, py - 20); c.lineTo(PEN_X + 8, y); c.stroke();
+      c.fillStyle = ch === 2 && lieAt(t) ? C.red : '#14161d'; c.beginPath(); c.arc(PEN_X + 4, y, 7, 0, 7); c.fill();
+      c.fillStyle = '#20232d'; c.beginPath(); c.arc(W - 120, py - 20, 22, 0, 7); c.fill();
+      c.fillStyle = ch === 2 && lieAt(t) && frameNo(t) % 4 < 2 ? C.red : 'rgba(120,140,190,.5)'; c.beginPath(); c.arc(W - 60, py - 20, 8, 0, 7); c.fill();
+    }
+    text(c, 'LIE', W - 160, 140, 34, { fam: ANTON, w: 400, fill: lieAt(t) && frameNo(t) % 6 < 3 ? C.red : 'rgba(120,20,30,.35)' });
+    if (M.gap(t)) { c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(0, 70, W, H - 140); }    // 鼓停：纸停住，暗一下
     c.restore();
   },
-  fx(t) { const k = M.last('kick', t), dive = easeIn((t - (this.t1 - .3)) / .3);  // 转场：最后 0.3 秒镜头扎进手机屏幕
-    return { zoom: 1 + .08 * Math.exp(-k.since * 12) + dive * 2.4, barrel: .05 + .3 * Math.exp(-k.since * 12) + dive * .4, dark: dive * .6, grade: 'cold', gradeMix: .5, ca: .8 + M.hit('kick', t, 8) * 6 + dive * 10,
-    glitch: M.hit('kick', t, 10) * .6, gseed: k.i, flash: M.hit('kick', t, 14) * .35, flashCol: '#ff1a3a', hud: .6, scan: .2 }; },
+  fx(t) { const k = M.last('kick', t), dive = easeIn((t - (this.t1 - .3)) / .3);  // 转场：最后 0.3 秒镜头扎进笔尖
+    return { lb: 1, zoom: 1 + .05 * Math.exp(-k.since * 12) + dive * 2.4, barrel: .04 + .2 * Math.exp(-k.since * 12) + dive * .4, dark: dive * .6, grade: 'cold', gradeMix: .35, bloom: .25, bloomThr: .8,
+      ca: .6 + M.hit('kick', t, 8) * 3 + dive * 10, glitch: M.hit('kick', t, 10) * .35, gseed: k.i, flash: M.hit('kick', t, 14) * .25, flashCol: '#ff1a3a', hud: .6, scan: .14 }; },
 });
 
 // ================================================================ 5 · 都是我
