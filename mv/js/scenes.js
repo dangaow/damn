@@ -165,7 +165,7 @@ const PALS = [
 ];
 const PAL_GLIDE = { bg: { mode: 'smoke', a: '#0d0003', b: '#8a0c20', c: '#ff5a70', amt: 1.1, speed: 3, mirror: true }, acc: '#ffffff' };   // 镜子裂开：左右对称的红烟，像墨迹测试（提前呼应「病态」）
 const MOVES = ['whip', 'roll', 'crash', 'spin', 'shake', 'upside', 'push', 'pull', 'whipV'];
-// 每一团（一个镜头）：从哪一刻开始、用哪个背景、什么运镜、哪些物件
+// 每一张证物照（一个镜头）：从哪一刻开始、拍的是什么、放在什么上面、什么运镜
 const MESS = (() => {
   const g = GLIDE1 ? GLIDE1.t : -1, ts = [[T_THINK, 'start']];
   D.kicks.forEach((k, i) => { if (k > T_THINK + .05 && k < T_STACK - .05 && JERK[i % 3] !== 'freeze' && Math.abs(k - g) > .05) ts.push([k, 'kick']); });
@@ -173,24 +173,24 @@ const MESS = (() => {
   if (REV[0] < REV[1]) ts.push([REV[0], 'kick']);
   D.hats.forEach(h => { if (h >= T_STACK - .02 && h < T_SUCK) ts.push([h, 'hat']); });
   ts.sort((a, b) => a[0] - b[0]);
-  const out = []; let lastPal = -1;
+  const out = [], seen = [];
   ts.forEach(([t, kind]) => { if (out.length && t - out[out.length - 1].t < .06) return;
-    const i = out.length, r = rand(i * 131 + 7);
-    let pal = Math.floor(r() * PALS.length); if (pal === lastPal) pal = (pal + 1 + Math.floor(r() * 3)) % PALS.length; lastPal = pal;
-    const many = t >= T_MORE, rush = t >= T_STACK - .02, objs = [];
-    const pick = () => OBJ_NAMES[Math.floor(r() * OBJ_NAMES.length)];
-    const add = (o) => objs.push({ r: (r() - .5) * 2.4, spin: (r() - .5) * (rush ? 6 : 3), vx: (r() - .5) * 500, vy: (r() - .5) * 350,
-      flip: r() < .3 ? 2 + r() * 6 : 0, upside: r() < .25, far: false, flick: r() < .3, echo: r() < .3, seed: Math.floor(r() * 999), ...o });
-    if (kind !== 'glide' && r() < .6) add({ name: pick(), x: r() < .5 ? W * (.05 + r() * .2) : W * (.75 + r() * .2), y: H * (.2 + r() * .6), s: 2.6 + r() * 1.6,
-      far: true, flick: false, echo: false, vx: (r() - .5) * 120, vy: (r() - .5) * 80, spin: (r() - .5) * .6 });   // 背后一个巨大的、糊掉的
-    add({ name: kind === 'glide' ? 'mirror' : pick(), x: W * (.3 + r() * .4), y: H * (.32 + r() * .36), s: kind === 'glide' ? 1.3 : 1.1 + r() * 1.1,
-      vx: (r() - .5) * 200, vy: (r() - .5) * 140, spin: kind === 'glide' ? 0 : (r() - .5) * 1.5, r: kind === 'glide' ? 0 : (r() - .5) * 1.4, flick: false, upside: kind !== 'glide' && r() < .25 });
-    const sw = pick(), nsw = rush ? 6 + Math.floor(r() * 5) : many ? 8 + Math.floor(r() * 6) : 4 + Math.floor(r() * 4);   // 一群一样的小东西乱飞
-    for (let j = 0; j < nsw; j++) add({ name: sw, x: W * (.04 + r() * .92), y: H * (.08 + r() * .84), s: .1 + r() * .22, spin: (r() - .5) * 8, vx: (r() - .5) * 1000, vy: (r() - .5) * 600, echo: r() < .5 });
-    const nmid = many || rush ? 3 + Math.floor(r() * 3) : 2 + Math.floor(r() * 3);
-    for (let j = 0; j < nmid; j++) add({ name: pick(), x: W * (.08 + r() * .84), y: H * (.12 + r() * .76), s: .32 + r() * .55, far: r() < .3 });
-    out.push({ t, kind, i, pal: kind === 'glide' ? PAL_GLIDE : PALS[pal], move: kind === 'start' ? 'rise' : MOVES[Math.floor(r() * MOVES.length)],
-      dir: r() < .5 ? -1 : 1, split: kind !== 'glide' && PALS[pal].glow !== null && r() < .2 ? Math.floor(r() * 3) : -1, objs });
+    const i = out.length, r = rand(i * 131 + 7), rush = t >= T_STACK - .02;
+    let name = kind === 'glide' ? 'mirror' : EVI_NAMES[Math.floor(r() * EVI_NAMES.length)];
+    for (let n = 0; n < 8 && kind !== 'glide' && seen.slice(-3).includes(name); n++) name = EVI_NAMES[Math.floor(r() * EVI_NAMES.length)];
+    seen.push(name);
+    const prev = out[out.length - 1];
+    let surf = kind === 'glide' ? 'red' : SURFACES[Math.floor(r() * SURFACES.length)];
+    if (prev && surf === prev.surf) surf = SURFACES[(SURFACES.indexOf(surf) + 1 + Math.floor(r() * 3)) % SURFACES.length];
+    const fgName = EVI_NAMES[Math.floor(r() * EVI_NAMES.length)];
+    out.push({ t, kind, i, name, surf, tag: i + 1, pal: { bg: { mode: 'solid', a: '#000000' } },
+      move: kind === 'start' ? 'rise' : MOVES[Math.floor(r() * MOVES.length)], dir: r() < .5 ? -1 : 1,
+      x: W * (.42 + r() * .16), y: H * (.44 + r() * .12), s: kind === 'glide' ? 1.25 : rush ? .95 + r() * .5 : 1.05 + r() * .55, r: kind === 'glide' ? 0 : (r() - .5) * 1.1,
+      tagAt: [(r() < .5 ? -1 : 1) * (300 + r() * 120), 180 + r() * 90, (r() - .5) * .3],
+      ruler: r() < .45 ? { x: W * (.12 + r() * .3), y: H * (.78 + r() * .1), rot: (r() - .5) * .2, len: 520 + r() * 300 } : null,
+      fg: kind !== 'glide' && r() < .35 ? { name: fgName === name ? EVI_NAMES[(EVI_NAMES.indexOf(name) + 3) % EVI_NAMES.length] : fgName,   // 镜头前一个糊掉的东西，只露一角
+        x: r() < .5 ? W * (.02 + r() * .12) : W * (.88 + r() * .12), y: H * (.1 + r() * .8), s: 2.2 + r() * 1.2, r: (r() - .5) * 2 } : null,
+      dbl: kind === 'kick' && prev && r() < .22 });                              // 偶尔两次曝光：上一张还淡淡地叠在上面
   });
   return out;
 })();
@@ -216,31 +216,18 @@ function drawMess(c, t, te) {
   const m = messAt(te); let k = te - m.t;
   const rev = te >= REV[0] && te < REV[1], km = rev ? Math.max(0, 1.1 - (te - REV[0]) * 1.6) : k;   // 倒流：东西往回飞
   const suck = clamp((te - T_SUCK) / .5), su = easeIn(suck);
-  const cm = messCam(m, k, t), pal = m.pal;
-  if (m.split >= 0) {                                                            // 背景也是乱的：一半换成别的颜色
-    c.save(); c.fillStyle = m.split === 1 ? '#000000' : '#e0112b'; c.beginPath();
-    if (m.split === 0) c.rect(0, 0, W / 2 + Math.sin(t * 3) * 40, H);
-    else if (m.split === 1) { c.moveTo(W * .3, 0); c.lineTo(W, 0); c.lineTo(W, H); c.lineTo(W * .7, H); }
-    else c.rect(0, H * .5, W, H * .5);
-    c.fill(); c.restore();
-  }
+  const cm = messCam(m, k, t);
   c.save();
   c.translate(W / 2 + (cm.x ?? 0), H / 2 + (cm.y ?? 0)); c.rotate((cm.r ?? 0) + su * 4); c.scale((cm.s ?? 1) * (1 - su * .2), (cm.s ?? 1) * (1 - su * .2)); c.translate(-W / 2, -H / 2);
-  const f = frameNo(t);
-  m.objs.forEach(o => {
-    if (o.flick && hash(f, o.seed) < .45) return;                               // 一闪一闪
-    const at = kk => {
-      let x = o.x + o.vx * kk, y = o.y + o.vy * kk + (m.kind === 'glide' ? 2600 * kk * kk * .5 * (o.name === 'mirror' ? .25 : 1) : 0);   // 808 往下滑：东西往下掉
-      x = lerp(x, W / 2, su); y = lerp(y, H / 2, su);
-      return { x, y, r: o.r + o.spin * kk, s: o.s * (1 - su), sx: o.flip ? Math.sign(Math.cos(kk * o.flip) || 1) * Math.max(.06, Math.abs(Math.cos(kk * o.flip))) : 1,
-        sy: (o.upside ? -1 : 1) * (m.kind === 'glide' ? 1 + Math.min(km, .5) * 1.4 : 1) };
-    };
-    const base = { ink: pal.ink, acc: pal.acc, glow: pal.glow, crack: o.name === 'mirror' && m.kind === 'glide' ? clamp(km / .22) : 0 };
-    if (o.far) { c.save(); c.filter = 'blur(5px)'; }
-    if (o.echo) for (let e = 3; e >= 1; e--) drawObj(c, o.name, t, km, { ...base, ...at(Math.max(0, km - e * .06)), a: (o.far ? .45 : 1) * .22 / e });
-    drawObj(c, o.name, t, km, { ...base, ...at(km), a: o.far ? .45 : 1 });
-    if (o.far) c.restore();
-  });
+  c.save(); c.globalAlpha = 1 - su; c.translate(W / 2, H / 2); c.scale(1.35, 1.35); c.translate(-W / 2, -H / 2); drawSurface(c, m.surf, t, m.i * 7 + 3); c.restore();   // 表面比画面大一圈，甩镜头时不露边
+  const fall = kk => m.kind === 'glide' ? 2600 * kk * kk * .5 * .25 : 0;           // 808 往下滑：镜子往下掉
+  const at = (o, kk) => ({ x: lerp(o.x, W / 2, su), y: lerp(o.y + fall(kk), H / 2, su), s: o.s * (1 - su), r: o.r + (m.kind === 'glide' ? 0 : kk * .02) });
+  const prev = MESS[m.i - 1];
+  if (m.dbl && prev) drawEvi(c, prev.name, t, km + .5, { ...at(prev, km + .5), a: .22 });
+  if (m.ruler && su <= 0) evRuler(c, m.ruler.x, m.ruler.y, m.ruler.len, m.ruler.rot, m.surf !== 'paper');
+  drawEvi(c, m.name, t, km, { ...at(m, km), crack: m.name === 'mirror' && m.kind === 'glide' ? clamp(km / .22) : 0 });
+  if (su <= 0) evTag(c, m.x + m.tagAt[0], m.y + m.tagAt[1], m.tag, m.tagAt[2]);
+  if (m.fg && su <= 0) { c.save(); c.filter = 'blur(16px)'; drawEvi(c, m.fg.name, t, km, { x: m.fg.x, y: m.fg.y, s: m.fg.s, r: m.fg.r, a: .9 }); c.restore(); }
   c.restore();
   return { m, k, cm, su };
 }
@@ -257,12 +244,12 @@ const messFX = (t, lt) => {
   const te = frozen(t), m = messAt(te), k = te - m.t, h = M.last('hat', t), cm = messCam(m, k, t);
   const hatFlash = h.since < 1 / 30 && Math.abs(h.t - m.t) > .03 && t < T_SUCK ? Math.floor(hash(h.i, 17) * 3) : -1;   // 踩镲：0 反色 1 白闪 2 黑一帧
   const start = k < 1 / 30 && m.kind !== 'start';
-  return { ...cam(te), shift: [(cm.x ?? 0) / W * .04, -(cm.y ?? 0) / H * .04], ca: 2.5 + M.hit('kick', t, 9) * 6 + (start ? 6 : 0), split: M.hit('hat', t, 25) * 2,
+  return { ...cam(te), shift: [(cm.x ?? 0) / W * .04, -(cm.y ?? 0) / H * .04], ca: 1 + M.hit('kick', t, 9) * 2.5 + (start ? 3 : 0), split: M.hit('hat', t, 25),
     bloom: .6, bloomThr: .55, grade: 'silver', gradeMix: .2, hud: .7, gseed: frameNo(t),
     glitch: start ? .45 : GLIDE1 && t > GLIDE1.t && t < GLIDE1.t + .2 ? .5 : 0,
-    invert: hatFlash === 0 && m.pal.glow !== null ? 1 : 0, flash: hatFlash === 1 ? .55 : start ? .4 : lt < 2 / 30 && m.kind === 'start' ? .35 : 0,
+    invert: hatFlash === 0 ? 1 : 0, flash: (hatFlash === 1 ? .55 : Math.max(start ? .6 : 0, .5 * Math.exp(-k * 14))) * (m.surf === 'paper' || m.surf === 'sheet' ? .6 : 1),   // 每拍一张，相机闪一下
     flashCol: m.kind === 'glide' && start ? '#e0112b' : '#ffffff',
-    dark: M.gap(t) ? .95 : hatFlash === 2 || (hatFlash === 0 && m.pal.glow === null) ? .9 : 0, hudMode: te >= REV[0] && te < REV[1] ? '◀◀ REW' : '▶ PLAY' };
+    dark: M.gap(t) ? .95 : hatFlash === 2 ? .9 : 0, hudMode: te >= REV[0] && te < REV[1] ? '◀◀ REW' : '▶ PLAY' };
 };
 scene({ name: '念头', t0: T_THINK, t1: T_STACK,
   weather: messWeather, bg: messBG,
