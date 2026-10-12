@@ -81,7 +81,8 @@ function motionPx(A, B, a, b) {
 }
 let MB_LAST = { n: 1, px: 0 }, MB_STAT = null;
 // 调色：默认用 LOOK，?look={...} 可以临时换一套（export.mjs --look '{...}'），见 gl.js 的 present()
-const LOOK_DEFAULT = {};
+// 调色：冷调黑色电影——黑更干净、暗部一点蓝黑，高光中性银色，整体略收饱和，血红不褪，青和洋红收一点
+const LOOK_DEFAULT = { con: 1.03, curve: .24, shoulder: .14, sat: .83, redKeep: 1, tame: .55, gain: [.99, 1, 1.01], shadow: [0, .004, .016], high: [0, .001, .003] };
 const LOOK = Q.has('look') ? JSON.parse(Q.get('look')) : LOOK_DEFAULT;
 
 function render(t, samples = 1, shutter = .5, fps = 30) {
