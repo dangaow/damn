@@ -113,7 +113,7 @@ console.log(`导出 ${T0}s–${T1.toFixed(2)}s，${N} 帧，${workers.length} �
 
 const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', PNG ? 'png' : 'mjpeg', '-i', '-',
   '-ss', String(A0), '-t', String(Math.max(T1 - A0, .05)), '-i', AUDIO,
-  '-map', '0:v', '-map', '1:a', ...(DELAY ? ['-af', `adelay=${DELAY}:all=1`] : []), '-c:v', 'libx264', '-preset', PRESET, '-crf', String(CRF), '-pix_fmt', 'yuv420p', ...(PNG ? ['-tune', 'grain'] : []),
+  '-map', '0:v', '-map', '1:a', '-af', [...(DELAY ? [`adelay=${DELAY}:all=1`] : []), 'apad'].join(','),   // apad：音轨比画面短一点点时补静音，-shortest 就不会吃掉最后一帧 '-c:v', 'libx264', '-preset', PRESET, '-crf', String(CRF), '-pix_fmt', 'yuv420p', ...(PNG ? ['-tune', 'grain'] : []),
   '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
   '-c:a', 'aac', '-b:a', '256k', '-shortest', '-movflags', '+faststart', OUT], { stdio: ['pipe', 'inherit', 'inherit'] });
 const ffDone = new Promise((res, rej) => ff.on('close', c => c === 0 ? res() : rej(new Error(`ffmpeg 退出码 ${c}`))));

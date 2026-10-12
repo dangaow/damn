@@ -2,5 +2,6 @@
 data.json
 shots/
 *.mp4
+!Huanghua_MV_1080p60.mp4
 output/
 preview/
