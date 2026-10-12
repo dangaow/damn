@@ -1374,12 +1374,6 @@ scene(46.016, [], (T, lt, P) => {
   if (fa > 0 && T < 55.5) { sx.save(); sx.globalAlpha = fa; memDraw(sx, MEMS[(bs * 5) % MEMS.length], 0, 0, W, H); sx.restore(); }
   const burn = clamp((T - 55.4) / .9);
   if (burn > 0) { const g = sx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, 1300 * eio(burn)); g.addColorStop(0, '#fff'); g.addColorStop(.7, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)'); sx.fillStyle = g; sx.fillRect(0, 0, W, H); }
-  let y = 740;
-  for (const [t0, s, f, size] of [[47.0, 'ISOLATED', F.monob, 74], [48.3, 'YuKIluv7 / dangao_w', F.mono, 40], [49.6, 'De4thpain · 2026', F.mono, 32],
-    ...CREDITS.map(([k, v], i) => [50.9 + i * .5, `${k}  ${v}`, F.mono, 22])]) {
-    xx.save(); xx.globalAlpha = win(T, t0, 55.3, .05, .6); revealText(xx, s, t0, t0 + 1.2, T, 130, y, { size, font: f, ls: 2, align: 'left' }); xx.restore();
-    y += size * .9 + 40;
-  }
 }, (T) => ({ scan: .12, grain: .06, fadeW: sstep(55.9, 56.3, T) }));
 
 // ---- 12 the cage: the moon seen through bars inked one after another ---------------------------------------------- 0:56.5 - 1:08.3
