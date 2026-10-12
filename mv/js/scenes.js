@@ -11,6 +11,7 @@ const FX0 = {
   invert: 0, xerox: 0, grade: 'none', gradeMix: 0, bloom: .4, bloomThr: .62, flash: 0, flashCol: '#ffffff', dark: 0,
   grain: .08, scan: .14, vig: .75, lb: 0, hud: 0, tape: 'TAPE 01', hudMode: '▶ PLAY', tc: null,
   bounce: 0, bounce808: false,                                                  // 背景跟着鼓点跳的幅度（只在最后鼓点回来那段打开）
+  ripC: [.5, .5], ripL: 0, ripR: [0, 0, 0], ripA: [0, 0, 0],                    // 水波折射（片头）：中心、波长（0 = 关）、三组波前半径和强度（像素）
 };
 const SCENES = [];
 const scene = o => (SCENES.push(o), o);
@@ -74,29 +75,40 @@ function POLY(t) {
 }
 
 // ================================================================ 片头 · 光敏警告（t < 0，音轨还没开始）
-// 首尾相接：片尾最后那滴雨落进画面正中的那一刻就是片头第一帧。雨滴在正中溅开一圈涟漪，涟漪停住变成倒数的圆环，
-// 3、2、1 走完，圆环收回成一个点 → 开机从这个点溅成横线。这一段本身不闪、不抖、不变亮。
+// 同一个下雨的夜晚：画面是一片黑色的水面。首尾相接——片尾最后那滴雨落进画面正中的那一刻就是片头第一帧：
+// 雨滴落在水面正中溅开一圈涟漪，涟漪停住变成倒数的圆环，外面一圈圈水波荡开，经过的地方字和光都跟着折一下；
+// 远处有路灯的倒影，细雨落在水面上冒出小涟漪。每换一个数，圆环再荡出一圈水波。3、2、1 走完，圆环收回成一个点 → 开机。
+// 字的版式和雨夜的证词一样：空心大字、白字、蓝色等宽时间戳；录像机 HUD 停在 ■ STOP、时间码 00:00:00:00，开机时变成 ▶ PLAY。
+// 这一段本身不闪、不抖、不突然变亮。
 const PRE = 3.6, DROP_FALL = .7;                                                    // 片头长度；最后那滴雨落多久
 const CD_END = -.3, WARN_R = 64;                                                     // 倒数在 -3.3 → -0.3 走完（每个数一秒）；圆环半径
+const WAVE_V = 430, WAVE_L = 30;                                                     // 水波速度（像素/秒）、波长
+const WAVES = [[-PRE, 1], [CD_END - 2, .6], [CD_END - 1, .6]];                        // 水波：雨滴落下那一下、换成 2、换成 1
 const WARN = {
-  label: 'PHOTOSENSITIVITY WARNING', head: '光敏性癫痫警告',
+  label: 'WARNING', head: '光敏性癫痫警告',
   zh: ['本片含有频闪、强光与快速闪烁的画面，可能诱发光敏性癫痫。', '如您或家人有癫痫病史，请谨慎观看；观看时如感到不适，请立即停止。'],
   en: ['THIS VIDEO CONTAINS FLASHING LIGHTS AND STROBE EFFECTS THAT MAY', 'TRIGGER SEIZURES IN PEOPLE WITH PHOTOSENSITIVE EPILEPSY.'],
+  ts: '[00:00.00]  NOTICE  ·  TAPE 01',
 };
 function lastDrop(c, k) {                                                           // 最后一滴雨，k 0..1：从画面上方自由落体到正中（片尾和片头共用）
   const y = lerp(-60, H / 2, k * k);
   c.strokeStyle = 'rgba(230,238,255,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * (1 - k * .9)); c.lineTo(W / 2, y); c.stroke();
   c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
 }
+const warnAmb = (t, lt) => ease(lt / .7) * (1 - ease((t + .5) / .45));              // 夜色、雨、倒影：落下之后慢慢出来，开机前收掉
+function warnWaves(t) {                                                             // 每组水波此刻的波前半径和强度
+  const fade = 1 - ease((t + .5) / .45);
+  return WAVES.map(([t0, a0]) => { const age = t - t0; if (age < 0) return [0, 0]; const R = WARN_R * .4 + age * WAVE_V; return [R, a0 * Math.exp(-age * 1.1) * fade * clamp(age / .08)]; });
+}
 function warnText(c, a, blur) {
   if (a <= .005) return;
   const cy = H / 2;
   c.save(); c.globalAlpha = a; if (blur > .05) c.filter = `blur(${blur.toFixed(1)}px)`;
-  c.letterSpacing = '5px'; text(c, WARN.label, W / 2 + 2.5, cy - 318, 20, { w: 400, fam: MONO, fill: C.red }); c.letterSpacing = '0px';
+  c.letterSpacing = '6px'; text(c, WARN.label, W / 2 + 3, cy - 350, 120, { fam: ANTON, w: 400, fill: null, stroke: 'rgba(200,215,255,.42)', lw: 2 }); c.letterSpacing = '0px';
   text(c, WARN.head, W / 2, cy - 256, 46, { fill: C.white });
-  c.fillStyle = 'rgba(201,206,214,.28)'; c.fillRect(W / 2 - 36, cy - 212, 72, 1);
-  WARN.zh.forEach((s, i) => text(c, s, W / 2, cy - 172 + i * 44, 27, { w: 400, fill: 'rgba(225,229,238,.86)' }));
-  WARN.en.forEach((s, i) => text(c, s, W / 2, cy + 156 + i * 30, 16, { w: 400, fam: MONO, fill: 'rgba(190,205,240,.5)' }));
+  WARN.zh.forEach((s, i) => text(c, s, W / 2, cy - 186 + i * 44, 27, { w: 400, fill: 'rgba(225,229,238,.86)' }));
+  WARN.en.forEach((s, i) => text(c, s, W / 2, cy + 150 + i * 30, 16, { w: 400, fam: MONO, fill: 'rgba(190,205,240,.5)' }));
+  text(c, WARN.ts, W / 2, cy + 232, 20, { w: 400, fam: MONO, fill: C.blue });
   c.restore();
 }
 scene({ name: '光敏警告', t0: -PRE, t1: 0,
@@ -104,13 +116,33 @@ scene({ name: '光敏警告', t0: -PRE, t1: 0,
   draw(c, t, lt) {
     c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
     if (lt < 0) { lastDrop(c, 1 + lt / DROP_FALL); return; }                       // 运动模糊的子帧落在接缝之前：还是那滴雨在落
-    const cx = W / 2, cy = H / 2;
+    const cx = W / 2, cy = H / 2, amb = warnAmb(t, lt);
+    if (amb > .005) {                                                               // 黑色的水面：很暗的夜色，远处路灯的倒影，细雨和雨点打出来的小涟漪
+      const g = c.createRadialGradient(cx, cy, 80, cx, cy, W * .7); g.addColorStop(0, `rgba(10,18,40,${.55 * amb})`); g.addColorStop(1, 'rgba(1,3,9,0)');
+      c.fillStyle = g; c.fillRect(0, 0, W, H);
+      bokeh(c, t, { n: 12, seed: 5, cols: STREET_COLS, alpha: .1 * amb, y0: H * .08, span: .84, r: 1.4 });
+      worldRain(c, t, { rain: .1 * amb, n: 150, col: '170,190,255', len: 1.1 });
+      c.lineWidth = 1.2;
+      for (let i = 0; i < 18; i++) {
+        const per = .7 + hash(i, 91) * .8, ph = hash(i, 92) * per, age = mod(t + ph, per) / per, cyc = Math.floor((t + ph) / per);
+        const x = hash(i * 13 + cyc, 93) * W, y = hash(i * 7 + cyc, 94) * H;
+        if (Math.hypot(x - cx, y - cy) < 200) continue;                            // 正中那圈留给倒数
+        c.strokeStyle = `rgba(200,215,255,${.22 * amb * (1 - age)})`; c.beginPath(); c.arc(x, y, 3 + age * 26, 0, 7); c.stroke();
+      }
+    }
+    for (const [R, a] of warnWaves(t)) {                                            // 水波：一组三圈，一圈比一圈淡
+      if (a < .01) continue;
+      for (let k = 0; k < 3; k++) {
+        const r = R - k * WAVE_L; if (r < WARN_R + 6) continue;
+        const fall = a * (1 - k * .3) / (1 + r / 420);
+        c.strokeStyle = `rgba(0,0,0,${.35 * fall})`; c.lineWidth = 9; c.beginPath(); c.arc(cx, cy, r + WAVE_L * .3, 0, 7); c.stroke();   // 波谷：暗一圈
+        c.strokeStyle = `rgba(215,228,255,${.6 * fall})`; c.lineWidth = 1.8; c.beginPath(); c.arc(cx, cy, r, 0, 7); c.stroke();             // 波峰：亮一圈
+        c.strokeStyle = `rgba(215,228,255,${.16 * fall})`; c.lineWidth = 6; c.beginPath(); c.arc(cx, cy, r - WAVE_L * .4, 0, 7); c.stroke();
+      }
+    }
     const into = easeOut(lt / .3), back = easeIn((t - CD_END) / -CD_END);          // 涟漪扩到圆环大小；最后 0.3 秒圆环收回成点
     const r = lerp(lerp(4, WARN_R, into), 4, back);
     warnText(c, ease((lt - .12) / .5) * (1 - ease((t - CD_END + .25) / .3)), 6 * (1 - ease((lt - .12) / .5)) + 4 * ease((t - CD_END + .25) / .3));
-    // 外面那圈涟漪：跟着扩开，很淡，慢慢散掉
-    const o = easeOut(lt / 1.4);
-    if (o < 1) { c.strokeStyle = `rgba(210,222,255,${.35 * (1 - o) * (1 - o)})`; c.lineWidth = 1.5; c.beginPath(); c.arc(cx, cy, lerp(6, WARN_R * 3.2, o), 0, 7); c.stroke(); }
     // 圆环：底下一圈很淡的轨道，上面是剩下的时间（从 12 点钟方向顺时针减少），头上一颗亮点
     const rem = clamp((CD_END - t) / 3), a0 = -Math.PI / 2;
     c.lineWidth = 2;
@@ -130,7 +162,11 @@ scene({ name: '光敏警告', t0: -PRE, t1: 0,
     if (lt < .2) { c.fillStyle = `rgba(255,255,255,${1 - lt / .2})`; c.beginPath(); c.arc(cx, cy, 4, 0, 7); c.fill(); }   // 雨滴本身：落下的那一点
     if (back > .6) { c.fillStyle = `rgba(255,255,255,${(back - .6) / .4})`; c.beginPath(); c.arc(cx, cy, 4, 0, 7); c.fill(); }   // 收回成开机的那个点
   },
-  fx: () => ({ grain: .25, scan: .3, hud: 0, ca: .35 }),                           // 和片尾最后那几帧一样的底子；色散收小，字要看得清（接缝那一帧只有正中一个点，看不出差别）
+  fx(t, lt) {                                                                       // 底子和片尾最后那几帧一样；色散收小，字要看得清（接缝那一帧只有正中一个点，看不出差别）
+    const w = warnWaves(t);
+    return { grain: .25, scan: .3, ca: .35, hud: .7 * ease((lt - .35) / .6), hudMode: '■ STOP', hudLabel: 'STBY', tc: 0,
+      ripC: [.5, .5], ripL: WAVE_L, ripR: w.map(x => x[0]), ripA: w.map(x => x[1] * 6) };   // 水波经过的地方，画面跟着折一下
+  },
 });
 
 // ================================================================ 0 · 开机
@@ -613,8 +649,39 @@ function woahShot(c, t, t0, R2 = false) {
     c.fillStyle = '#fff'; c.beginPath(); c.arc(px, py, 6, 0, 7); c.fill(); c.restore();
   }
 }
+// 连击 → 对质：woah 写完，红色的雨慢下来，一条条被拉平、汇成测谎记录纸上的四条线（下一幕的四支笔从这四条线接着画）。
+// 雨丝和世界的雨是同一套参数（同一个种子、同样的位置），开始的那一帧看不出换了东西。
+const T_R2L = [lineAt(41.22).t + .36, lineAt(41.88).t];
+const r2lK = t => clamp((t - T_R2L[0]) / (T_R2L[1] - T_R2L[0]));
+const R2L_CH = [430, 560, 690, 820];                                                 // 和对质的 CH_Y 一样
+function rainToLines(c, t) {
+  const k = r2lK(t), n = 260, spd = 1700, len = 60 * 2.8, wind = .22, span = H + 400, r = rand(1);
+  const tf = T_R2L[0] + (t - T_R2L[0]) * (1 - .6 * k);                               // 雨慢下来
+  c.save(); c.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const x0 = r() * (W + 800) - 400, sp = spd * (.6 + r() * .7), l = len * (.5 + r()), ph = r(), a = .24 * (.3 + r() * .7), lw = 1.7 * (.8 + r() * 1.8);
+    const y = mod(ph * span + tf * sp, span) - 200, x = x0 - y * wind;
+    const mx = x - l * wind / 2, my = y + l / 2, d = hash(i, 71) * .18;
+    const ka = ease((k - d) / .5), kb = ease((k - .32 - d) / .55);                  // 先在原地倒成水平，再滑到最近的那条线上
+    const ch = R2L_CH.reduce((b, v, q) => Math.abs(v - my) < Math.abs(R2L_CH[b] - my) ? q : b, 0);
+    const cx = lerp(mx, clamp(mx, 60, PEN_X - 60), kb), cy = lerp(my, R2L_CH[ch], kb), hl = lerp(lerp(l / 2, 70 + l * .3, ka), 150, kb);
+    const ax = lerp(x, cx - hl, ka), ay = lerp(y, cy, ka), bx = lerp(x - l * wind, cx + hl, ka), by = lerp(y + l, cy, ka);
+    c.globalAlpha = lerp(a, .9, kb) * (x0 > W + 200 || x0 < -200 ? 1 - kb : 1); c.lineWidth = lerp(lw, ch === 2 ? 3.4 : 2.4, kb);
+    c.strokeStyle = ch === 2 ? C.red : 'rgb(236,92,108)';
+    c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke();
+  }
+  const full = ease((k - .55) / .45);                                                 // 最后整条线补满，交给对质
+  if (full > 0) R2L_CH.forEach((y, ch) => { c.globalAlpha = full * (ch === 2 ? 1 : .85); c.strokeStyle = ch === 2 ? C.red : 'rgb(236,92,108)'; c.lineWidth = ch === 2 ? 3.4 : 2.4;
+    c.beginPath(); c.moveTo(0, y); c.lineTo(PEN_X, y); c.stroke(); });
+  c.restore();
+}
 function hookDraw(c, t, lt, R2) {
   const { line } = M.lyric(t);
+  if (!R2 && t >= T_R2L[0]) {
+    const k = r2lK(t);
+    if (line && line.text === 'woah' && k < .6) { c.save(); c.globalAlpha = 1 - ease(k / .6); woahShot(c, t, line.t, false); c.restore(); }
+    rainToLines(c, t); return;
+  }
   if (!line) return;
   if (line.text === 'woah') {
     if (R2 && t >= T_SHATTER) {                                                     // 霓虹短路：闪几下，啪地一下灭掉，火星慢慢飘落
@@ -658,13 +725,19 @@ function hookFx(R2) {
         : line && t - line.t < 2 / 30 && line.text !== 'woah' ? .3 : M.hit('snare', t, 25) * (R2 ? .3 : .2),   // 每句出现时一帧曝光闪
       flashCol: R2 && t >= T_POP && t < T_POP + .1 ? '#ffb070' : t - HOOK_T0[+R2] < 2 / 30 ? '#e0112b' : '#ffffff',
       zoom: ko != null ? 1 - .14 * Math.exp(-(t - ko) * 6) : cam(gapHold(t)).zoom ?? 1, rot: ko != null ? .05 * Math.exp(-(t - ko) * 5) : cam(gapHold(t)).rot ?? 0,
-      sq: R2 ? [1, 1] : crt((t - (lineAt(41.22).t + .5)) / .16), hud: .5 * (1 - sk), lb: sk * .6 };
+      sq: [1, 1], hud: .5 * (1 - sk), lb: sk * .6 };
   };
 }
+function hookFx1(t, lt) {                                                            // 副歌一：最后那 0.3 秒镜头慢慢稳下来，交给对质（同样的镜头参数，线对得上）
+  const f = hookFx(false)(t, lt), k = ease(r2lK(t));
+  if (k <= 0) return f;
+  return { ...f, zoom: lerp(f.zoom, 1, k), rot: lerp(f.rot ?? 0, 0, k), barrel: lerp(f.barrel ?? .03, .04, k), shift: [lerp(f.shift?.[0] ?? 0, 0, k), lerp(f.shift?.[1] ?? 0, 0, k)], ca: lerp(f.ca, .6, k), xerox: f.xerox * (1 - k),
+    gradeMix: f.gradeMix * (1 - k), invert: 0, glitch: f.glitch * (1 - k), flash: 0, bloom: lerp(f.bloom, .25, k) };   // 转场里不反色、不闪
+}
 scene({ name: '连击', t0: lineAt(32.44).t, t1: lineAt(41.88).t,
-  weather: t => ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),
-  bg: t => ({ mode: 'smoke', a: '#040002', b: '#4a0712', c: '#ff2a48', amt: .95, speed: 1.6, pulse: M.hit('kick', t, 8) }),
-  draw: (c, t, lt) => hookDraw(c, t, lt, false), fx: hookFx(false) });
+  weather: t => t >= T_R2L[0] ? null : ({ rain: M.gap(t) ? .07 : .24, col: '255,70,90', len: 2.8, rt: gapHold(t), lw: 1.7 }),   // 最后那 0.3 秒雨交给 rainToLines
+  bg: t => ({ mode: 'smoke', a: '#040002', b: '#4a0712', c: '#ff2a48', amt: .95 * (1 - ease(r2lK(t))), speed: 1.6, pulse: M.hit('kick', t, 8) * (1 - r2lK(t)) }),
+  draw: (c, t, lt) => hookDraw(c, t, lt, false), fx: hookFx1 });
 
 // ================================================================ 4 · 对质：测谎记录纸
 // 底部那条测谎仪的线在这里放大成整页记录纸：纸往左走，四支笔画呼吸 / 皮肤电 / 心跳 / 人声。
@@ -701,9 +774,8 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
   weather: t => ({ rain: .06, street: 0, rt: M.gap(t)?.[0] ?? t }),
   bg: () => ({ mode: 'solid', a: '#05060a' }),
   draw(c, t, lt) {
-    const tf = paperT(t), off = tf * PAPER_V, open = easeOut(lt / .28);
-    if (open < 1) { c.fillStyle = `rgba(255,255,255,${1 - open})`; c.fillRect(0, H / 2 - 2, W, 4); c.save(); c.beginPath(); c.rect(0, H / 2 - H / 2 * open, W, H * open); c.clip(); }   // 转场：CRT 关机的横线展开成记录纸
-    else c.save();
+    const tf = paperT(t), off = tf * PAPER_V, open = ease(lt / .4), amp = ease(lt / .45);   // 转场：上一幕红雨汇成的四条直线已经在这里，纸从黑里亮起来，线慢慢长出波形
+    c.save();
     const pg = c.createLinearGradient(0, 0, 0, H); pg.addColorStop(0, '#aeb3bd'); pg.addColorStop(.5, '#c4c8d0'); pg.addColorStop(1, '#a6abb5');
     c.fillStyle = pg; c.fillRect(0, 70, W, H - 140);
     c.lineWidth = 1;                                                                  // 方格，跟着纸走
@@ -712,13 +784,15 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
     c.fillStyle = 'rgba(20,24,34,.85)'; CH_NAME.forEach((nm, k) => text(c, nm, 40, CH_Y[k] - 52, 18, { w: 700, fam: MONO, align: 'left', fill: 'rgba(20,30,60,.7)' }));
     c.fillStyle = 'rgba(20,30,60,.5)'; for (let x = -mod(off, PAPER_V); x < W; x += PAPER_V) {    // 每秒一个时间刻度
       const sec = Math.round((x + off) / PAPER_V); c.fillRect(x, 70, 2, 16); text(c, `${String(sec / 60 | 0).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`, x + 6, 98, 16, { w: 400, fam: MONO, align: 'left', fill: 'rgba(20,30,60,.55)' }); }
+    if (open < 1) { c.fillStyle = `rgba(4,2,4,${1 - open})`; c.fillRect(0, 0, W, H); }   // 纸还没亮起来
     for (let ch = 0; ch < 4; ch++) {                                                  // 四条笔迹
       c.beginPath();
-      for (let x = 0; x <= PEN_X; x += 3) { const tt = songT(tf - (PEN_X - x) / PAPER_V), y = CH_Y[ch] + trace(ch, tt); x ? c.lineTo(x, y) : c.moveTo(x, y); }
+      for (let x = 0; x <= PEN_X; x += 3) { const tt = songT(tf - (PEN_X - x) / PAPER_V), y = CH_Y[ch] + trace(ch, tt) * amp; x ? c.lineTo(x, y) : c.moveTo(x, y); }
       c.strokeStyle = ch === 2 ? '#7d0614' : '#14161d'; c.lineWidth = ch === 3 ? 2 : 2.6; c.stroke();
+      if (open < 1 && ch !== 2) { c.save(); c.globalAlpha = .85 * (1 - open); c.strokeStyle = 'rgb(236,92,108)'; c.lineWidth = 2.4; c.stroke(); c.restore(); }   // 刚才还是红雨的颜色
       if (ch === 2) {                                                                  // 说谎时那段心跳描成红色
         c.save(); c.beginPath(); const xa = PEN_X - (tf - paperT(41.88)) * PAPER_V, xb = PEN_X - (tf - paperT(44.6)) * PAPER_V; c.rect(Math.max(0, xa), 70, Math.max(0, Math.min(PEN_X, xb) - Math.max(0, xa)), H); c.clip();
-        c.beginPath(); for (let x = 0; x <= PEN_X; x += 3) { const tt = songT(tf - (PEN_X - x) / PAPER_V), y = CH_Y[2] + trace(2, tt); x ? c.lineTo(x, y) : c.moveTo(x, y); }
+        c.beginPath(); for (let x = 0; x <= PEN_X; x += 3) { const tt = songT(tf - (PEN_X - x) / PAPER_V), y = CH_Y[2] + trace(2, tt) * amp; x ? c.lineTo(x, y) : c.moveTo(x, y); }
         c.strokeStyle = C.red; c.lineWidth = 4; c.stroke(); c.restore();
       }
     }
@@ -742,11 +816,13 @@ scene({ name: '对质', t0: lineAt(41.88).t, t1: D.kicks.find(k => k > 47),
       c.fillStyle = ch === 2 && lieAt(t) && frameNo(t) % 4 < 2 ? C.red : 'rgba(120,140,190,.5)'; c.beginPath(); c.arc(W - 60, py - 20, 8, 0, 7); c.fill();
     }
     text(c, 'LIE', W - 160, 140, 34, { fam: ANTON, w: 400, fill: lieAt(t) && frameNo(t) % 6 < 3 ? C.red : 'rgba(120,20,30,.35)' });
+    if (open < 1) { c.fillStyle = `rgba(4,2,4,${1 - open})`; c.fillRect(PEN_X + 12, 0, W - PEN_X - 12, H); }   // 机身和笔臂也跟着纸一起亮起来
     if (M.gap(t)) { c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(0, 70, W, H - 140); }    // 鼓停：纸停住，暗一下
     c.restore();
   },
   fx(t) { const k = M.last('kick', t), dive = easeIn((t - (this.t1 - .3)) / .3);  // 转场：最后 0.3 秒镜头扎进笔尖
-    return { lb: 1, zoom: 1 + .05 * Math.exp(-k.since * 12) + dive * 2.4, barrel: .04 + .2 * Math.exp(-k.since * 12) + dive * .4, dark: dive * .6, grade: 'cold', gradeMix: .35, bloom: .25, bloomThr: .8,
+    const lt = t - this.t0, open = ease(lt / .4);
+    return { lb: open, zoom: 1 + .05 * Math.exp(-k.since * 12) + dive * 2.4, barrel: .04 + .2 * Math.exp(-k.since * 12) + dive * .4, dark: dive * .6, grade: 'cold', gradeMix: .35 * open, bloom: .25, bloomThr: .8,
       ca: .6 + M.hit('kick', t, 8) * 3 + dive * 10, glitch: M.hit('kick', t, 10) * .35, gseed: k.i, flash: M.hit('kick', t, 14) * .25, flashCol: '#ff1a3a', hud: .6, scan: .14 }; },
 });
 
@@ -1214,8 +1290,8 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration,
 
 // ================================================================ 12 · 片尾 · 证词
 // 最后那滴雨落出画面后，雨又下起来，回到开头的雨夜；"证词"的位置上写的是做这首歌的人。
-// 音乐：伴奏第 24–33 小节降 2 个半音（变调也变速，见 credits_audio.py），一小节 2.866 秒，每条字幕停一小节。
-const T_CRED = D.duration, CRED_SLOW = 110 / 98, CRED_BAR = BAR * CRED_SLOW, CRED_LEN = CRED_BAR * 9;
+// 音乐：伴奏第 24–33 小节降 3 个半音（变调也变速，见 credits_audio.py），一小节 3.036 秒，每条字幕停一小节。
+const T_CRED = D.duration, CRED_SLOW = 44 / 37, CRED_BAR = BAR * CRED_SLOW, CRED_LEN = CRED_BAR * 9;
 const T_FINDROP = T_CRED + CRED_LEN + .3, MV_END = T_FINDROP + DROP_FALL;         // 音乐结束、黑 0.3 秒后，最后一滴雨从上面落到画面正中；落到的那一刻就是片头第一帧（从这一点溅开）
 const credAt = s => T_CRED + (s - barT(24)) * CRED_SLOW;                            // 伴奏原来的时间 → 片尾里的时间
 const CRED_GAP = M.gap(80.2).map(credAt);                                           // 原曲点题前那 0.4 秒鼓停：雨冻住、画面压暗

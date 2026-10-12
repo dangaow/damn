@@ -1,9 +1,9 @@
-"""片尾音轨：原曲 + 片尾（伴奏桥段降 2 个半音，像录像带转慢：变调也变速），输出完整音轨。
+"""片尾音轨：原曲 + 片尾（伴奏桥段降 3 个半音，像录像带转慢：变调也变速），输出完整音轨。
 
     python3 credits_audio.py      → output/谎话_完整音轨.wav（44.1k 立体声）
 
 片尾用伴奏 stems/beat.mp3 的第 24–33 小节（1:02.61–1:25.59，没有底鼓、只有军鼓）。
-- 降调：整体放慢到 2^(-2/12) ≈ 0.891 倍，一小节从 2.553 秒变成 2.866 秒，9 小节约 25.8 秒
+- 降调：整体放慢到 2^(-3/12) ≈ 0.841 倍，一小节从 2.553 秒变成 3.036 秒，9 小节约 27.3 秒
 - 开头 0.4 秒像磁带刚转起来：速度从 0.3 倍滑到正常（之后的小节线不受影响，和画面对得上）
 - 高频收一点，像隔着玻璃听（音量本身就比片尾倒数那段小 2–3 dB）
 - 第 31 小节（原曲点题后鼓回来那一下）开始渐出，到片尾结束时无声
@@ -15,11 +15,12 @@ from scipy.signal import resample_poly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SR = 44100
-D = json.load(open(os.path.join(HERE, 'data.json')))
+DJ = os.path.join(HERE, 'data.json')            # data.json 不进仓库；没有就读 data.js（内容一样）
+D = json.load(open(DJ, encoding='utf-8')) if os.path.exists(DJ) else json.loads(open(os.path.join(HERE, 'data.js'), encoding='utf-8').read().split('=', 1)[1].strip().rstrip(';'))
 BAR = D['step'] * 16
 bar = lambda i: D['bar0'] + i * BAR
 S0, S1 = bar(24), bar(33)                  # 伴奏里取的这一段
-UP, DOWN = 110, 98                         # 110/98 ≈ 2^(2/12)：每个样本拉长 → 播放时慢、低 2 个半音
+UP, DOWN = 44, 37                          # 44/37 ≈ 2^(3/12)（差不到 0.1 音分）：每个样本拉长 → 播放时慢、低 3 个半音
 SPIN = .4                                  # 磁带转起来用的秒数
 FADE_BAR = 7                               # 从第几小节（片尾里数）开始渐出
 GAIN_DB = 0
@@ -33,7 +34,7 @@ def load(path):
 song = load(os.path.join(HERE, 'song.mp3'))
 beat = load(os.path.join(HERE, 'stems', 'beat.mp3'))
 seg = beat[int(round(S0 * SR)):int(round(S1 * SR))]
-slow = resample_poly(seg, UP, DOWN, axis=0)          # 放慢后的片尾（时长 × 110/98）
+slow = resample_poly(seg, UP, DOWN, axis=0)          # 放慢后的片尾（时长 × 44/37）
 
 # 磁带转起来：前 SPIN 秒按变速读 slow，速度 0.3 → 1；SPIN 秒之后和匀速读完全对齐
 n_spin = int(SPIN * SR)

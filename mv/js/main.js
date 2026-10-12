@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================================
-// 渲染：2D 层（场景）→ GL（背景 + 后期）→ 多个子帧累加成运动模糊 → 最上面画 HUD
+// 渲染：2D 层（场景）→ GL（背景 + 后期）→ 多个子帧累加成运动模糊 → 整体调色 → 最上面画 HUD
 // ============================================================================
 const OUT = document.getElementById('cv'), ox = OUT.getContext('2d');
 const LAY = mk(), lx = LAY.getContext('2d');
@@ -35,19 +35,75 @@ function drawLayer(t) {
   return { s, fx, bg: s.bg ? s.bg.call(s, t, lt) : { mode: 'solid' } };
 }
 
-// samples：子帧数（1 = 不做运动模糊）；shutter：快门占一帧的比例
-function render(t, samples = 1, shutter = .5) {
-  let last;
-  for (let k = 0; k < samples; k++) {
-    const ts = samples > 1 ? t + ((k + .5) / samples - .5) * shutter / 30 : t;
-    last = drawLayer(ts);
-    GLX.frame(LAY, ts, last.bg, last.fx, 1 / samples, k === 0);
+// ---------------------------------------------------------------- 运动模糊
+// 快门从这一帧开始往后开（shutter = 快门占一帧的比例，.5 = 180°），一帧里的子帧都落在同一个 1/30 秒的格子里：
+// 按帧跳的东西（闪烁、雪花、卡帧、12 帧/秒的雨）在一帧里是同一个状态，不会被糊成两半。
+// samples = 'auto'：先渲快门两头，估计这一帧里画面动了多少像素（2D 层缩略图上的梯度光流 + 镜头参数的变化），
+// 动得越快补的子帧越多，相邻子帧最多差 MB_STEP 像素，拖影是连续的一条，不会变成几个重影；不动的帧只渲两头。
+// 光流用两层：细的一格 6 像素（量小位移，亚像素也量得出），粗的一格 24 像素（量大位移）；整体变亮变暗不算动。
+const MB_MIN = 2, MB_MAX = 14, MB_STEP = 4;
+const PYR = [{ w: 320, h: 180, b: 8 }, { w: 80, h: 45, b: 4 }].map(L => ({ ...L, s: W / L.w, cv: mk(L.w, L.h) }));
+PYR.forEach(L => { L.cx = L.cv.getContext('2d', { willReadFrequently: true }); });
+function snap() {                                                                  // 2D 层两层缩略图的亮度（按不透明度预乘）
+  return PYR.map(L => {
+    L.cx.globalCompositeOperation = 'copy'; L.cx.imageSmoothingQuality = 'high'; L.cx.drawImage(L === PYR[0] ? LAY : PYR[0].cv, 0, 0, L.w, L.h);
+    const d = L.cx.getImageData(0, 0, L.w, L.h).data, g = new Float32Array(L.w * L.h);
+    for (let i = 0; i < g.length; i++) g[i] = (d[i * 4] * .3 + d[i * 4 + 1] * .59 + d[i * 4 + 2] * .11) * d[i * 4 + 3] / 255;
+    return g;
+  });
+}
+function flow(A, B, L) {                                                           // 每块的法向光流 sqrt(Σ It² / Σ |∇I|²)，取最大，单位：全分辨率像素
+  let best = 0;
+  for (let y0 = 1; y0 + L.b < L.h; y0 += L.b) for (let x0 = 1; x0 + L.b < L.w; x0 += L.b) {
+    let n = 0, mt = 0;
+    for (let y = y0; y < y0 + L.b; y++) for (let x = x0; x < x0 + L.b; x++) { const p = y * L.w + x; mt += B[p] - A[p]; n++; }
+    mt /= n;
+    let sg = 0, st = 0;
+    for (let y = y0; y < y0 + L.b; y++) for (let x = x0; x < x0 + L.b; x++) {
+      const p = y * L.w + x, gx = (A[p + 1] + B[p + 1] - A[p - 1] - B[p - 1]) / 4, gy = (A[p + L.w] + B[p + L.w] - A[p - L.w] - B[p - L.w]) / 4, it = B[p] - A[p] - mt;
+      sg += gx * gx + gy * gy; st += it * it;
+    }
+    if (sg / n < 25) continue;                                                     // 没纹理的块量不出来
+    best = Math.max(best, Math.sqrt(st / sg) * L.s);
+  }
+  return best;
+}
+function camMotion(a, b) {                                                         // 镜头参数（缩放、旋转、鱼眼、平移、CRT 压扁）造成的最大位移（像素）
+  return Math.abs(a.zoom - b.zoom) / Math.max(a.zoom, .01) * 1100 + Math.abs(a.rot - b.rot) * 1100 + Math.abs(a.barrel - b.barrel) * 1150
+    + Math.abs(a.shift[0] - b.shift[0]) * W + Math.abs(a.shift[1] - b.shift[1]) * H
+    + Math.abs(a.sq[0] - b.sq[0]) / Math.max(a.sq[0], .01) * W / 2 + Math.abs(a.sq[1] - b.sq[1]) / Math.max(a.sq[1], .01) * H / 2;
+}
+function motionPx(A, B, a, b) {
+  if (a.s !== b.s) return 0;                                                       // 快门里正好切镜：两头各一个子帧就够了
+  const fine = flow(A[0], B[0], PYR[0]), coarse = flow(A[1], B[1], PYR[1]);
+  MB_STAT = { fine: Math.round(fine), coarse: Math.round(coarse) };
+  return Math.max(Math.min(fine, 9), coarse, camMotion(a.fx, b.fx));              // 细的一层超过约 1.5 格就不准了，交给粗的一层
+}
+let MB_LAST = { n: 1, px: 0 }, MB_STAT = null;
+// 调色：默认用 LOOK，?look={...} 可以临时换一套（export.mjs --look '{...}'），见 gl.js 的 present()
+const LOOK_DEFAULT = {};
+const LOOK = Q.has('look') ? JSON.parse(Q.get('look')) : LOOK_DEFAULT;
+
+function render(t, samples = 1, shutter = .5, fps = 30) {
+  const span = shutter / fps;
+  let head, n;
+  const sub = (ts, first) => { const r = drawLayer(ts); GLX.frame(LAY, ts, r.bg, r.fx, 1, first, t); return r; };
+  if (samples === 'auto') {
+    head = sub(t, true); const A = snap(), tail = sub(t + span, false), B = snap();
+    const px = motionPx(A, B, head, tail);
+    n = clamp(1 + Math.ceil(px / MB_STEP), MB_MIN, MB_MAX);
+    for (let k = 1; k < n - 1; k++) sub(t + span * k / (n - 1), false);
+    MB_LAST = { n, px: Math.round(px) };
+  } else {
+    n = Math.max(1, samples | 0);
+    for (let k = 0; k < n; k++) { const r = sub(n > 1 ? t + span * k / (n - 1) : t, k === 0); if (!k) head = r; }
+    MB_LAST = { n, px: 0 };
   }
   ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalAlpha = 1;
-  ox.drawImage(GLX.present(), 0, 0);
-  const fx = last.fx;
-  if (fx.hud > 0 && fx.sq[1] > .5) hud(ox, t, { a: fx.hud, lb: fx.lb, tape: fx.tape, mode: fx.hudMode, tc: fx.tc ?? t });
-  if (DEBUG) drawDebug(t, last.s);
+  const fx = head.fx;
+  ox.drawImage(GLX.present(1 / n, fx.lb, LOOK), 0, 0);
+  if (fx.hud > 0 && fx.sq[1] > .5) hud(ox, t, { a: fx.hud, lb: fx.lb, tape: fx.tape, mode: fx.hudMode, label: fx.hudLabel, tc: fx.tc ?? t });
+  if (DEBUG) drawDebug(t, head.s);
 }
 
 function drawDebug(t, s) {
@@ -73,7 +129,9 @@ const FONTS = [`400 20px "${SANS}"`, `900 20px "${SANS}"`, `400 20px "${SERIF}"`
 const fontsReady = Promise.all(FONTS.map(f => document.fonts.load(f, '谎A'))).then(() => document.fonts.ready).then(() => true);
 window.__ready = () => fontsReady;
 window.__info = () => ({ start: T_A, duration: MV_END, title: D.title });           // start < 0：片头警告，那几秒没有声音（export.mjs 把音轨往后推）
-window.__frame = (t, samples = 3, png = false) => { render(t, samples); return png ? OUT.toDataURL('image/png') : OUT.toDataURL('image/jpeg', .92); };
+// samples：子帧数或 'auto'；fps：输出帧率（决定快门时长）
+window.__frame = (t, samples = 'auto', png = false, fps = 30, shutter = .5, q = .92) => { render(t, samples, shutter, fps); return png ? OUT.toDataURL('image/png') : OUT.toDataURL('image/jpeg', q); };
+window.__mb = () => MB_LAST;
 
 // ---------------------------------------------------------------- 播放器
 // 时间从 -PRE 开始：片头警告那几秒还没有声音，用自己的钟走，走到 0 再放音轨；放到结尾接回片头继续放（首尾是接上的）。

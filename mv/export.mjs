@@ -2,9 +2,10 @@
 //
 //   node export.mjs                          整首导出 → mv.mp4（从片头的光敏警告开始，警告那 3.6 秒没有声音；结尾和片头是接上的，可以循环播放）
 //   node export.mjs --from 20 --to 35        只导出一段（试看用），音频也会截取对应部分；时间按歌曲算，片头警告是负数（--from -3.6）
-//   node export.mjs --shots 5,22.5,45        只截几张图到 shots/，检查画面
-//   可选：--workers 4  --fps 30  --crf 18  --mb 3（运动模糊子帧数，1 = 关）  --out 名字.mp4
-//   最高画质：--png --mb 6 --crf 14 --preset slow（慢很多）
+//   node export.mjs --shots 5,22.5,45        只截几张图到 shots/（--shotdir 换目录），检查画面
+//   可选：--workers 4  --fps 30  --crf 18  --mb auto（运动模糊子帧数：auto = 按每帧画面动得多快自动定 2–14 个；数字 = 固定，1 = 关）
+//         --shutter .5（快门占一帧的比例，.5 = 180°）  --look '{"sat":.9}'（临时换一套调色，见 js/gl.js 的 present）  --out 名字.mp4
+//   正式版：--fps 60 --crf 16 --preset slow --out output/谎话_1080p60.mp4
 //   竖屏预告：--page teaser.html --audio output/teaser_audio.wav --out output/谎话预告.mp4
 //
 // 每个 worker 是一个无头 Chrome，页面以 ?export=1 打开，由脚本指定每一帧的精确时间（window.__frame(t)）。
@@ -19,7 +20,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2), args = {};
 for (let i = 0; i < argv.length; i++) if (argv[i].startsWith('--')) args[argv[i].slice(2)] = argv[i + 1]?.startsWith('--') ? true : argv[++i] ?? true;
-const FPS = +(args.fps || 30), CRF = +(args.crf || 18), SAMPLES = +(args.mb || 3);   // --mb 子帧数（运动模糊），1 = 关
+const FPS = +(args.fps || 30), CRF = +(args.crf || 18), SAMPLES = !args.mb || args.mb === 'auto' ? 'auto' : +args.mb;   // --mb 子帧数（运动模糊），1 = 关
+const SHUTTER = +(args.shutter || .5), JPEG_Q = +(args.q || .95), LOOK = args.look ? JSON.parse(args.look) : null;
 const PNG = !!args.png, PRESET = args.preset || 'medium';                         // --png 无损传帧；--preset slow 等
 const WORKERS = args.shots ? 1 : Math.max(1, +(args.workers || Math.min(4, Math.floor(availableParallelism() / 2))));
 const PAGE = resolve(here, args.page || 'mv.html');
@@ -74,25 +76,30 @@ async function launch(id) {
     return r.result.value;
   };
   await send('Runtime.enable'); await send('Page.enable');
-  await send('Page.navigate', { url: pathToFileURL(PAGE).href + '?export=1' });
+  await send('Page.navigate', { url: pathToFileURL(PAGE).href + '?export=1' + (LOOK ? '&look=' + encodeURIComponent(JSON.stringify(LOOK)) : '') });
   let ready = false;
   for (let i = 0; i < 120 && !ready; i++) { await sleep(250); try { ready = await evaluate("typeof window.__frame === 'function' && window.__ready()"); } catch {} }
   if (!ready) throw new Error(`worker ${id}：页面没有加载完成`);
   return {
     evaluate,
-    frame: async t => { const url = await evaluate(`__frame(${t}, ${SAMPLES}, ${PNG})`); return Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'); },
+    frame: async t => {
+      const url = await evaluate(`__frame(${t}, ${JSON.stringify(SAMPLES)}, ${PNG}, ${FPS}, ${SHUTTER}, ${JPEG_Q})`);
+      if (SAMPLES === 'auto') { const m = await evaluate('__mb()'); MB.n += m.n; MB.frames++; MB.max = Math.max(MB.max, m.n); MB.hist[m.n] = (MB.hist[m.n] || 0) + 1; }
+      return Buffer.from(url.slice(url.indexOf(',') + 1), 'base64');
+    },
   };
 }
 
+const MB = { n: 0, frames: 0, max: 0, hist: {} };                                // 自动运动模糊的统计
 const first = await launch(0);
 const info = await first.evaluate('__info()');
 
 // ---- 截图模式 ----
 if (args.shots) {
-  const dir = join(here, 'shots'); mkdirSync(dir, { recursive: true });
+  const dir = resolve(here, args.shotdir || 'shots'); mkdirSync(dir, { recursive: true });            // --shotdir 换目录
   for (const s of String(args.shots).split(',').map(Number)) {
     const f = join(dir, `shot_${s < 0 ? '-' : ''}${Math.abs(s).toFixed(2).padStart(s < 0 ? 6 : 7, '0')}.jpg`);
-    writeFileSync(f, await first.frame(s)); console.log('写出', f);
+    writeFileSync(f, await first.frame(s)); console.log('写出', f, SAMPLES === 'auto' ? `子帧 ${JSON.stringify(await first.evaluate('__mb()'))}` : '');
   }
   process.exit(0);
 }
@@ -127,7 +134,7 @@ await Promise.all(workers.map(async w => {
     flushing = flushing.then(flush);
     if (i % FPS === 0) {
       const sec = (Date.now() - start) / 1000;
-      process.stdout.write(`\r  ${i}/${N} 帧  ${(i / sec || 0).toFixed(1)} fps  剩余约 ${Math.round((N - i) / (i / sec || 1))}s   `);
+      process.stdout.write(`\r  ${i}/${N} 帧  ${(i / sec || 0).toFixed(2)} fps  剩余约 ${Math.round((N - i) / (i / sec || 1))}s${MB.frames ? `  平均子帧 ${(MB.n / MB.frames).toFixed(1)}` : ''}   `);
     }
   }
 }));
@@ -135,4 +142,5 @@ await flushing;
 ff.stdin.end();
 await ffDone;
 console.log(`\n完成：${OUT}（用时 ${Math.round((Date.now() - start) / 1000)}s）`);
+if (MB.frames) console.log(`运动模糊：平均 ${(MB.n / MB.frames).toFixed(2)} 个子帧，最多 ${MB.max}；分布 ${JSON.stringify(MB.hist)}`);
 process.exit(0);
