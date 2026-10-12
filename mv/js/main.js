@@ -8,6 +8,10 @@ const Q = new URLSearchParams(location.search);
 const EXPORT = Q.has('export');
 let DEBUG = !EXPORT && Q.has('debug');
 
+// 全片从 -PRE（片头警告）到 MV_END，循环播放时 MV_END 接回 -PRE
+const T_A = -PRE, LOOP = MV_END + PRE;
+const BREATH = [.21, .17, .09].map(w => Math.max(1, Math.round(w * LOOP / (2 * Math.PI))) * 2 * Math.PI / LOOP);
+
 function drawLayer(t) {
   const s = sceneAt(t), lt = t - s.t0;
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.shadowBlur = 0;
@@ -25,9 +29,9 @@ function drawLayer(t) {
   lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1;
   polygraph(lx, t, POLY);
   for (const k of ['zoom', 'rot', 'barrel']) if (!Number.isFinite(fx[k])) fx[k] = FX0[k];
-  // 镜头一直在呼吸：很轻很慢的整体漂移，像手持摄像机，切镜时画面不会"归零"
-  fx.shift = [(fx.shift?.[0] ?? 0) + Math.sin(t * .21) * .003, (fx.shift?.[1] ?? 0) + Math.cos(t * .17) * .0025];
-  fx.rot = fx.rot + Math.sin(t * .09) * .004;
+  // 镜头一直在呼吸：很轻很慢的整体漂移，像手持摄像机，切镜时画面不会"归零"（频率取成全片长度的整数倍，循环播放时首尾对得上）
+  fx.shift = [(fx.shift?.[0] ?? 0) + Math.sin(t * BREATH[0]) * .003, (fx.shift?.[1] ?? 0) + Math.cos(t * BREATH[1]) * .0025];
+  fx.rot = fx.rot + Math.sin(t * BREATH[2]) * .004;
   return { s, fx, bg: s.bg ? s.bg.call(s, t, lt) : { mode: 'solid' } };
 }
 
@@ -54,7 +58,7 @@ function drawDebug(t, s) {
    `底鼓 #${k.i} ${jerk(t).act ?? ''}  ${M.gap(t) ? '■ 静音' : ''}${b.info.fill ? ' 加花' : ''}${b.info.b808 ? '' : ' 无808'}`,
    `808 ${n ? n.midi.toFixed(1) + (n.glide ? ' 滑→' + n.glide : '') : '—'}   人声 ${M.vocal(t).toFixed(2)}`, `歌词 ${line ? line.t.toFixed(2) + 's ' + line.text : '—'}`]
     .forEach((s2, i) => ox.fillText(s2, 36, 34 + i * 38));
-  const y0 = H - 54, sx = x => x / MV_END * W;
+  const y0 = H - 54, sx = x => (x - T_A) / LOOP * W;
   SCENES.forEach((s2, i) => { ox.fillStyle = `hsla(${i * 37},60%,50%,.6)`; ox.fillRect(sx(s2.t0), y0, sx(Math.min(s2.t1, MV_END)) - sx(s2.t0) - 1, 10); });
   ox.fillStyle = '#fff'; D.kicks.forEach(x => ox.fillRect(sx(x), y0 + 12, 1, 8));
   ox.fillStyle = '#6cf'; D.snares.forEach(x => ox.fillRect(sx(x), y0 + 22, 1, 6));
@@ -68,34 +72,48 @@ function drawDebug(t, s) {
 const FONTS = [`400 20px "${SANS}"`, `900 20px "${SANS}"`, `400 20px "${SERIF}"`, `900 20px "${SERIF}"`, `20px "${GOTH}"`, `20px "${ANTON}"`, `20px "${MONO}"`, `700 20px "${PIX}"`];
 const fontsReady = Promise.all(FONTS.map(f => document.fonts.load(f, '谎A'))).then(() => document.fonts.ready).then(() => true);
 window.__ready = () => fontsReady;
-window.__info = () => ({ duration: MV_END, title: D.title });
+window.__info = () => ({ start: T_A, duration: MV_END, title: D.title });           // start < 0：片头警告，那几秒没有声音（export.mjs 把音轨往后推）
 window.__frame = (t, samples = 3, png = false) => { render(t, samples); return png ? OUT.toDataURL('image/png') : OUT.toDataURL('image/jpeg', .92); };
 
 // ---------------------------------------------------------------- 播放器
+// 时间从 -PRE 开始：片头警告那几秒还没有声音，用自己的钟走，走到 0 再放音轨；放到结尾接回片头继续放（首尾是接上的）。
+// 进度条和时间显示的是视频时间（从片头算起）。
 const au = document.getElementById('au'), pp = document.getElementById('pp'), seek = document.getElementById('seek'), tm = document.getElementById('time');
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 if (EXPORT) document.body.classList.add('export');
 else {
-  const loop = () => {
-    const t = au.currentTime;
-    render(t, 1);
-    seek.value = t / MV_END * 1000;
-    tm.textContent = `${fmt(t)} / ${fmt(MV_END).slice(0, -2)}`;
-    if (!au.paused) requestAnimationFrame(loop);
+  let playing = false, pre = T_A, preAt = 0, ticking = false;                     // pre < 0：还在片头，pre 是上次起步（或暂停）时的时间
+  const now = () => pre < 0 ? (playing ? pre + (performance.now() - preAt) / 1000 : pre) : au.currentTime;
+  const go = t => {                                                                // 跳到 t
+    t = clamp(t, T_A, MV_END);
+    if (t < 0) { pre = t; preAt = performance.now(); if (!au.paused) au.pause(); au.currentTime = 0; }
+    else { pre = 0; au.currentTime = t; if (playing && au.paused) au.play(); }
   };
-  const toggle = () => au.paused ? au.play() : au.pause();
-  au.onplay = () => { document.body.classList.remove('paused'); pp.textContent = '❚❚'; requestAnimationFrame(loop); };
-  au.onpause = () => { document.body.classList.add('paused'); pp.textContent = '▶'; };
+  const draw = () => {
+    let t = now();
+    if (pre < 0 && t >= 0) { go(t); t = now(); }                                   // 片头走完：开始放音轨
+    if (t >= MV_END) { go(T_A + (t - MV_END)); t = now(); }                         // 放到结尾：接回片头
+    render(t, 1);
+    seek.value = (t - T_A) / LOOP * 1000;
+    tm.textContent = `${fmt(t - T_A)} / ${fmt(LOOP).slice(0, -2)}`;
+  };
+  const tick = () => { ticking = false; draw(); if (playing) kick(); };
+  const kick = () => { if (!ticking) { ticking = true; requestAnimationFrame(tick); } };
+  const ui = () => { document.body.classList.toggle('paused', !playing); pp.textContent = playing ? '❚❚' : '▶'; };
+  const play = () => { if (pre < 0) preAt = performance.now(); else au.play(); playing = true; ui(); kick(); };
+  const pause = () => { if (pre < 0) pre = now(); playing = false; au.pause(); ui(); draw(); };
+  const toggle = () => playing ? pause() : play();
+  au.onended = () => { if (playing) { go(T_A); kick(); } };                        // 音轨比 MV_END 短一点点时也接回片头
   pp.onclick = toggle; OUT.onclick = toggle;
-  seek.oninput = () => { au.currentTime = seek.value / 1000 * MV_END; loop(); };
-  document.getElementById('dbg').onclick = () => { DEBUG = !DEBUG; loop(); };
+  seek.oninput = () => { go(T_A + seek.value / 1000 * LOOP); draw(); };
+  document.getElementById('dbg').onclick = () => { DEBUG = !DEBUG; draw(); };
   addEventListener('keydown', e => {
     if (e.code === 'Space') { e.preventDefault(); toggle(); }
-    else if (e.key === 'd' || e.key === 'D') { DEBUG = !DEBUG; loop(); }
-    else if (e.key === 'ArrowLeft') { au.currentTime = Math.max(0, au.currentTime - (e.shiftKey ? 1 : 5)); loop(); }
-    else if (e.key === 'ArrowRight') { au.currentTime = Math.min(MV_END, au.currentTime + (e.shiftKey ? 1 : 5)); loop(); }
-    else if (e.key === ',') { au.currentTime = Math.max(0, au.currentTime - 1 / 30); loop(); }
-    else if (e.key === '.') { au.currentTime = Math.min(MV_END, au.currentTime + 1 / 30); loop(); }
+    else if (e.key === 'd' || e.key === 'D') { DEBUG = !DEBUG; draw(); }
+    else if (e.key === 'ArrowLeft') { go(now() - (e.shiftKey ? 1 : 5)); draw(); }
+    else if (e.key === 'ArrowRight') { go(now() + (e.shiftKey ? 1 : 5)); draw(); }
+    else if (e.key === ',') { go(now() - 1 / 30); draw(); }
+    else if (e.key === '.') { go(now() + 1 / 30); draw(); }
   });
-  fontsReady.then(loop);
+  fontsReady.then(draw);
 }

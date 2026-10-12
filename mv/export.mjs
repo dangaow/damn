@@ -1,7 +1,7 @@
 // 把 mv.html 逐帧渲染出来，再和音轨合成 MP4（默认 output/谎话_完整音轨.wav：原曲 + 片尾，由 credits_audio.py 生成；没有就用 song.mp3）。
 //
-//   node export.mjs                          整首导出 → mv.mp4
-//   node export.mjs --from 20 --to 35        只导出一段（试看用），音频也会截取对应部分
+//   node export.mjs                          整首导出 → mv.mp4（从片头的光敏警告开始，警告那 3.6 秒没有声音；结尾和片头是接上的，可以循环播放）
+//   node export.mjs --from 20 --to 35        只导出一段（试看用），音频也会截取对应部分；时间按歌曲算，片头警告是负数（--from -3.6）
 //   node export.mjs --shots 5,22.5,45        只截几张图到 shots/，检查画面
 //   可选：--workers 4  --fps 30  --crf 18  --mb 3（运动模糊子帧数，1 = 关）  --out 名字.mp4
 //   最高画质：--png --mb 6 --crf 14 --preset slow（慢很多）
@@ -91,21 +91,22 @@ const info = await first.evaluate('__info()');
 if (args.shots) {
   const dir = join(here, 'shots'); mkdirSync(dir, { recursive: true });
   for (const s of String(args.shots).split(',').map(Number)) {
-    const f = join(dir, `shot_${s.toFixed(2).padStart(7, '0')}.jpg`);
+    const f = join(dir, `shot_${s < 0 ? '-' : ''}${Math.abs(s).toFixed(2).padStart(s < 0 ? 6 : 7, '0')}.jpg`);
     writeFileSync(f, await first.frame(s)); console.log('写出', f);
   }
   process.exit(0);
 }
 
 // ---- 视频模式 ----
-const T0 = +(args.from || 0), T1 = Math.min(+(args.to || info.duration), info.duration);
+const T0 = Math.max(args.from !== undefined ? +args.from : info.start ?? 0, info.start ?? 0), T1 = Math.min(+(args.to || info.duration), info.duration);
 const N = Math.round((T1 - T0) * FPS);
+const A0 = Math.max(0, T0), DELAY = Math.round((A0 - T0) * 1000);                 // 片头（t < 0）还没有声音：音轨往后推这么多毫秒
 const workers = [first, ...await Promise.all(Array.from({ length: WORKERS - 1 }, (_, i) => launch(i + 1)))];
 console.log(`导出 ${T0}s–${T1.toFixed(2)}s，${N} 帧，${workers.length} 个 worker → ${OUT}`);
 
 const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', PNG ? 'png' : 'mjpeg', '-i', '-',
-  '-ss', String(T0), '-t', String(T1 - T0), '-i', AUDIO,
-  '-map', '0:v', '-map', '1:a', '-c:v', 'libx264', '-preset', PRESET, '-crf', String(CRF), '-pix_fmt', 'yuv420p', ...(PNG ? ['-tune', 'grain'] : []),
+  '-ss', String(A0), '-t', String(Math.max(T1 - A0, .05)), '-i', AUDIO,
+  '-map', '0:v', '-map', '1:a', ...(DELAY ? ['-af', `adelay=${DELAY}:all=1`] : []), '-c:v', 'libx264', '-preset', PRESET, '-crf', String(CRF), '-pix_fmt', 'yuv420p', ...(PNG ? ['-tune', 'grain'] : []),
   '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
   '-c:a', 'aac', '-b:a', '256k', '-shortest', '-movflags', '+faststart', OUT], { stdio: ['pipe', 'inherit', 'inherit'] });
 const ffDone = new Promise((res, rej) => ff.on('close', c => c === 0 ? res() : rej(new Error(`ffmpeg 退出码 ${c}`))));

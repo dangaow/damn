@@ -73,6 +73,66 @@ function POLY(t) {
   return s;
 }
 
+// ================================================================ 片头 · 光敏警告（t < 0，音轨还没开始）
+// 首尾相接：片尾最后那滴雨落进画面正中的那一刻就是片头第一帧。雨滴在正中溅开一圈涟漪，涟漪停住变成倒数的圆环，
+// 3、2、1 走完，圆环收回成一个点 → 开机从这个点溅成横线。这一段本身不闪、不抖、不变亮。
+const PRE = 3.6, DROP_FALL = .7;                                                    // 片头长度；最后那滴雨落多久
+const CD_END = -.3, WARN_R = 64;                                                     // 倒数在 -3.3 → -0.3 走完（每个数一秒）；圆环半径
+const WARN = {
+  label: 'PHOTOSENSITIVITY WARNING', head: '光敏性癫痫警告',
+  zh: ['本片含有频闪、强光与快速闪烁的画面，可能诱发光敏性癫痫。', '如您或家人有癫痫病史，请谨慎观看；观看时如感到不适，请立即停止。'],
+  en: ['THIS VIDEO CONTAINS FLASHING LIGHTS AND STROBE EFFECTS THAT MAY', 'TRIGGER SEIZURES IN PEOPLE WITH PHOTOSENSITIVE EPILEPSY.'],
+};
+function lastDrop(c, k) {                                                           // 最后一滴雨，k 0..1：从画面上方自由落体到正中（片尾和片头共用）
+  const y = lerp(-60, H / 2, k * k);
+  c.strokeStyle = 'rgba(230,238,255,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * (1 - k * .9)); c.lineTo(W / 2, y); c.stroke();
+  c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
+}
+function warnText(c, a, blur) {
+  if (a <= .005) return;
+  const cy = H / 2;
+  c.save(); c.globalAlpha = a; if (blur > .05) c.filter = `blur(${blur.toFixed(1)}px)`;
+  c.letterSpacing = '5px'; text(c, WARN.label, W / 2 + 2.5, cy - 318, 20, { w: 400, fam: MONO, fill: C.red }); c.letterSpacing = '0px';
+  text(c, WARN.head, W / 2, cy - 256, 46, { fill: C.white });
+  c.fillStyle = 'rgba(201,206,214,.28)'; c.fillRect(W / 2 - 36, cy - 212, 72, 1);
+  WARN.zh.forEach((s, i) => text(c, s, W / 2, cy - 172 + i * 44, 27, { w: 400, fill: 'rgba(225,229,238,.86)' }));
+  WARN.en.forEach((s, i) => text(c, s, W / 2, cy + 156 + i * 30, 16, { w: 400, fam: MONO, fill: 'rgba(190,205,240,.5)' }));
+  c.restore();
+}
+scene({ name: '光敏警告', t0: -PRE, t1: 0,
+  bg: () => ({ mode: 'solid', a: '#000000' }),
+  draw(c, t, lt) {
+    c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+    if (lt < 0) { lastDrop(c, 1 + lt / DROP_FALL); return; }                       // 运动模糊的子帧落在接缝之前：还是那滴雨在落
+    const cx = W / 2, cy = H / 2;
+    const into = easeOut(lt / .3), back = easeIn((t - CD_END) / -CD_END);          // 涟漪扩到圆环大小；最后 0.3 秒圆环收回成点
+    const r = lerp(lerp(4, WARN_R, into), 4, back);
+    warnText(c, ease((lt - .12) / .5) * (1 - ease((t - CD_END + .25) / .3)), 6 * (1 - ease((lt - .12) / .5)) + 4 * ease((t - CD_END + .25) / .3));
+    // 外面那圈涟漪：跟着扩开，很淡，慢慢散掉
+    const o = easeOut(lt / 1.4);
+    if (o < 1) { c.strokeStyle = `rgba(210,222,255,${.35 * (1 - o) * (1 - o)})`; c.lineWidth = 1.5; c.beginPath(); c.arc(cx, cy, lerp(6, WARN_R * 3.2, o), 0, 7); c.stroke(); }
+    // 圆环：底下一圈很淡的轨道，上面是剩下的时间（从 12 点钟方向顺时针减少），头上一颗亮点
+    const rem = clamp((CD_END - t) / 3), a0 = -Math.PI / 2;
+    c.lineWidth = 2;
+    c.strokeStyle = `rgba(225,232,255,${lerp(lerp(.9, .16, into), 1, back) * clamp((1 - back) / .3)})`; c.beginPath(); c.arc(cx, cy, r, 0, 7); c.stroke();
+    if (rem > 0) {
+      const e = a0 + 2 * Math.PI * rem;
+      c.strokeStyle = `rgba(242,241,238,${.8 * into})`; c.beginPath(); c.arc(cx, cy, r, a0, e); c.stroke();
+      c.fillStyle = `rgba(255,255,255,${into})`; c.beginPath(); c.arc(cx + Math.cos(e) * r, cy + Math.sin(e) * r, 3.2, 0, 7); c.fill();
+    }
+    // 数字：3 → 2 → 1，每秒一个，淡入淡出交叉，不闪
+    const left = CD_END - t;
+    if (left > 0 && left <= 3) {
+      const n = Math.ceil(left - 1e-6), ph = n - left;                             // ph：这个数出现了多久（0..1）
+      const a = ease(ph / .22) * ease((1 - ph) / .18);
+      c.save(); c.globalAlpha = a; text(c, String(n), cx, cy + 2 + 6 * (1 - ease(ph / .3)), 50, { w: 400, fam: MONO, fill: C.white }); c.restore();
+    }
+    if (lt < .2) { c.fillStyle = `rgba(255,255,255,${1 - lt / .2})`; c.beginPath(); c.arc(cx, cy, 4, 0, 7); c.fill(); }   // 雨滴本身：落下的那一点
+    if (back > .6) { c.fillStyle = `rgba(255,255,255,${(back - .6) / .4})`; c.beginPath(); c.arc(cx, cy, 4, 0, 7); c.fill(); }   // 收回成开机的那个点
+  },
+  fx: () => ({ grain: .25, scan: .3, hud: 0, ca: .35 }),                           // 和片尾最后那几帧一样的底子；色散收小，字要看得清（接缝那一帧只有正中一个点，看不出差别）
+});
+
 // ================================================================ 0 · 开机
 scene({ name: '开机', t0: 0, t1: D.bar0,
   bg: (t, lt) => ({ mode: 'static', a: '#000000', amt: lt > 1.08 ? .55 : 0 }),
@@ -1157,7 +1217,7 @@ scene({ name: 'GAME OVER', t0: T_END0, t1: D.duration,
 // 最后那滴雨落出画面后，雨又下起来，回到开头的雨夜；"证词"的位置上写的是做这首歌的人。
 // 音乐：伴奏第 24–33 小节降 2 个半音（变调也变速，见 credits_audio.py），一小节 2.866 秒，每条字幕停一小节。
 const T_CRED = D.duration, CRED_SLOW = 110 / 98, CRED_BAR = BAR * CRED_SLOW, CRED_LEN = CRED_BAR * 9;
-const T_FINDROP = T_CRED + CRED_LEN + .3, MV_END = T_FINDROP + .7;                // 音乐结束、黑 0.3 秒后，最后一滴雨从上面落到画面正中，落下的那一刻全片结束（开头就从这一点溅开）
+const T_FINDROP = T_CRED + CRED_LEN + .3, MV_END = T_FINDROP + DROP_FALL;         // 音乐结束、黑 0.3 秒后，最后一滴雨从上面落到画面正中；落到的那一刻就是片头第一帧（从这一点溅开）
 const credAt = s => T_CRED + (s - barT(24)) * CRED_SLOW;                            // 伴奏原来的时间 → 片尾里的时间
 const CRED_GAP = M.gap(80.2).map(credAt);                                           // 原曲点题前那 0.4 秒鼓停：雨冻住、画面压暗
 const CREDITS = [['作词', 'dangao_w'], ['作曲', 'dangao_w'], ['编曲', 'luvsak111'], ['混音', 'YuKIluv7'], ['视觉', 'dangao_w']]
@@ -1177,11 +1237,9 @@ scene({ name: '片尾', t0: T_CRED, t1: MV_END + 1,
   weather: (t, lt) => ({ rain: .26 * credRainK(t, lt), rt: credRain(Math.floor(t * 12) / 12), street: .14 * clamp(lt / 2.5), wind: .22 }),
   bg: () => ({ mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: .9, speed: 1, pulse: 0 }),
   draw(c, t, lt) {
-    if (t >= T_FINDROP) {                                                          // 最后一滴雨：和雨夜开头那滴一样，只是从上往下落进画面正中
-      const k = clamp((t - T_FINDROP) / (MV_END - .1 - T_FINDROP)), y = lerp(-60, H / 2, k * k);   // 自由落体
+    if (t >= T_FINDROP) {                                                          // 最后一滴雨：和雨夜开头那滴一样，只是从上往下落进画面正中；最后一帧还差一点没落到，落到在片头第一帧
       c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
-      c.strokeStyle = 'rgba(230,238,255,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * (1 - k * .9)); c.lineTo(W / 2, y); c.stroke();
-      c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
+      lastDrop(c, clamp((t - T_FINDROP) / DROP_FALL));
       return;
     }
     let i = -1; CREDITS.forEach((cr, j) => { if (t >= cr.t) i = j; });
