@@ -470,7 +470,7 @@ function verseLine(c, t, line, idx, o = {}) {
   const a = clamp((t - line.t) / .14), x = 150, y = H - 290;
   c.save();
   c.beginPath(); c.rect(0, y - 260, W, 260 * a + 120); c.clip();
-  if (o.label) text(c, o.label, x - 4, y - 165, 112, { align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
+  if (o.label) text(c, o.label, x - 4, y - 165, 112, { align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2, clean: true });
   else text(c, String(idx).padStart(2, '0'), x - 8, y - 150, 150, { fam: ANTON, w: 400, align: 'left', fill: null, stroke: 'rgba(200,215,255,.45)', lw: 2 });
   const dev = clamp((t - line.t) / .28);                                             // 显影：从过曝发虚沉淀成清晰的字
   c.save(); c.filter = dev < 1 ? `blur(${(1 - dev) * 7}px)` : 'none';
@@ -836,7 +836,7 @@ scene({ name: '都是我', t0: D.kicks.find(k => k > 47), t1: lineAt(52.86).t,
     if (M.gap(t)) return;
     const kc = M.count('kick', this.t0 - .01, t), step = kc * .21 + easeOut(clamp(M.last('kick', t).since / .1)) * .0;
     c.save(); c.translate(W - 430, H / 2 + 30); c.rotate(step);
-    text(c, '我', 0, 0, 900, { fam: SERIF, fill: null, stroke: `rgba(224,17,43,${.5 + M.hit('kick', t, 6) * .4})`, lw: 5 }); c.restore();
+    text(c, '我', 0, 0, 900, { fam: SERIF, fill: null, stroke: `rgba(224,17,43,${.5 + M.hit('kick', t, 6) * .4})`, lw: 5, clean: true }); c.restore();
     if (t >= T_UP3) {                                                               // 跳八度：硬切成一个巨大的红"我"，之后按十六分音符红黑互换
       const alt = t > T_UP3 + .12 && Math.floor((t - T_UP3) / STEP) % 2;
       if (alt) { c.fillStyle = C.red; c.fillRect(0, 0, W, H); }
@@ -1228,9 +1228,10 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
   fx(t) {
     const m = t >= T_SLAM && t < T_LAST ? memAt(t) : null, h = m ? Math.exp(-m.since * 14) : 0;
     return { ca: 5 + h * 9, glitch: m ? .25 + h * .5 : 0, gseed: m ? m.i : 0, flash: m ? (m.since < 2 / 30 ? .8 : 0) : (t >= T_LAST && t < T_LAST + .07 ? 1 : 0),
-      invert: m && m.how === 'invert' ? 1 : 0, grade: m && (m.how === 'red' || m.how === 'sick') ? m.how : 'silver', gradeMix: m ? (m.how === 'red' || m.how === 'sick' ? 1 : 0) : .6,
-      zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : .5, hud: .8, hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
-      dark: t < T_SLAM ? 1 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true, tear: m ? (m.s.name === '对质' ? .35 : .9) : 0, wave: m ? .1 : 0 };
+      invert: m && m.how === 'invert' ? 1 : 0, grade: m && (m.how === 'red' || m.how === 'sick') ? m.how : 'silver',
+      gradeMix: m ? (m.how === 'red' || m.how === 'sick' ? 1 : m.how === 'invert' ? .65 : 0) : .6,          // 反色的闪回像一张暗的负片：去色、压暗，不会一大片刷白
+      zoom: 1 + h * .1, barrel: .05 + h * .3, bloom: t >= T_LAST ? .9 : m && m.how === 'invert' ? .2 : .5, hud: .8, hudMode: '◀◀ REW', tc: 88 - (t - 88) * 12,
+      dark: t < T_SLAM ? 1 : m && m.how === 'invert' ? .6 : 0, sq: crt((t - T_CRT2) / .3), bounce: 3, bounce808: true, tear: m ? (m.s.name === '对质' ? .35 : .9) : 0, wave: m ? .1 : 0 };
   },
 });
 

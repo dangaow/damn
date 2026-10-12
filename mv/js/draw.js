@@ -5,7 +5,17 @@
 
 // ---------------------------------------------------------------- 文字
 function fit(c, str, maxW, maxS, w = 900, fam = SANS) { c.font = fnt(100, w, fam); return Math.min(maxS, 100 * maxW / Math.max(1, c.measureText(str).width)); }
+const HOL = mk(), hlx = HOL.getContext('2d');
 function text(c, str, x, y, size, o = {}) {
+  if (o.fill === null && o.stroke && o.clean) {                                    // 干净的空心字：中文字形里笔画的轮廓是互相叠着的，直接描边会露出字里面的线。
+    const h = hlx; h.setTransform(1, 0, 0, 1, 0, 0); h.clearRect(0, 0, HOL.width, HOL.height);   // 先描两倍粗的边，再把字的内部挖掉，只留外面那一半
+    h.setTransform(c.getTransform()); h.letterSpacing = c.letterSpacing ?? '0px';
+    h.font = fnt(size, o.w ?? 900, o.fam ?? SANS); h.textAlign = o.align ?? 'center'; h.textBaseline = o.base ?? 'middle'; h.lineJoin = 'round';
+    h.lineWidth = (o.lw ?? size * .04) * 2; h.strokeStyle = o.stroke; h.strokeText(str, x, y);
+    h.globalCompositeOperation = 'destination-out'; h.fillStyle = '#000'; h.fillText(str, x, y); h.globalCompositeOperation = 'source-over';
+    c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.drawImage(HOL, 0, 0); c.restore();
+    return;
+  }
   c.font = fnt(size, o.w ?? 900, o.fam ?? SANS); c.textAlign = o.align ?? 'center'; c.textBaseline = o.base ?? 'middle';
   if (o.stroke) { c.lineJoin = 'round'; c.lineWidth = o.lw ?? size * .04; c.strokeStyle = o.stroke; c.strokeText(str, x, y); }
   if (o.fill !== null) { c.fillStyle = o.fill ?? C.white; c.fillText(str, x, y); }
@@ -183,7 +193,8 @@ function melt(c, src, sx, sy, sw, sh, k, seed) {
   for (let x = 0; x < sw; x += col) {
     const d = k * (120 + hash(x, seed) * 520) * (.4 + .6 * Math.abs(Math.sin(x * .013 + seed)));
     c.drawImage(src, sx + x, sy, col, sh, sx + x, sy + d, col, sh);
-    if (d > 4) c.drawImage(src, sx + x, sy + sh * .5, col, 2, sx + x, sy + sh * .5, col, d + sh * .2);   // 拉丝
+    if (d > 4) { c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = .45;                 // 拉丝：叠加成发亮的丝，不会把铬金属中间那条暗带拉成一块块灰色的方块
+      c.drawImage(src, sx + x, sy + sh * .5, col, 2, sx + x, sy + sh * .5, col, d + sh * .2); c.restore(); }
   }
 }
 
