@@ -90,11 +90,12 @@ const WARN = {
   en: ['THIS VIDEO CONTAINS FLASHING LIGHTS AND STROBE EFFECTS THAT MAY', 'TRIGGER SEIZURES IN PEOPLE WITH PHOTOSENSITIVE EPILEPSY.'],
   ts: '[00:00.00]  NOTICE  ·  TAPE 01',
 };
-function lastDrop(c, k) {                                                           // 最后一滴雨，k 0..1：从画面上方自由落体到正中（片尾和片头共用）
-  const y = lerp(-60, H / 2, k * k);
-  c.strokeStyle = 'rgba(230,238,255,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * (1 - k * .9)); c.lineTo(W / 2, y); c.stroke();
-  c.fillStyle = '#fff'; c.beginPath(); c.arc(W / 2, y, 4, 0, 7); c.fill();
+function fallDrop(c, x, y, tail, a = 1, glow = 0) {                                // 一滴雨：细细一道雨丝拖在后面，头上一个亮点（glow：外面再晕一圈光，混在大雨里也看得出是"那一滴"）
+  if (glow > 0) { const g = c.createRadialGradient(x, y, 0, x, y, 26); g.addColorStop(0, `rgba(215,228,255,${.5 * glow * a})`); g.addColorStop(1, 'rgba(215,228,255,0)'); c.fillStyle = g; c.fillRect(x - 26, y - 26, 52, 52); }
+  c.strokeStyle = `rgba(230,238,255,${.9 * a})`; c.lineWidth = 3 + glow; c.beginPath(); c.moveTo(x, y - tail); c.lineTo(x, y); c.stroke();
+  c.fillStyle = `rgba(255,255,255,${a})`; c.beginPath(); c.arc(x, y, 4 + glow * 1.5, 0, 7); c.fill();
 }
+function lastDrop(c, k) { fallDrop(c, W / 2, lerp(-60, H / 2, k * k), 120 * (1 - k * .9)); }   // 最后一滴雨，k 0..1：从画面上方自由落体到正中（片尾和片头共用）
 const warnAmb = (t, lt) => ease(lt / .7) * (1 - ease((t + .5) / .45));              // 夜色、雨、倒影：落下之后慢慢出来，开机前收掉
 function warnWaves(t) {                                                             // 每组水波此刻的波前半径和强度
   const fade = 1 - ease((t + .5) / .45);
@@ -983,6 +984,31 @@ function lightning(t) {
   return v;
 }
 const T_WASH = L_LAST.end;
+// 「我的心像大雨落下」：每个字像结尾那滴雨——一滴雨从画面上方自由落体，落到字的位置溅开一小圈涟漪，字从过曝沉淀下来；
+// 退场时字一个个缩回一滴雨，往下落出画面（和 GAME OVER 后最后那滴雨一样）。鼓停时字和雨一起冻住
+function rainWords(c, t) {
+  const line = L_RAIN, tf = M.gap(t)?.[0] ?? t, size = 96, y0 = H * .52, FALL = .34; c.font = fnt(size, 400, SERIF);
+  const ws = line.words.map(q => c.measureText(q.w).width); let x = W / 2 - ws.reduce((a, b) => a + b, 0) / 2;
+  line.words.forEach((q, k) => {
+    const cx = x + ws[k] / 2; x += ws[k];
+    const t1 = Math.max(q.t, line.t + FALL), t0 = t1 - FALL;                        // 落到的那一刻 = 唱到这个字（第一个字从这句开头才开始落）
+    if (tf < t0) return;
+    if (tf < t1) { const f = (tf - t0) / FALL; fallDrop(c, cx, lerp(-60, y0, f * f), 120 * (1 - f * .9), 1, 1); return; }
+    const dt = tf - t1, settle = easeOut(dt / .32), go = clamp((tf - Math.max(t1 + .3, line.end - .5 + k * .03)) / .35);
+    if (dt < .55) {                                                                 // 溅开：和片头那滴雨一样的一圈涟漪（玻璃上看是扁的）
+      const p = dt / .55; c.strokeStyle = `rgba(215,228,255,${.7 * (1 - p) * (1 - p)})`; c.lineWidth = 1.6;
+      c.beginPath(); c.ellipse(cx, y0 + size * .42, 6 + p * 70, (6 + p * 70) * .32, 0, 0, 7); c.stroke();
+    }
+    if (go < 1) {
+      c.save(); c.globalAlpha = settle * (1 - go); c.translate(cx, y0); c.scale(1 - .5 * go, 1 - .5 * go);
+      if (settle < 1) c.filter = `blur(${((1 - settle) * 5).toFixed(1)}px)`;
+      c.shadowColor = `rgba(170,195,255,${.35 + .45 * (1 - settle)})`; c.shadowBlur = 14 + 26 * (1 - settle);
+      text(c, q.w, 0, 0, size, { w: 400, fam: SERIF, fill: `rgb(${lerp(255, 233, settle) | 0},${lerp(255, 239, settle) | 0},255)` });
+      c.restore();
+    }
+    if (go > 0 && go < 1) fallDrop(c, cx, lerp(y0, H + 140, easeIn(go)), 120 * Math.min(1, go * 2), 1 - .3 * go, 1);   // 缩回一滴雨落下去
+  });
+}
 scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
   weather: (t, lt) => ({ rain: .34, n: Math.round(600 * (t < T_WASH ? 1 : 1 - clamp((t - T_WASH) / 1.5) * .5) * clamp(.3 + lt / .6)), len: 1.2, rt: M.gap(t)?.[0] ?? t, street: .12 }),
   bg: t => ({ mode: 'night', a: '#010309', b: '#0a1430', c: '#5f7dff', amt: .9, speed: .8, pulse: lightning(t) * 1.5 }),
@@ -997,38 +1023,10 @@ scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
     }
     const { line } = M.lyric(t);
     const wash = t > T_WASH ? easeIn((t - T_WASH) / .7) : 0;
-    if (line === L_RAIN) {                                                          // 字像雨痕一样出现在窗玻璃上
-      const tf = M.gap(t)?.[0] ?? t;                                                // 鼓停时字和雨一起冻住
-      const size = 96, y0 = H * .52; c.font = fnt(size, 400, SERIF);
-      const ws = line.words.map(q => c.measureText(q.w).width); let x = W / 2 - ws.reduce((a, b) => a + b, 0) / 2;
-      const out = clamp((line.end - tf) / .45), wash = 1 - out;                      // 退场：往下拉长、淡掉，像被雨冲掉
-      line.words.forEach((q, k) => {
-        const dt = tf - q.t + .06, cx = x + ws[k] / 2; x += ws[k];
-        if (dt <= 0) return;
-        const settle = easeOut(dt / .22), streak = 1 - settle;
-        c.save(); c.translate(cx, y0 + wash * 50);
-        for (let j = 6; j >= 1; j--) {                                              // 出现：一道竖向拉长、带残影的雨丝，收拢成字
-          const a = streak * .22 * (1 - j / 7) + wash * .12 * (1 - j / 7);
-          if (a < .01) continue;
-          c.save(); c.globalAlpha = a * out; c.translate(0, -j * (30 * streak) + j * 18 * wash); c.scale(1, 1 + .5 * streak + .4 * wash);
-          text(c, q.w, 0, 0, size, { w: 400, fam: SERIF, fill: '#cfdcff' }); c.restore();
-        }
-        c.globalAlpha = settle * out; c.scale(1, 1 + .5 * streak + .35 * wash);
-        c.shadowColor = 'rgba(160,190,255,.55)'; c.shadowBlur = 14;
-        text(c, q.w, 0, -38 * streak, size, { w: 400, fam: SERIF, fill: '#e9efff' });
-        c.restore();
-        const r = rand(k * 37 + 5), nd = 1 + (r() < .5 ? 1 : 0);                     // 停留：底部慢慢淌下一两道细水痕
-        for (let d = 0; d < nd; d++) {
-          const dx = (r() - .5) * ws[k] * .7, len = easeOut((dt - .3 - r() * .4) / 2.6) * (30 + r() * 90), top = y0 + size * .32;
-          if (len <= 1) continue;
-          const g = c.createLinearGradient(0, top, 0, top + len);
-          g.addColorStop(0, `rgba(210,225,255,${.45 * out})`); g.addColorStop(1, 'rgba(210,225,255,0)');
-          c.fillStyle = g; c.fillRect(cx + dx - 1, top, 2, len);
-          c.fillStyle = `rgba(225,235,255,${.55 * out})`; c.beginPath(); c.arc(cx + dx, top + len, 2.6, 0, 7); c.fill();
-        }
-      });
+    if (t >= L_RAIN.t && t < L_RAIN.end + .5) rainWords(c, t);                   // 我的心像大雨落下（退场会拖过句尾一点，所以不放在下面按句分的分支里）
+    if (line === L_RAIN) {
     } else if (line === L_TRUE) {
-      const size = 82; c.font = fnt(size, 400, SERIF); const a = clamp((t - line.t) / .35) * clamp((line.end - t) / .3);
+      const size = 82; c.font = fnt(size, 400, SERIF); const a = clamp((t - line.t - .12) / .35) * clamp((line.end - t) / .3);   // 等上一句的字落走再出来
       const ws = line.words.map(q => c.measureText(q.w).width); let x = W / 2 - ws.reduce((p, q) => p + q, 0) / 2;
       c.globalAlpha = a;
       line.words.forEach((q, k) => {
