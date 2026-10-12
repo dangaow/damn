@@ -744,6 +744,41 @@ const L_HURT = lineAt(67.86), T_HURT = wordT(L_HURT, '伤');
 function hurtRed(t) { return Math.max(M.hit('snare', t, 6), .55 * M.hit('hat', t, 9)); }
 const warmth = t => t < T_HURT ? 1 : lerp(1, .12, ease((t - T_HURT) / 4.5));
 const T_PRERAIN = lineAt(73.7).t - 1.1;
+// 两支仙女棒：火花往四周炸、落下的火星有重力，尖端在空中画的圈留下长曝光的光迹
+const sparkTip = (x, y, t, seed) => [x + Math.sin(t * 1.7 + seed) * 70 + Math.sin(t * 3.4 + seed * 2) * 26, y + Math.sin(t * 3.4 + seed) * 38];
+function sparkler(c, t, x, y, seed, life = 1, hot = 1) {
+  const tip = sparkTip(x, y, t, seed);
+  if (life > .02) {
+    c.save(); c.lineCap = 'round';                                                    // 光迹：最近 0.9 秒尖端走过的路
+    for (let q = 0; q < 36; q++) {
+      const t0 = t - q * .035, t1 = t - (q + 1) * .035, a = (1 - q / 36) ** 1.4 * .55 * life, [x0, y0] = sparkTip(x, y, t0, seed), [x1, y1] = sparkTip(x, y, t1, seed);
+      c.strokeStyle = `rgba(255,${210 - q * 2 | 0},${150 - q * 3 | 0},${a * 1.4})`; c.lineWidth = 9 - q * .2; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+    }
+    c.restore();
+  }
+  c.strokeStyle = 'rgba(40,30,24,.9)'; c.lineWidth = 3; c.beginPath(); c.moveTo(tip[0], tip[1]); c.lineTo(tip[0] - 60, tip[1] + 330); c.stroke();   // 铁丝
+  if (life <= .02) { c.fillStyle = 'rgba(120,30,20,.8)'; c.beginPath(); c.arc(tip[0], tip[1], 4, 0, 7); c.fill(); return tip; }
+  const f = frameNo(t), r = rand(f * 7 + seed * 1000 | 0);
+  c.save(); c.globalCompositeOperation = 'lighter';
+  const R = 150 * life * (1 + .2 * hot), g = c.createRadialGradient(tip[0], tip[1], 0, tip[0], tip[1], R);
+  g.addColorStop(0, `rgba(255,250,235,${.95 * life})`); g.addColorStop(.12, `rgba(255,210,150,${.6 * life})`); g.addColorStop(1, 'rgba(255,140,60,0)');
+  c.fillStyle = g; c.fillRect(tip[0] - R, tip[1] - R, 2 * R, 2 * R);
+  const n = Math.round(70 * life * (.7 + .3 * hot));                                   // 噼啪的火花：每帧重新炸一次，带分叉
+  for (let i = 0; i < n; i++) {
+    const a = r() * 6.2832, len = (20 + r() * 110) * life, ex = tip[0] + Math.cos(a) * len, ey = tip[1] + Math.sin(a) * len;
+    c.strokeStyle = `rgba(255,${220 + r() * 35 | 0},${150 + r() * 80 | 0},${.5 + r() * .5})`; c.lineWidth = .8 + r() * 1.4;
+    c.beginPath(); c.moveTo(tip[0] + Math.cos(a) * 8, tip[1] + Math.sin(a) * 8); c.lineTo(ex, ey);
+    if (r() < .4) { const b = a + (r() - .5) * 1.4; c.lineTo(ex + Math.cos(b) * len * .3, ey + Math.sin(b) * len * .3); }
+    c.stroke();
+  }
+  for (let i = 0; i < 60; i++) {                                                       // 落下的火星
+    const per = .7 + hash(i, seed + 3) * .6, age = mod(t + hash(i, seed + 4) * per, per), birth = t - age, [bx, by] = sparkTip(x, y, birth, seed);
+    const vx = (hash(i, seed + 5) - .5) * 260, vy = -60 - hash(i, seed + 6) * 120, px = bx + vx * age, py = by + vy * age + 520 * age * age, k = age / per;
+    c.fillStyle = `rgba(255,${lerp(220, 120, k) | 0},${lerp(160, 40, k) | 0},${(1 - k) * .9 * life})`; c.fillRect(px, py, 2.4, 2.4);
+  }
+  c.restore();
+  return tip;
+}
 scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
   weather: t => t < T_PRERAIN ? null : ({ rain: .3 * easeIn((t - T_PRERAIN) / 1.1), n: Math.round(lerp(40, 600, easeIn((t - T_PRERAIN) / 1.1))), len: 1.2 }),   // 转场：雨开始落进回忆里
   bg: function (t) { return { mode: 'leak', a: '#05060a', b: '#ff7418', c: '#ffd59a', amt: warmth(t) * (.85 + M.hit('snare', t, 5) * .25) * lerp(.5, 1, ease((t - this.t0) / 1.2)), speed: .5, seed: 3 }; },
@@ -753,18 +788,24 @@ scene({ name: '面具掉了', t0: lineAt(63.36).t, t1: lineAt(73.7).t,
     dust(c, t, 140, 21, (.3 + sp * .25) * clamp(lt / 1.2), '#ffe6c8');
     const dist = t < T_HURT ? lerp(900, 160, ease((t - this.t0) / (T_HURT - .6 - this.t0))) : lerp(160, 1250, ease((t - T_HURT) / 4.6));
     const cy = H * .37 + Math.sin(t * .6) * 10, ax = W / 2 - dist / 2, bx = W / 2 + dist / 2;
-    if (t > lineAt(65.46).t && t < T_HURT) { c.strokeStyle = `rgba(255,236,210,${.55 * clamp((t - 65.46) / 1.2)})`; c.lineWidth = 1.6; c.beginPath(); c.moveTo(ax, cy); c.lineTo(bx, cy); c.stroke(); }
-    if (t >= T_HURT && t < T_HURT + 1.4) {                                          // 连线断成红色裂痕
-      const r = rand(31), a = (t - T_HURT < .5 ? frameNo(t) % 2 : 1) * clamp(1 - (t - T_HURT - .6) / .8);
-      c.strokeStyle = `rgba(230,20,45,${a})`; c.lineWidth = 2.4; c.beginPath(); c.moveTo(ax, cy);
-      for (let i = 1; i < 14; i++) c.lineTo(lerp(ax, bx, i / 14), cy + (r() - .5) * 36); c.lineTo(bx, cy); c.stroke();
+    const outB = t > 71.6 ? (hash(M.last('hat', t).i, 4) < .5 ? .25 : 1) * clamp(1 - (t - 71.6) / 1.2) : 1;   // 第二支慢慢烧完
+    bokeh(c, t, { n: 18, seed: 61, cols: ['255,170,90', '255,200,140', '255,120,60'], alpha: .22 * warmth(t), y0: H * .05, span: .35, r: .8 });   // 远处夏夜的灯串
+    const tA = sparkler(c, t, ax, cy, 1.3, 1, sp), tB = sparkler(c, t, bx, cy, 4.1, t >= T_HURT ? outB : 1, sp);
+    if (t > lineAt(65.46).t && t < T_HURT) {                                          // 两支挨近时，火花在中间连成一道
+      const k = clamp((t - 65.46) / 1.2), r = rand(frameNo(t) * 3 + 11); c.save(); c.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 26 * k; i++) { const u = r(), x = lerp(tA[0], tB[0], u), y = lerp(tA[1], tB[1], u) + Math.sin(u * Math.PI) * -30 + (r() - .5) * 24;
+        c.fillStyle = `rgba(255,230,180,${.4 + r() * .5})`; c.fillRect(x, y, 2.5, 2.5); }
+      c.restore();
     }
-    const outB = t > 71.6 ? (hash(M.last('hat', t).i, 4) < .5 ? .25 : 1) * clamp(1 - (t - 71.6) / 1.2) : 1;
-    [[ax, 1], [bx, t >= T_HURT ? outB : 1]].forEach(([x, a]) => {
-      const R = 70 * (1 + sp * .3), g = c.createRadialGradient(x, cy, 0, x, cy, R);
-      g.addColorStop(0, `rgba(255,248,235,${a})`); g.addColorStop(.14, `rgba(255,210,160,${.7 * a})`); g.addColorStop(1, 'rgba(255,150,80,0)');
-      c.fillStyle = g; c.fillRect(x - R, cy - R, 2 * R, 2 * R);
-    });
+    if (t >= T_HURT && t < T_HURT + 1.2) {                                             // 「伤害」：撞在一起，迸出一团红色火花
+      const k = t - T_HURT, mx = (tA[0] + tB[0]) / 2, my = (tA[1] + tB[1]) / 2; c.save(); c.globalCompositeOperation = 'lighter';
+      const R = 420 * Math.exp(-k * 3), g = c.createRadialGradient(mx, my, 0, mx, my, R); g.addColorStop(0, `rgba(255,40,60,${.8 * Math.exp(-k * 4)})`); g.addColorStop(1, 'rgba(255,20,40,0)');
+      c.fillStyle = g; c.fillRect(mx - R, my - R, 2 * R, 2 * R);
+      for (let i = 0; i < 260; i++) { const a = hash(i, 71) * 6.2832, v = 250 + hash(i, 72) * 900, x = mx + Math.cos(a) * v * k, y = my + Math.sin(a) * v * k + 600 * k * k, sz = 3 + hash(i, 75) * 4;
+        c.strokeStyle = `rgba(255,${40 + hash(i, 73) * 90 | 0},${50 + hash(i, 74) * 40 | 0},${clamp(1 - k / 1.1)})`; c.lineWidth = sz * .6;
+        c.beginPath(); c.moveTo(x, y); c.lineTo(x - Math.cos(a) * v * .03, y - Math.sin(a) * v * .03); c.stroke(); }
+      c.restore();
+    }
     const { line } = M.lyric(t);
     if (!line) return;
     const size = fit(c, line.text, W * .78, 84, 400, SERIF), a = clamp((t - line.t) / .45) * clamp((line.end - t) / .35);
