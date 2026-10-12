@@ -305,14 +305,14 @@ function phMosaic(p, x, y, w, m, t) {                                           
     }
   }
 }
-function phone(c, t) {
-  const on = easeOut((t - PH_ON) / .5); if (on <= 0) return;
+function phone(c, t, at = { x: PH_X, y: PH_Y, s: 1 }) {
+  const on = easeOut((t - PH_ON) / .5); if (on <= 0 || at.x < -300 || at.x > W + 300) return;
   let li = -1; for (let j = 0; j < PH_MSG.length; j++) if (t >= PH_MSG[j].t) li = j;
   const since = li < 0 ? 9 : t - PH_MSG[li].t, pulse = Math.exp(-since * 2.6), a = on * (.82 + .18 * pulse);
   const buzz = li >= 0 && !PH_MSG[li].me ? Math.exp(-since * 9) * 5 : 0, dx = (hash(frameNo(t), 41) - .5) * 2 * buzz, dy = (hash(frameNo(t), 42) - .5) * buzz;
-  const g = c.createRadialGradient(PH_X, PH_Y, 0, PH_X, PH_Y, 440);                // 屏幕的光照到雾里
-  g.addColorStop(0, `rgba(150,175,255,${(.11 + .09 * pulse) * on})`); g.addColorStop(1, 'rgba(150,175,255,0)');
-  c.fillStyle = g; c.fillRect(PH_X - 440, PH_Y - 440, 880, 880);
+  const GR = 440 * at.s, g = c.createRadialGradient(at.x, at.y, 0, at.x, at.y, GR);   // 屏幕的光照到雾里
+  g.addColorStop(0, `rgba(150,175,255,${(.11 + .09 * pulse) * on * 1.6})`); g.addColorStop(1, 'rgba(150,175,255,0)');
+  c.fillStyle = g; c.fillRect(at.x - GR, at.y - GR, 2 * GR, 2 * GR);
   const p = PH_CV.getContext('2d'), cx = 180, cy = 280, w = 184, h = 360, top = cy - h / 2, bot = cy + h / 2, L = cx - w / 2, R = cx + w / 2;
   p.setTransform(1, 0, 0, 1, 0, 0); p.clearRect(0, 0, 360, 560); p.globalAlpha = 1;
   p.fillStyle = '#04060e'; p.beginPath(); p.roundRect(L - 8, top - 8, w + 16, h + 16, 26); p.fill();   // 机身：几乎看不见，只有被屏幕照亮的一圈边
@@ -340,7 +340,7 @@ function phone(c, t) {
   p.restore();
   if (pulse > .01) { p.fillStyle = `rgba(200,215,255,${.07 * pulse})`; p.fillRect(L, top, w, h); }
   p.restore();
-  c.save(); c.translate(PH_X + dx, PH_Y + dy); c.rotate(-.06); c.filter = 'blur(2.2px)'; c.globalAlpha = .85 * on; c.drawImage(PH_CV, -cx, -cy); c.restore();
+  c.save(); c.translate(at.x + dx * at.s, at.y + dy * at.s); c.rotate(-.06); c.scale(at.s, at.s); c.filter = `blur(${(2.2 * at.s + .6).toFixed(1)}px)`; c.globalAlpha = .9 * on; c.drawImage(PH_CV, -cx, -cy); c.restore();
 }
 // 玻璃上的雨滴（前景）：每句开头先对焦在玻璃上（雨滴清楚、字还虚），然后焦点拉到字上（雨滴虚掉）
 const GLASS = mk();
@@ -388,12 +388,13 @@ function verseLine(c, t, line, idx, o = {}) {
 scene({ name: '雨夜', t0: D.lyrics[0].t, t1: lineAt(32.44).t,
   weather: (t, lt) => { const t12 = Math.floor(t * 12) / 12;
     return { rain: .26 * clamp((lt - .2) / .6), rt: rainTime(t12), street: .14, wind: .22 + (t > barT(11) ? (t - barT(11)) * .12 : 0) }; },
-  bg: t => ({ mode: 'night', a: '#010309', b: '#0c1a3c', c: '#4a6cff', amt: .9, speed: 1, pulse: M.hit('kick', t, 10) * .4 }),
+  bg: () => ({ mode: 'solid', a: '#010309' }),
   draw(c, t, lt) {
     const t12 = Math.floor(t * 12) / 12, rf = rainTime(t12);
     const { line, i } = M.lyric(t);
+    const bench = rainStreet(c, t, streetCam(t));                                  // 同一条街，镜头每句往前推一个地方
     if (line) vcols(c, t, i);
-    phone(c, t);
+    phone(c, t, { x: bench.x, y: bench.y - 60, s: .62 });                          // 手机丢在车站的长椅上，消息一条条进来
     if (lt < .7) {                                                                  // 转场：CRT 关机缩成的那个点，变成第一滴雨落下
       const k = lt / .7, y = lerp(H / 2, H + 100, easeIn(k));
       c.strokeStyle = 'rgba(230,238,255,.95)'; c.lineWidth = 3; c.beginPath(); c.moveTo(W / 2, y - 120 * k); c.lineTo(W / 2, y); c.stroke();
