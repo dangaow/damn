@@ -846,6 +846,8 @@ scene({ name: '大雨', t0: L_RAIN.t, t1: T_WASH + .8,
   bg: t => ({ mode: 'night', a: '#010309', b: '#0a1430', c: '#5f7dff', amt: .9, speed: .8, pulse: lightning(t) * 1.5 }),
   draw(c, t, lt) {
     const g = M.gap(t), rf = g ? g[0] : t, heavy = t < T_WASH ? 1 : 1 - clamp((t - T_WASH) / 1.5) * .5;
+    stormView(c, rf, lightning(t));                                                 // 隔着窗：失焦的街、车灯，闪电时远处的楼亮出剪影
+    rivulets(c, rf, 26, heavy);                                                      // 窗玻璃上一道道往下流的雨水
     if (lt < 2) {                                                                   // 转场：桥段剩下的那个光点，留在原位变成路灯
       const k = lt / 2, x = W / 2 - 625, y = H * .37, R = lerp(70, 150, k);
       const col = [lerp(255, 120, k), lerp(220, 160, k), lerp(170, 255, k)].map(v => v | 0).join(',');
@@ -920,7 +922,8 @@ const TVC = mk(), tvx = TVC.getContext('2d');
 const NOISE = Array.from({ length: 4 }, (_, k) => { const c = mk(320, 180), x = c.getContext('2d'), im = x.createImageData(320, 180), r = rand(200 + k);
   for (let i = 0; i < im.data.length; i += 4) { const v = r() * 255 | 0; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; } x.putImageData(im, 0, 0); return c; });
 const T_TV = T_WASH + .8, T_BACK = M.gap(88.5)?.[0] ?? 88.38, T_SLAM = D.kicks.find(k => k > 88.4);
-function tvRect(s) { const w = W * s, h = H * s; return { x: (W - w) / 2, y: (H - h) / 2 - 40 * (1 - s) / .58, w, h }; }
+const TV_S = .6;                                                                     // 镜头拉远后电视占的大小
+function tvRect(s) { const w = W * s, h = H * s, k = clamp((1.05 - s) / (1.05 - TV_S)); return { x: (W - w) / 2 - 110 * s * k, y: (H - h) / 2 - 90 * (1 - s) / (1 - TV_S), w, h }; }   // 连右边的控制面板一起居中
 // 余震里两下孤立的底鼓（心跳回来）：电视里闪过 0.22 秒的回忆——先是聊天记录，再是那两团光（给后面的「回放」埋伏笔）
 const TV_MEM = D.kicks.filter(k => k > T_TV && k < T_BACK).map((k, i) => ({ k, mt: [46.4, 66.0][i % 2], bg: [['#04060b', '#121a2c'], ['#1a0904', '#5a2a10']][i % 2] }));
 function tvOSD(t) {                                                                 // 录像机屏显：左上频道，右下 23:47（冒号一秒闪一次）
@@ -947,23 +950,65 @@ function tvContent(t, staticOn) {
   worldRain(tvx, t, { rain: .6, n: 360, len: 1.3, col: '200,215,255', lw: 1.6, rt: M.gap(t)?.[0] ?? t });
   tvOSD(t); return TVC;
 }
+// 一台旧的 CRT 电视放在黑屋子里：机壳、弧面玻璃、旋钮和喇叭网，下面一台录像机；电视的光照亮地板，墙上映着窗外的雨
 function drawTV(c, t, s, o = {}) {
-  const r = tvRect(s), jump = o.jump ?? 0;
+  const r = tvRect(s), jump = o.jump ?? 0, u = s;                                    // u：机壳细节跟着电视一起缩放
   c.save(); c.translate(0, -jump * 24);
+  const room = clamp((1.02 - s) / .3);                                               // 拉远了才看得见屋子
+  if (room > 0) {
+    c.save(); c.globalAlpha = room;
+    c.fillStyle = '#03040a'; c.fillRect(0, 0, W, H);
+    for (let i = 0; i < 40; i++) {                                                   // 墙上：窗外的雨投下来的影子，一道道往下滑
+      const x = hash(i, 81) * W, sp = 60 + hash(i, 82) * 90, y = mod(hash(i, 83) * H + t * sp, H + 300) - 300, len = 120 + hash(i, 84) * 220;
+      const g = c.createLinearGradient(0, y, 0, y + len); g.addColorStop(0, 'rgba(90,120,220,0)'); g.addColorStop(1, 'rgba(90,120,220,.07)');
+      c.fillStyle = g; c.fillRect(x, y, 3 + hash(i, 85) * 5, len);
+    }
+    const floorY = r.y + r.h + 180 * u, fg = c.createRadialGradient(W / 2, floorY, 0, W / 2, floorY, r.w * .9);   // 地板上电视照出来的一片光
+    fg.addColorStop(0, `rgba(90,120,255,${.22 + jump * .15})`); fg.addColorStop(1, 'rgba(90,120,255,0)');
+    c.fillStyle = fg; c.save(); c.translate(W / 2, floorY); c.scale(1, .22); c.translate(-W / 2, -floorY); c.fillRect(0, floorY - r.w, W, r.w * 2); c.restore();
+    c.restore();
+  }
   const glow = c.createRadialGradient(W / 2, r.y + r.h / 2, r.w * .3, W / 2, r.y + r.h / 2, r.w * 1.3);
-  glow.addColorStop(0, `rgba(90,120,255,${.12 + jump * .12})`); glow.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = glow; c.fillRect(0, 0, W, H);
-  c.fillStyle = '#0d0e12'; c.beginPath(); c.roundRect(r.x - 40 * s, r.y - 40 * s, r.w + 80 * s, r.h + 80 * s, 40 * s); c.fill();
+  glow.addColorStop(0, `rgba(90,120,255,${.14 + jump * .12})`); glow.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = glow; c.fillRect(0, 0, W, H);
+  // 机壳
+  const bx = r.x - 70 * u, by = r.y - 60 * u, bw = r.w + 140 * u + 220 * u, bh = r.h + 120 * u;
+  const cg = c.createLinearGradient(0, by, 0, by + bh); cg.addColorStop(0, '#2a2c33'); cg.addColorStop(.5, '#17181d'); cg.addColorStop(1, '#0c0d11');
+  c.fillStyle = cg; c.beginPath(); c.roundRect(bx, by, bw, bh, 34 * u); c.fill();
+  c.strokeStyle = 'rgba(200,210,235,.18)'; c.lineWidth = 2; c.beginPath(); c.roundRect(bx + 2, by + 2, bw - 4, bh - 4, 32 * u); c.stroke();
+  const px = r.x + r.w + 70 * u, pw = 180 * u;                                       // 右边的控制面板：喇叭网、两个旋钮、频道灯
+  c.fillStyle = '#0d0e12'; c.beginPath(); c.roundRect(px, r.y, pw, r.h, 14 * u); c.fill();
+  c.fillStyle = 'rgba(0,0,0,.6)'; for (let y = r.y + 30 * u; y < r.y + r.h * .55; y += 14 * u) c.fillRect(px + 22 * u, y, pw - 44 * u, 5 * u);
+  for (let k = 0; k < 2; k++) { const kx = px + pw / 2, ky = r.y + r.h * (.68 + k * .17), kr = 34 * u;
+    c.fillStyle = metal(c, kx - kr, ky - kr, kx + kr, ky + kr, SILVER); c.beginPath(); c.arc(kx, ky, kr, 0, 7); c.fill();
+    c.strokeStyle = '#111'; c.lineWidth = 4 * u; c.beginPath(); const a = k ? 2.3 : -.6 + Math.sin(t * .3) * .05; c.moveTo(kx, ky); c.lineTo(kx + Math.cos(a) * kr, ky + Math.sin(a) * kr); c.stroke(); }
+  c.fillStyle = '#7dff9a'; c.beginPath(); c.arc(px + 30 * u, r.y + r.h * .58, 6 * u, 0, 7); c.fill();
+  glowAt(c, px + 30 * u, r.y + r.h * .58, 30 * u, '125,255,154', .5);
+  // 屏幕：内容 + 扫描线 + 弧面玻璃的暗角和反光
   c.save(); c.beginPath(); c.roundRect(r.x, r.y, r.w, r.h, 60 * s); c.clip();
   c.drawImage(tvContent(t, o.static), r.x, r.y, r.w, r.h);
   c.fillStyle = 'rgba(0,0,0,.35)'; for (let y = r.y; y < r.y + r.h; y += 4 * Math.max(s, .5)) c.fillRect(r.x, y, r.w, 1.2 * Math.max(s, .5));
-  const v = c.createRadialGradient(W / 2, r.y + r.h / 2, r.h * .2, W / 2, r.y + r.h / 2, r.w * .62); v.addColorStop(0, `rgba(255,255,255,${jump * .12})`); v.addColorStop(1, 'rgba(0,0,0,.65)');
+  const v = c.createRadialGradient(W / 2, r.y + r.h / 2, r.h * .2, W / 2, r.y + r.h / 2, r.w * .62); v.addColorStop(0, `rgba(255,255,255,${jump * .12})`); v.addColorStop(1, 'rgba(0,0,0,.6)');
   c.fillStyle = v; c.fillRect(r.x, r.y, r.w, r.h);
-  c.restore(); c.restore();
+  const gl = c.createLinearGradient(r.x, r.y, r.x + r.w * .6, r.y + r.h); gl.addColorStop(0, 'rgba(255,255,255,.12)'); gl.addColorStop(.35, 'rgba(255,255,255,.03)'); gl.addColorStop(.36, 'rgba(255,255,255,0)');
+  c.fillStyle = gl; c.fillRect(r.x, r.y, r.w, r.h);
+  c.restore();
+  c.strokeStyle = 'rgba(0,0,0,.8)'; c.lineWidth = 10 * u; c.beginPath(); c.roundRect(r.x, r.y, r.w, r.h, 60 * s); c.stroke();
+  // 下面的录像机：绿色屏显 23:47，带仓
+  if (s < 1) {
+    const vy = by + bh + 26 * u, vw = 760 * u, vx = W / 2 - vw / 2 + 110 * u, vh = 110 * u;
+    c.fillStyle = '#121319'; c.beginPath(); c.roundRect(vx, vy, vw, vh, 10 * u); c.fill();
+    c.fillStyle = '#05060a'; c.fillRect(vx + 40 * u, vy + 34 * u, 300 * u, 22 * u);
+    c.fillStyle = '#071a0d'; c.fillRect(vx + vw - 260 * u, vy + 26 * u, 200 * u, 58 * u);
+    pixel(c, mod(t, 1) < .5 ? '23:47' : '23 47', vx + vw - 160 * u, vy + 56 * u, 40 * u, { fill: '#7dff9a' });
+    glowAt(c, vx + vw - 160 * u, vy + 56 * u, 140 * u, '125,255,154', .25);
+    c.strokeStyle = '#05060a'; c.lineWidth = 8 * u; c.beginPath(); c.moveTo(vx + 60 * u, vy + vh); c.bezierCurveTo(vx + 40 * u, vy + vh + 120 * u, vx - 200 * u, vy + vh + 60 * u, vx - 360 * u, H + 40); c.stroke();   // 电线
+  }
+  c.restore();
 }
 scene({ name: '余震', t0: T_TV, t1: T_BACK,
   bg: () => ({ mode: 'smoke', a: '#010205', b: '#060a18', amt: .5, speed: .3 }),
   draw(c, t, lt) {
-    const s = lerp(1.05, .42, ease(lt / 1.8));
+    const s = lerp(1.05, TV_S, ease(lt / 2.2));
     dust(c, t, 60, 9, .18, '#9fb4ff');
     drawTV(c, t, s, { static: !!M.gap(t), jump: M.hit('kick', t, 9) });
   },
@@ -1022,7 +1067,7 @@ scene({ name: '回放', t0: T_BACK, t1: D.kicks.find(k => k > 95) ?? 95.8,
   },
   draw(c, t, lt) {
     if (t < T_SLAM) return;
-    if (t < T_SLAM + .14) { drawTV(c, t, lerp(.42, 3.4, easeIn((t - T_SLAM) / .14)), { jump: 1 }); return; }
+    if (t < T_SLAM + .14) { drawTV(c, t, lerp(TV_S, 3.4, easeIn((t - T_SLAM) / .14)), { jump: 1 }); return; }
     if (M.gap(t)) return;
     if (t >= T_LAST) {                                                              // 最后一下底鼓：叠成铬金属「谎话」
       const k = t - T_LAST, s = 1 + .5 * Math.exp(-k * 14);

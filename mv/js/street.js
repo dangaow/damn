@@ -148,3 +148,45 @@ function streetCam(t) {
   const from = i ? xs[i - 1] + (D.lyrics[i].t - D.lyrics[i - 1].t) * 22 : xs[0] - 260, k = ease((t - D.lyrics[i].t + .2) / .8);
   return lerp(from, xs[i], k) + Math.max(0, t - D.lyrics[i].t - .6) * 22;            // 推到之后还在很慢地往前走
 }
+
+// ============================================================================
+// 大雨：隔着一扇窗看出去。远处的楼只在闪电时被照亮，街上的灯和车灯都失焦成光斑，
+// 窗玻璃上一道道雨水往下流（玻璃是清楚的，外面是虚的）。
+// ============================================================================
+const STORM_LAMPS = Array.from({ length: 14 }, (_, i) => ({ x: hash(i, 51) * W, y: H * (.42 + hash(i, 52) * .3), R: 50 + hash(i, 53) * 110,
+  col: ['255,176,96', '150,175,255', '255,176,96', '200,215,255'][i % 4], a: .35 + hash(i, 54) * .35 }));
+function stormView(c, t, L) {
+  const s = stx; s.setTransform(1, 0, 0, 1, 0, 0); s.globalAlpha = 1;
+  const sky = s.createLinearGradient(0, 0, 0, H * .7);
+  sky.addColorStop(0, `rgb(${lerp(2, 120, L) | 0},${lerp(4, 140, L) | 0},${lerp(12, 200, L) | 0})`); sky.addColorStop(1, `rgb(${lerp(10, 60, L) | 0},${lerp(18, 80, L) | 0},${lerp(42, 140, L) | 0})`);
+  s.fillStyle = sky; s.fillRect(0, 0, W, H);
+  buildings(s, 2400 + t * 6, .35, 21, H * .62, 260, 620, `rgb(${lerp(3, 14, L) | 0},${lerp(5, 18, L) | 0},${lerp(12, 36, L) | 0})`, .3 * (1 - L));   // 闪电时楼变成剪影
+  buildings(s, 2400 + t * 6, .7, 22, H * .7, 160, 380, '#04060c', .4 * (1 - L * .6));
+  const g = s.createLinearGradient(0, H * .7, 0, H); g.addColorStop(0, '#0a1124'); g.addColorStop(1, '#020309'); s.fillStyle = g; s.fillRect(0, H * .7, W, H * .3);
+  for (const l of STORM_LAMPS) { glowAt(s, l.x, l.y, l.R, l.col, l.a); const rg = s.createLinearGradient(0, H * .7, 0, H); rg.addColorStop(0, `rgba(${l.col},${l.a * .35})`); rg.addColorStop(1, `rgba(${l.col},0)`); s.fillStyle = rg; s.fillRect(l.x - l.R * .3, H * .7, l.R * .6, H * .3); }
+  const sig = mod(t, 6) < 3 ? '255,26,58' : '80,255,160';                              // 红绿灯
+  glowAt(s, W * .22, H * .5, 90, sig, .7); glowAt(s, W * .22, H * .5, 260, sig, .18);
+  for (let i = 0; i < 3; i++) {                                                         // 开过去的车：一对白色车头灯，另一个方向一对红色尾灯
+    const per = 2.6 + i * .9, k = mod(t + i * 1.3, per) / per, dir = i % 2 ? -1 : 1, x = dir > 0 ? lerp(-300, W + 300, k) : lerp(W + 300, -300, k), y = H * (.66 + i * .04);
+    const col = dir > 0 ? '235,240,255' : '255,30,50';
+    glowAt(s, x, y, 70, col, .8); glowAt(s, x + 90, y, 70, col, .8); glowAt(s, x + 45, y, 300, col, .14);
+    const rg = s.createLinearGradient(0, y, 0, H); rg.addColorStop(0, `rgba(${col},.25)`); rg.addColorStop(1, `rgba(${col},0)`); s.fillStyle = rg; s.fillRect(x - 10, y, 110, H - y);
+  }
+  c.save(); c.filter = 'blur(9px)'; c.drawImage(STR, 0, 0); c.restore();
+}
+// 窗玻璃上往下流的雨水：每道有一个水头往下走，后面拖着一条湿的痕迹
+function rivulets(c, t, n = 26, a = 1) {
+  c.save(); c.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const x0 = hash(i, 61) * W, sp = 120 + hash(i, 62) * 260, per = (H + 300) / sp, age = mod(t + hash(i, 63) * per, per), head = age * sp - 150;
+    const path = y => x0 + Math.sin(y * .012 + i) * 14 + Math.sin(y * .041 + i * 3) * 5;
+    const top = Math.max(-20, head - 520);
+    const g = c.createLinearGradient(0, top, 0, head); g.addColorStop(0, 'rgba(200,215,255,0)'); g.addColorStop(1, `rgba(200,215,255,${.28 * a})`);
+    c.strokeStyle = g; c.lineWidth = 3 + hash(i, 64) * 3; c.beginPath();
+    for (let y = top; y <= head; y += 12) { const x = path(y); y === top ? c.moveTo(x, y) : c.lineTo(x, y); } c.stroke();
+    const hx = path(head), hr = 5 + hash(i, 65) * 5, hg = c.createRadialGradient(hx - hr * .3, head - hr * .3, 0, hx, head, hr * 1.4);
+    hg.addColorStop(0, `rgba(240,246,255,${.8 * a})`); hg.addColorStop(.6, `rgba(140,165,235,${.25 * a})`); hg.addColorStop(1, 'rgba(20,30,60,0)');
+    c.fillStyle = hg; c.beginPath(); c.arc(hx, head, hr * 1.4, 0, 7); c.fill();
+  }
+  c.restore();
+}
