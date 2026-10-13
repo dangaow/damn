@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Isolated · 竖屏短视频叠字层</title>
+<style>html, body { margin: 0; background: transparent; } canvas { display: block; }</style>
+</head>
+<body>
+<!-- 竖屏短视频的叠字层（透明 PNG，1080×1920）。画面由 promo.mjs 用 ffmpeg 合成：MV 放在中间，背景是同一段画面糊开压暗。
+     这一页只画字：上面片名和署名（一个小的标识，不抢 MV），下面跟着歌词走的大字幕（带中文翻译），再下面一行 MV OUT NOW。
+     所有要紧的字都在平台界面盖不到的地方：左右留 130 px（右边是点赞评论那一列），底部 340 px 不放东西（用户名、文案、音乐条）。
+     第一帧就是封面：片名、红线、第一句歌词、歌手名第一帧都已经在。 -->
+<canvas id="cv" width="1080" height="1920"></canvas>
+<script src="../assets.js"></script>
+<script>
+'use strict';
+const A = window.ASSETS, W = 1080, H = 1920, VY = 656, VH = 608;                    // MV 画面在竖屏里的位置（1080×608，居中）
+const RED = '#e8112d', INK = '#f4f3ef';
+// 衬线字用 promo/fonts 里重新取的子集（多了 阴 于 这几个字），其余沿用 MV 的字体
+const FONTS = [new FontFace('NSC', 'url(fonts/nsc.woff2)'), new FontFace('NSCB', 'url(fonts/nscb.woff2)')];
+const b64buf = s => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u.buffer; };
+for (const [k, fam] of Object.entries({ 'Anton': 'ANTON', 'Space Mono': 'MONO', 'Space Mono Bold': 'MONOB' })) FONTS.push(new FontFace(fam, b64buf(A.fonts[k])));
+const ready = Promise.all(FONTS.map(f => f.load().then(x => document.fonts.add(x)))).then(() => true);
+window.__ready = () => ready;
+// 翻译的错字（MV 成片不动，只在短视频里改）
+const TR_FIX = { '内心的陰霾': '内心的阴霾', '我再次沉溺与你': '我再次沉溺于你', '你的爱...': '你的爱……' };
+
+const cv = document.getElementById('cv'), c = cv.getContext('2d');
+const LINE = document.createElement('canvas'); LINE.width = 1080; LINE.height = 260; const lc = LINE.getContext('2d');
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x)), ease = k => { k = clamp(k); return k * k * (3 - 2 * k); }, lerp = (a, b, k) => a + (b - a) * k;
+const singer = t => t >= 56.6 && t < 89.4 ? 'dangao_w' : 'YuKIluv7';               // 主歌二是 dangao_w，其余是 YuKIluv7
+const L = A.lyrics, MAXHOLD = 4.5;                                                  // 歌词文件没有结束时间：一句最多挂 4.5 秒
+const lineEnd = i => Math.min(i < L.length - 1 ? L[i + 1].t : 1e9, L[i].t + MAXHOLD);
+
+// 网点：和 MV 一样的复印网点质感，只铺在上下两块（不压到 MV 画面上）
+const DOT = (() => { const t = document.createElement('canvas'); t.width = t.height = 10; const x = t.getContext('2d'); x.fillStyle = 'rgba(255,255,255,.06)'; x.beginPath(); x.arc(5, 5, 1.4, 0, 7); x.fill(); return c.createPattern(t, 'repeat'); })();
+
+function txt(cc, s, x, y, font, fill, o = {}) {
+  cc.font = font; cc.textAlign = o.align || 'center'; cc.textBaseline = o.base || 'middle'; cc.letterSpacing = o.ls || '0px';
+  cc.fillStyle = fill; cc.fillText(s, x, y); cc.letterSpacing = '0px';
+}
+function dotLabel(s, y, font, fill, ls, r) {                                          // 前面一个红点的一行小字（红点和字一起居中）
+  c.font = font; c.letterSpacing = ls; const w = c.measureText(s).width; c.letterSpacing = '0px';
+  const x0 = W / 2 - (w + r * 2 + 18) / 2;
+  c.fillStyle = RED; c.beginPath(); c.arc(x0 + r, y, r, 0, 7); c.fill();
+  txt(c, s, x0 + r * 2 + 18, y, font, fill, { ls, align: 'left' });
+}
+function fit(s, font, max, size) { c.font = font.replace('{}', size); const w = c.measureText(s).width; return w > max ? Math.floor(size * max / w) : size; }
+
+// 一句歌词：先画到 LINE，再用一道柔和的左→右遮罩"写"出来（和 MV 上面逐字浮现的节奏一样，不移动、不缩放），整体透明度 a
+function drawLine(i, reveal, a) {
+  if (a <= .005) return;
+  const l = L[i], tr = TR_FIX[l.tr] || l.tr, size = fit(l.text, '900 {}px NSCB', 820, 80);
+  lc.setTransform(1, 0, 0, 1, 0, 0); lc.globalCompositeOperation = 'source-over'; lc.clearRect(0, 0, W, LINE.height);
+  txt(lc, l.text, W / 2, 70, `900 ${size}px NSCB`, INK);
+  if (tr) txt(lc, tr, W / 2, 158, '400 40px NSC', 'rgba(242,242,238,.72)');
+  if (reveal < 1) {                                                                 // 遮罩：边缘 160 px 的柔光从左扫到右
+    lc.font = `900 ${size}px NSCB`; const w = Math.max(lc.measureText(l.text).width, tr ? 40 * [...tr].length : 0), x0 = W / 2 - w / 2 - 80, x1 = W / 2 + w / 2 + 80;
+    const e = lerp(x0, x1 + 160, reveal), g = lc.createLinearGradient(e - 160, 0, e, 0); g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    lc.globalCompositeOperation = 'destination-in'; lc.fillStyle = g; lc.fillRect(0, 0, W, LINE.height); lc.globalCompositeOperation = 'source-over';
+  }
+  c.globalAlpha = a; c.drawImage(LINE, 0, 1330); c.globalAlpha = 1;
+}
+
+window.__frame = (cfg, t) => {
+  c.clearRect(0, 0, W, H);
+  // 上下两块：压暗（字更清楚，亮的场景背景也压得住），铺一层很淡的网点
+  let g = c.createLinearGradient(0, 0, 0, VY); g.addColorStop(0, 'rgba(0,0,0,.78)'); g.addColorStop(1, 'rgba(0,0,0,.42)');
+  c.fillStyle = g; c.fillRect(0, 0, W, VY);
+  g = c.createLinearGradient(0, VY + VH, 0, H); g.addColorStop(0, 'rgba(0,0,0,.42)'); g.addColorStop(1, 'rgba(0,0,0,.82)');
+  c.fillStyle = g; c.fillRect(0, VY + VH, W, H - VY - VH);
+  c.fillStyle = DOT; c.fillRect(0, 0, W, VY); c.fillRect(0, VY + VH, W, H - VY - VH);
+  c.fillStyle = 'rgba(255,255,255,.22)'; c.fillRect(0, VY - 2, W, 2); c.fillRect(0, VY + VH, W, 2);   // 画面上下一道细白线
+
+  // 片名：一个小的标识（MV 和歌词才是主角）；MV 自己的 ISOLATED 片名卡出现时（7.0–8.2 s）让开
+  const titleA = 1 - .7 * ease((t - 6.98) / .15) * (1 - ease((t - 8.2) / .25));
+  txt(c, 'YuKIluv7  /  dangao_w', W / 2, 330, '400 30px MONO', 'rgba(242,242,238,.88)', { ls: '6px' });
+  c.globalAlpha = titleA; txt(c, 'ISOLATED', W / 2 + 4, 432, '400 128px ANTON', INK, { ls: '6px' }); c.globalAlpha = 1;
+  c.fillStyle = RED; c.fillRect(W / 2 - 130, 512, 260, 6);
+  txt(c, 'De4thpain · 2026', W / 2, 566, '400 28px MONO', 'rgba(242,242,238,.75)', { ls: '4px' });
+
+  // 歌手：一直在，不跟着每句歌词闪
+
+  // 歌词：当前这句交叉溶解进来（上一句同时淡出，不会先黑一下），左→右写出来。
+  // 片子开头：片头前已经开始、还在唱的那句（1.2 秒内）和片头后 0.25 秒内开始的那句，第一帧就完整显示（封面上要有字）；更早的旧句子不显示
+  let i = -1; for (let j = 0; j < L.length; j++) if (t >= L[j].t - .05) i = j;
+  if (i + 1 < L.length && L[i + 1].t < cfg.t0 + .25 && L[i + 1].t > cfg.t0 - 1.2) i++;          // 片头后马上要唱的那句：封面上就先放好
+  const showing = i >= 0 && t < lineEnd(i) && L[i].t > cfg.t0 - 1.2;
+  // 歌手：一直在，不跟着每句歌词闪；跟着正在唱的这句走（定格在 dangao_w 那句时还是 dangao_w）
+  dotLabel('VOCAL · ' + singer(showing ? L[i].t : t), 1318, '400 32px MONO', 'rgba(242,242,238,.9)', '3px', 8);
+  if (showing) {
+    const l = L[i], onCover = l.t < cfg.t0 + .25;
+    const aIn = onCover ? 1 : ease((t - l.t + .05) / .18), aOut = lineEnd(i) < cfg.t1 + .02 ? ease((lineEnd(i) - .05 - t) / .14) : 1;   // 片尾硬切：最后一句一直亮到切点
+    const reveal = onCover ? 1 : ease((t - l.t + .05) / Math.min(1, .6 * (lineEnd(i) - l.t)));
+    if (aIn < 1 && i > 0 && L[i - 1].t > cfg.t0 - 1.2 && lineEnd(i - 1) >= l.t - .06) drawLine(i - 1, 1, 1 - aIn);   // 上一句淡出
+    drawLine(i, reveal, aIn * aOut);
+  }
+
+  dotLabel('MV OUT NOW', 1580, '400 34px MONOB', INK, '6px', 9);
+  return cv.toDataURL('image/png');
+};
+</script>
+</body>
+</html>
