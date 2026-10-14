@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(MakeMix VERSION 1.2.0 LANGUAGES C CXX)
+project(MakeMix VERSION 1.2.1 LANGUAGES C CXX)
 
 # C++20
 set(CMAKE_CXX_STANDARD 20)

@@ -105,13 +105,14 @@ void Hub::capture (int slot, const float* l, const float* r, int n, int64_t pos,
     if (! juce::isPositiveAndBelow (slot, kMaxSlots) || n <= 0) return;
     auto* c = slots[(size_t) slot].cap.load (std::memory_order_acquire);
     if (c == nullptr || ! c->armed.load (std::memory_order_acquire) || ! playing) return;
+    const int g = c->gen.load (std::memory_order_acquire);   // 写到一半被新一轮 MIX 重置了，就不更新长度
     int len = c->len.load (std::memory_order_relaxed);
     if (len > 0 && c->start.load (std::memory_order_relaxed) + len != pos) len = 0;   // 跳了位置：从这里重新录
     if (len == 0) c->start.store (pos, std::memory_order_relaxed);
     const int m = std::min (n, (int) c->l.size() - len);
     if (m <= 0) return;
     std::copy (l, l + m, c->l.begin() + len); std::copy (r, r + m, c->r.begin() + len);
-    c->len.store (len + m, std::memory_order_release);
+    if (c->gen.load (std::memory_order_acquire) == g) c->len.store (len + m, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------------------- 会话（消息线程）
@@ -135,6 +136,7 @@ void Hub::requestMix (StyleId sid)
             nb->l.assign ((size_t) (kMaxCaptureSec * fs), 0.0f); nb->r.assign ((size_t) (kMaxCaptureSec * fs), 0.0f);
             c = nb.get(); s.owned.push_back (std::move (nb));
         }
+        c->armed.store (false, std::memory_order_release); c->gen.fetch_add (1, std::memory_order_acq_rel);
         c->len.store (0); c->armed.store (true, std::memory_order_release);
         s.cap.store (c, std::memory_order_release);
     }
@@ -153,7 +155,8 @@ void Hub::tick()
           for (int i : participants) { auto& s = slots[(size_t) i]; if (! s.client || s.client->hubRole() == Role::Bus) continue;
               auto* c = s.cap.load(); if (! c) continue; any = true; minSec = std::min (minSec, c->len.load() / c->fs); } }
         if (! any) { message = "請在人聲或伴奏軌上也插 MAKE MIX"; st = State::Failed; doneAt = now(); return; }
-        if (minSec >= kListenSec) startSolve();
+        // 有的轨没在处理（静音 / FL 智能禁用）录音就不会长：最多等 40 秒，用已经录到的（每轨至少 6 秒）解算
+        if (minSec >= kListenSec || now() - listenStart > 40.0) startSolve();
     }
     else if (st == State::Solving)
     {

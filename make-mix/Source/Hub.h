@@ -51,7 +51,7 @@ public:
     void capture (int slot, const float* l, const float* r, int n, int64_t pos, bool playing) noexcept;
 
 private:
-    struct CaptureBuf { std::vector<float> l, r; double fs = 0; std::atomic<int> len { 0 }; std::atomic<int64_t> start { 0 }; std::atomic<bool> armed { false }; };
+    struct CaptureBuf { std::vector<float> l, r; double fs = 0; std::atomic<int> len { 0 }, gen { 0 }; std::atomic<int64_t> start { 0 }; std::atomic<bool> armed { false }; };
     struct Slot
     {
         std::atomic<bool> live { false }; std::atomic<int> role { 0 };

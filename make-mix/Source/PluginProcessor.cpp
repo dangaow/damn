@@ -107,6 +107,12 @@ void MakeMixProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         else                            bus.process (ch, nCh, m);
     }
     freeCounter += n;
+    // 保险：输入里混进 NaN / Inf 会让滤波器永久卡死 —— 发现就把这一块静音并重置处理链
+    for (int c = 0; c < nCh; ++c)
+        if (! std::isfinite (buffer.getSample (c, n - 1)) || ! std::isfinite (buffer.getSample (c, 0)))
+        {
+            buffer.clear(); vocal.reset(); beat.reset(); bus.reset(); break;
+        }
 
     float pout = 0; for (int c = 0; c < nCh; ++c) pout = std::max (pout, buffer.getMagnitude (c, 0, n));
     inPeak.store (pin); outPeak.store (pout);
