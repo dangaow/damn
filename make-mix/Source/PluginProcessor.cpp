@@ -1,233 +1,325 @@
+// 【WP0 桩】处理器骨架：完整参数布局、角色分派、分段处理、恒定延迟、状态根属性、程序 = 风格。WP2 换成完整实现（第 3、9 节）。
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
-#include "Presets.h"
+#include "AutoMix.h"
+#include "Styles.h"
 
 namespace
 {
-const char* ids[] = { "input", "clean", "presence", "air", "deess", "compress", "warmth", "echo", "echoTime", "space", "output" };
-const juce::StringArray echoTimes { "1/8", "1/8 D", "1/4", "1/4 D", "1/2" };
-const double echoBeats[] = { 0.5, 0.75, 1.0, 1.5, 2.0 };
-
-std::unique_ptr<juce::AudioParameterFloat> knob (const char* id, const char* name, float def)
+// 宿主里手动输入数值："+2.0 dB"、"3.8 kHz"、"45%"、"OFF"
+float parseValue (int pidx, const juce::String& text)
 {
-    return std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id, 1 }, name, juce::NormalisableRange<float> (0.0f, 1.0f), def,
-        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; })
-                                             .withValueFromStringFunction ([] (const juce::String& s) { return s.getFloatValue() / 100.0f; }));
-}
-std::unique_ptr<juce::AudioParameterFloat> decibels (const char* id, const char* name, float lo, float hi)
-{
-    return std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id, 1 }, name, juce::NormalisableRange<float> (lo, hi, 0.1f), 0.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("dB")
-            .withStringFromValueFunction ([] (float v, int) { return (v > 0 ? "+" : "") + juce::String (v, 1) + " dB"; }));
+    const auto& p = mm::kParams[pidx];
+    const auto t = text.trim().toLowerCase();
+    if (t.startsWith ("off")) return (pidx == mm::v_lpf || pidx == mm::m_lpf) ? p.max : p.min;
+    float v = t.getFloatValue();
+    if (juce::String (p.unit) == "%") v *= 0.01f;
+    else if (t.contains ("khz") || t.endsWithChar ('k')) v *= 1000.0f;
+    return mm::clampParam (pidx, v);
 }
 } // namespace
 
-juce::AudioProcessorValueTreeState::ParameterLayout MakeVoxProcessor::createLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayout()
 {
-    const auto& d = vox::presets[0];
-    juce::AudioProcessorValueTreeState::ParameterLayout l;
-    l.add (decibels ("input", "Input", -24, 24));
-    l.add (knob ("clean", "Clean", d.clean), knob ("presence", "Presence", d.presence), knob ("air", "Air", d.air), knob ("deess", "De-ess", d.deess),
-           knob ("compress", "Compress", d.compress), knob ("warmth", "Warmth", d.warmth), knob ("echo", "Echo", d.echo));
-    l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "echoTime", 1 }, "Echo Time", echoTimes, d.echoTime));
-    l.add (knob ("space", "Space", d.space));
-    l.add (decibels ("output", "Output", -24, 12));
-    return l;
-}
-
-MakeVoxProcessor::MakeVoxProcessor()
-    : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "MAKEVOX", createLayout())
-{
-    for (int i = 0; i < 11; ++i) p[i] = apvts.getRawParameterValue (ids[i]);
-    cache.fill (-1.0f);
-}
-
-bool MakeVoxProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-    const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
-    return in == out && (out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo());
-}
-
-void MakeVoxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
-{
-    fs = sampleRate;
-    for (auto* f : { &hpA, &hpB, &mud, &presence, &air }) f->reset();
-    comp.prepare (fs, 5.0f, 90.0f);
-    deess.prepare ({ fs, (juce::uint32) juce::jmax (1, samplesPerBlock), 2 });
-    oversampling.initProcessing ((size_t) juce::jmax (1, samplesPerBlock));
-    oversampling.reset();
-    sat.prepare (fs * 2);
-    echo.prepare (fs);
-    space.prepare (fs);
-    maxBlock = juce::jmax (1, samplesPerBlock);
-    sendL.setSize (1, maxBlock); sendR.setSize (1, maxBlock);
-    for (auto* s : { &inGain, &outGain, &echoSend, &spaceSend }) s->reset (fs, 0.03);
-    inGain.setCurrentAndTargetValue (vox::dbToGain (p[pInput]->load()));
-    outGain.setCurrentAndTargetValue (vox::dbToGain (p[pOutput]->load()));
-    cache.fill (-1.0f);
-    updateDsp();
-    echoSend.setCurrentAndTargetValue (echoSend.getTargetValue());
-    spaceSend.setCurrentAndTargetValue (spaceSend.getTargetValue());
-    setLatencySamples (juce::roundToInt (oversampling.getLatencyInSamples()));
-}
-
-double MakeVoxProcessor::tempo() const
-{
-    if (auto* ph = getPlayHead())
-        if (auto pos = ph->getPosition())
-            if (auto bpm = pos->getBpm())
-                if (*bpm > 20 && *bpm < 400) return *bpm;
-    return fallbackBpm;
-}
-
-// 旋钮 → 各模块的实际参数（只在旋钮动了的时候重算）
-static bool moved (float a, float b) { return std::abs (a - b) > 1.0e-7f; }
-void MakeVoxProcessor::updateDsp()
-{
-    const float v[9] = { p[pClean]->load(), p[pPresence]->load(), p[pAir]->load(), p[pDeess]->load(), p[pCompress]->load(),
-                         p[pWarmth]->load(), p[pEcho]->load(), p[pSpace]->load(), p[pEchoTime]->load() };
-    const float clean = v[0], pres = v[1], airAmt = v[2], de = v[3], k = v[4], w = v[5], e = v[6], s = v[7];
-    if (moved (clean, cache[0]))
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+    for (int i = 0; i < mm::kNumParams; ++i)
     {
-        const double f = 30 + 120 * clean;                                           // 低切：30 → 150 Hz，4 阶巴特沃斯（24 dB/oct）
-        hpA.highPass (fs, f, 0.5412); hpB.highPass (fs, f, 1.3066);
-        mud.peak (fs, 300, 1.1, -5.0 * clean);                                        // 去浑浊：300 Hz 最多 -5 dB
-    }
-    if (moved (pres, cache[1])) presence.peak (fs, 3800, 0.9, 6.0 * pres);                  // 存在感：3.8 kHz 最多 +6 dB
-    if (moved (airAmt, cache[2])) air.highShelf (fs, juce::jmin (10000.0, fs * 0.42), 0.707, 8.0 * airAmt);   // 空气感：10 kHz 高架最多 +8 dB
-    if (moved (de, cache[3]))
-    {
-        deess.active = de > 0.01f;
-        deess.thresholdDb = -16 - 24 * de; deess.ratio = 3 + 5 * de; deess.rangeDb = 3 + 9 * de;
-    }
-    if (moved (k, cache[4]))
-    {
-        if (k < 0.01f) { comp.ratio = 1; comp.makeupDb = 0; }
+        const auto& p = mm::kParams[i];
+        const juce::ParameterID pid { p.id, 1 };
+        if (p.kind == mm::PKind::Choice)
+        {
+            juce::StringArray items;
+            for (int c = 0; c < p.numChoices; ++c) items.add (p.choices[c]);
+            layout.add (std::make_unique<juce::AudioParameterChoice> (pid, p.name, items, (int) p.def,
+                                                                      juce::AudioParameterChoiceAttributes().withAutomatable (p.automatable)));
+        }
         else
         {
-            comp.thresholdDb = -6 - 26 * k; comp.ratio = 1.5f + 4.5f * k; comp.kneeDb = 6;
-            comp.makeupDb = -comp.thresholdDb * (1 - 1 / comp.ratio) * 0.45f;         // 自动补偿，压完音量差不多
+            juce::NormalisableRange<float> range (p.min, p.max, p.step);
+            if (p.centre > 0) range.setSkewForCentre (p.centre);
+            const auto attr = juce::AudioParameterFloatAttributes()
+                                  .withAutomatable (p.automatable)
+                                  .withStringFromValueFunction ([i] (float v, int) { return juce::String::fromUTF8 (mm::formatValue (i, v).c_str()); })
+                                  .withValueFromStringFunction ([i] (const juce::String& s) { return parseValue (i, s); });
+            layout.add (std::make_unique<juce::AudioParameterFloat> (pid, p.name, range, p.def, attr));
         }
     }
-    if (moved (w, cache[5])) sat.set (1 + 7 * w, 0.08f * w, juce::jmin (1.0f, 2.2f * w));
-    if (moved (e, cache[6])) { echo.send = 0.55f * e; echo.feedback = 0.22f + 0.33f * e; }
-    echoSend.setTargetValue (e > 0.0005f ? 1.0f : 0.0f);
-    spaceSend.setTargetValue (0.5f * s);
-    for (int i = 0; i < 9; ++i) cache[(size_t) i] = v[i];
+    return layout;
 }
 
-void MakeVoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+MakeMixProcessor::MakeMixProcessor (Options options)
+    : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                       .withInput ("Vox Key", juce::AudioChannelSet::stereo(), true)),   // BEAT 的侧链 key（1.5、6.3）
+      apvts (*this, nullptr, "PARAMS", createLayout())
+{
+    for (int i = 0; i < mm::kNumParams; ++i) raw[(size_t) i] = apvts.getRawParameterValue (mm::kParams[i].id);
+
+    if (options.privateHub) { ownHub = std::make_unique<mm::Hub>(); hubPtr = ownHub.get(); }
+    else                    { sharedHub.emplace(); hubPtr = &sharedHub->get(); }
+    slotIndex = hubPtr->attach (*this, id);
+    if (id.isNull()) id = mm::InstanceId::random();
+    bridged = juce::File::getSpecialLocation (juce::File::hostApplicationPath).getFileName().containsIgnoreCase ("ilbridge");
+}
+
+MakeMixProcessor::~MakeMixProcessor()
+{
+    if (hubPtr != nullptr && slotIndex >= 0) hubPtr->detach (slotIndex);
+}
+
+//==============================================================================
+mm::Role MakeMixProcessor::role() const noexcept        { return (mm::Role) roleA.load (std::memory_order_relaxed); }
+mm::SubRole MakeMixProcessor::subRole() const noexcept  { return (mm::SubRole) subA.load (std::memory_order_relaxed); }
+int MakeMixProcessor::group() const noexcept            { return groupA.load (std::memory_order_relaxed); }
+mm::StyleId MakeMixProcessor::style() const noexcept    { return styleA.load (std::memory_order_relaxed); }
+
+void MakeMixProcessor::setRole (mm::Role r, bool byUser)
+{
+    roleA.store ((uint8_t) std::clamp ((int) r, 0, 2), std::memory_order_relaxed);
+    if (byUser) roleUserSet = true;
+    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
+}
+void MakeMixProcessor::setSubRole (mm::SubRole s)
+{
+    subA.store ((uint8_t) std::clamp ((int) s, 0, 2), std::memory_order_relaxed);
+    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
+}
+void MakeMixProcessor::setGroup (int g)
+{
+    groupA.store ((uint8_t) std::clamp (g, 0, mm::kMaxGroups - 1), std::memory_order_relaxed);
+    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
+}
+void MakeMixProcessor::setStyle (mm::StyleId s, bool broadcast)
+{
+    styleA.store (std::clamp (s, 0, mm::kNumStyles - 1), std::memory_order_relaxed);
+    if (broadcast && slotIndex >= 0) hubPtr->broadcastStyle (slotIndex, style());
+}
+
+void MakeMixProcessor::requestMix()          { if (slotIndex >= 0) hubPtr->beginMix (slotIndex, style()); }
+void MakeMixProcessor::requestStop (bool c)  { if (slotIndex >= 0) hubPtr->stop (slotIndex, c); }
+void MakeMixProcessor::requestUndo()         { if (slotIndex >= 0) hubPtr->undoMix (slotIndex); }
+void MakeMixProcessor::requestRemix()        { if (slotIndex >= 0) hubPtr->remix (slotIndex, style()); }
+void MakeMixProcessor::loadStyleDefaults()   { applyParams (mm::automix::styleDefaults (style(), role()), true); }
+
+mm::Hub* MakeMixProcessor::hub() const noexcept                       { return hubPtr; }
+int MakeMixProcessor::slot() const noexcept                           { return slotIndex; }
+const mm::InstanceId& MakeMixProcessor::instanceId() const noexcept   { return id; }
+const mm::LearnedProfile& MakeMixProcessor::learned() const noexcept  { return learnedProfile; }
+bool MakeMixProcessor::isBridgedHost() const noexcept                 { return bridged; }
+std::string MakeMixProcessor::trackName() const                       { return name; }
+
+// 消息线程：真实值 → 0..1，只写变了的，每个都包在 gesture 里（宿主能撤销、能看到旋钮动）
+void MakeMixProcessor::applyParams (const mm::ParamSet& set, bool keepLevelOwning)
+{
+    for (const auto& [pid, v] : set.values)
+    {
+        const int i = mm::paramIndex (pid);
+        if (i < 0 || (keepLevelOwning && mm::isLevelOwning (i))) continue;
+        if (auto* p = apvts.getParameter (pid))
+        {
+            const float nv = p->convertTo0to1 (mm::clampParam (i, v));
+            if (std::abs (nv - p->getValue()) > 1.0e-6f)
+            {
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (nv);
+                p->endChangeGesture();
+            }
+        }
+    }
+}
+
+//==============================================================================
+void MakeMixProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    maxBlock = std::max (1, samplesPerBlock);
+    const int latency = mm::latencyFor (sampleRate, maxBlock);
+    const mm::ChainSpec spec { sampleRate, maxBlock, 2, latency };
+    vocal.prepare (spec);
+    beat.prepare (spec);
+    bus.prepare (spec);
+    activeRole = -1;
+    prepared = true;
+    setLatencySamples (latency);
+}
+
+void MakeMixProcessor::reset()
+{
+    vocal.reset();
+    beat.reset();
+    bus.reset();
+}
+
+bool MakeMixProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
+    if (in != out || (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())) return false;
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto key = layouts.inputBuses[1];
+        if (! key.isDisabled() && key != juce::AudioChannelSet::mono() && key != juce::AudioChannelSet::stereo()) return false;
+    }
+    return true;
+}
+
+void MakeMixProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)         { runChains (buffer, false); }
+void MakeMixProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) { runChains (buffer, true); }
+
+void MakeMixProcessor::runChains (juce::AudioBuffer<float>& buffer, bool bypassed)
 {
     juce::ScopedNoDenormals noDenormals;
-    const int n = buffer.getNumSamples(), nCh = juce::jmin (2, buffer.getNumChannels());
-    for (int c = nCh; c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
-    if (n == 0 || nCh == 0) return;
+    const int n = buffer.getNumSamples();
+    for (int c = getTotalNumInputChannels(); c < std::min (getTotalNumOutputChannels(), buffer.getNumChannels()); ++c) buffer.clear (c, 0, n);
+    const int numCh = std::min ({ 2, getMainBusNumOutputChannels(), buffer.getNumChannels() });
+    if (! prepared || numCh <= 0) return;                                  // 没 prepare 就直通（FL Patcher 会这样调）
 
-    updateDsp();
-    inGain.setTargetValue (vox::dbToGain (p[pInput]->load()));
-    outGain.setTargetValue (vox::dbToGain (p[pOutput]->load()));
-    const int et = juce::jlimit (0, 4, (int) p[pEchoTime]->load());
-    echo.setTime (echoBeats[et] * 60.0 / tempo());
-
-    Meters m;
-    for (int start = 0; start < n; start += maxBlock)                          // 宿主给的块比 prepareToPlay 说的大时，分段处理
-        processChunk (buffer, start, juce::jmin (maxBlock, n - start), nCh, m);
-    inPeak.store (m.in); outPeak.store (m.out); compGr.store (-m.gr); deessGr.store (-deess.grDb);
-}
-
-void MakeVoxProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start, int n, int nCh, Meters& m)
-{
-    float* ch[2] = { buffer.getWritePointer (0, start), buffer.getWritePointer (nCh > 1 ? 1 : 0, start) };
-
-    // 1) 串联：输入 → 低切 / 去浑浊 → 压缩 → 去齒音 → 存在感 / 空气感
-    for (int i = 0; i < n; ++i)
-    {
-        const float g = inGain.getNextValue();
-        float x[2], level = 0;
-        for (int c = 0; c < nCh; ++c)
+    // 播放头：时间线位置和速度
+    bool playing = false;
+    int64_t timeline = -1;
+    double bpm = fallbackBpm;
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
         {
-            float s = ch[c][i] * g;
-            m.in = std::max (m.in, std::abs (s));
-            s = mud.process (hpB.process (hpA.process (s, c), c), c);
-            x[c] = s; level = std::max (level, std::abs (s));
+            if (auto t = pos->getTimeInSamples()) { playing = pos->getIsPlaying(); timeline = *t; }
+            if (auto b = pos->getBpm()) if (*b > 20.0 && *b < 400.0) bpm = *b;
         }
-        const float cg = comp.gainFor (level);
-        m.gr = std::min (m.gr, comp.grDb);
-        for (int c = 0; c < nCh; ++c) x[c] *= cg;
-        deess.processFrame (x, nCh);
-        for (int c = 0; c < nCh; ++c) ch[c][i] = air.process (presence.process (x[c], c), c);
-    }
 
-    // 2) 温暖：2 倍超采样里饱和（不加饱和时也照样走超采样，延迟保持不变）
+    const int r = std::clamp ((int) roleA.load (std::memory_order_relaxed), 0, 2);
+    if (r != activeRole)
     {
-        juce::dsp::AudioBlock<float> block (buffer.getArrayOfWritePointers(), (size_t) nCh, (size_t) start, (size_t) n);
-        auto up = oversampling.processSamplesUp (block);
-        for (size_t c = 0; c < up.getNumChannels(); ++c)
+        if (r == 0) vocal.reset(); else if (r == 1) beat.reset(); else bus.reset();
+        activeRole = r;
+    }
+    float values[mm::kPIdxCount];
+    for (size_t i = 0; i < raw.size(); ++i) values[i] = raw[i]->load (std::memory_order_relaxed);
+    compBox.read (compAudio, compSeq);
+    if (r == 0)      vocal.setParams (mm::vocalFrom (values), compAudio);
+    else if (r == 1) beat.setParams (mm::beatFrom (values), compAudio);
+    else             bus.setParams (mm::busFrom (values), compAudio);
+    if (n == 0) return;                                                    // 0 样本的块：参数已经读进链了，直接返回
+
+    // 侧链 key（第二个输入总线）
+    int auxCh = 0, auxOffset = 0;
+    if (getBusCount (true) > 1)
+        if (auto* key = getBus (true, 1); key != nullptr && key->isEnabled())
         {
-            auto* d = up.getChannelPointer (c);
-            for (size_t i = 0; i < up.getNumSamples(); ++i) d[i] = sat.process (d[i], (int) c);
+            auxOffset = getChannelIndexInProcessBlockBuffer (true, 1, 0);
+            auxCh = std::min (2, key->getNumberOfChannels());
+            if (auxOffset + auxCh > buffer.getNumChannels()) auxCh = 0;
         }
-        oversampling.processSamplesDown (block);
-    }
 
-    // 3) 并联送出：回声（乒乓、躲开人声）和空间（预延迟 + 混响），最后输出增益
-    auto* sl = sendL.getWritePointer (0); auto* sr = sendR.getWritePointer (0);
-    for (int i = 0; i < n; ++i)
+    float inPeak = 0;
+    for (int c = 0; c < numCh; ++c) inPeak = std::max (inPeak, buffer.getMagnitude (c, 0, n));
+
+    for (int start = 0; start < n; start += maxBlock)                     // 宿主给的块比 prepareToPlay 说的大时分段处理
     {
-        const float mono = nCh > 1 ? 0.5f * (ch[0][i] + ch[1][i]) : ch[0][i];
-        float wl = 0, wr = 0;
-        echo.process (mono, mono * echoSend.getNextValue(), wl, wr);
-        const float pre = space.pre[0].read (space.preDelay);
-        space.pre[0].push (mono);
-        const float sv = space.lp.process (space.hp.process (pre, 0), 0) * spaceSend.getNextValue();
-        sl[i] = sv; sr[i] = sv;
-        if (nCh > 1) { ch[0][i] += wl; ch[1][i] += wr; }
-        else ch[0][i] += 0.5f * (wl + wr);
-    }
-    space.verb.processStereo (sl, sr, n);
-    for (int i = 0; i < n; ++i)
-    {
-        const float g = outGain.getNextValue();
-        if (nCh > 1) { ch[0][i] = (ch[0][i] + sl[i]) * g; ch[1][i] = (ch[1][i] + sr[i]) * g; }
-        else ch[0][i] = (ch[0][i] + 0.5f * (sl[i] + sr[i])) * g;
-        for (int c = 0; c < nCh; ++c) m.out = std::max (m.out, std::abs (ch[c][i]));
-    }
-}
-
-int MakeVoxProcessor::getNumPrograms() { return (int) vox::presets.size(); }
-const juce::String MakeVoxProcessor::getProgramName (int index)
-{
-    return juce::isPositiveAndBelow (index, (int) vox::presets.size()) ? juce::String (vox::presets[(size_t) index].name) : juce::String();
-}
-void MakeVoxProcessor::setCurrentProgram (int index)
-{
-    if (! juce::isPositiveAndBelow (index, (int) vox::presets.size())) return;
-    currentProgram = index;
-    const auto& pr = vox::presets[(size_t) index];
-    const float values[] = { pr.input, pr.clean, pr.presence, pr.air, pr.deess, pr.compress, pr.warmth, pr.echo, (float) pr.echoTime, pr.space, pr.output };
-    for (int i = 0; i < 11; ++i)
-        if (auto* param = apvts.getParameter (ids[i]))
-            param->setValueNotifyingHost (param->convertTo0to1 (values[i]));
-}
-
-void MakeVoxProcessor::getStateInformation (juce::MemoryBlock& destData)
-{
-    auto state = apvts.copyState();
-    state.setProperty ("program", currentProgram, nullptr);
-    if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
-}
-void MakeVoxProcessor::setStateInformation (const void* data, int sizeInBytes)
-{
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (apvts.state.getType()))
+        const int len = std::min (maxBlock, n - start);
+        float* ch[2] = { buffer.getWritePointer (0, start), numCh > 1 ? buffer.getWritePointer (1, start) : nullptr };
+        const float* aux[2] = { nullptr, nullptr };
+        for (int c = 0; c < auxCh; ++c) aux[c] = buffer.getReadPointer (auxOffset + c, start);
+        const mm::ProcessContext ctx { playing ? timeline + start : -1, bpm };
+        if (r == 0)
         {
-            auto state = juce::ValueTree::fromXml (*xml);
-            currentProgram = (int) state.getProperty ("program", 0);
-            apvts.replaceState (state);
+            if (bypassed) vocal.processBypassed (ch, numCh, len, ctx, nullptr);
+            else          vocal.process (ch, numCh, len, ctx, nullptr);
         }
+        else if (r == 1)
+        {
+            if (bypassed) beat.processBypassed (ch, numCh, len);
+            else          beat.process (ch, numCh, aux, auxCh, len, ctx, nullptr);
+        }
+        else
+        {
+            if (bypassed) bus.processBypassed (ch, numCh, len);
+            else          bus.process (ch, numCh, len, ctx);
+        }
+    }
+
+    float outPeak = 0;
+    for (int c = 0; c < numCh; ++c) outPeak = std::max (outPeak, buffer.getMagnitude (c, 0, n));
+    meters.inPeak.store (inPeak, std::memory_order_relaxed);
+    meters.outPeak.store (outPeak, std::memory_order_relaxed);
 }
 
-juce::AudioProcessorEditor* MakeVoxProcessor::createEditor() { return new MakeVoxEditor (*this); }
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new MakeVoxProcessor(); }
+//==============================================================================
+juce::AudioProcessorEditor* MakeMixProcessor::createEditor() { return new juce::GenericAudioProcessorEditor (*this); }
+
+int MakeMixProcessor::getNumPrograms()     { return mm::kNumStyles; }
+int MakeMixProcessor::getCurrentProgram()  { return style(); }
+void MakeMixProcessor::setCurrentProgram (int index)
+{
+    if (! juce::isPositiveAndBelow (index, mm::kNumStyles)) return;
+    setStyle (index, true);
+    loadStyleDefaults();
+}
+const juce::String MakeMixProcessor::getProgramName (int index)
+{
+    return juce::isPositiveAndBelow (index, mm::kNumStyles) ? juce::String::fromUTF8 (mm::kStyles[(size_t) index].name) : juce::String();
+}
+
+//==============================================================================
+// 9.1：<MAKEMIX stateVersion id cloneOf role subRole group style roleUserSet trackName><PARAMS …/></MAKEMIX>（桩不存 LEARNED）
+void MakeMixProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    juce::ValueTree root ("MAKEMIX");
+    root.setProperty ("stateVersion", 1, nullptr);
+    root.setProperty ("id", juce::String (id.toString()), nullptr);
+    root.setProperty ("cloneOf", juce::String (cloneOf), nullptr);
+    root.setProperty ("role", (int) role(), nullptr);
+    root.setProperty ("subRole", (int) subRole(), nullptr);
+    root.setProperty ("group", group(), nullptr);
+    root.setProperty ("style", style(), nullptr);
+    root.setProperty ("roleUserSet", roleUserSet ? 1 : 0, nullptr);
+    root.setProperty ("trackName", juce::String::fromUTF8 (name.c_str()), nullptr);
+    root.appendChild (apvts.copyState(), nullptr);
+    if (auto xml = root.createXml()) copyXmlToBinary (*xml, destData);
+}
+
+void MakeMixProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    const auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr || ! xml->hasTagName ("MAKEMIX")) return;           // 不认识的（包括 v0）忽略
+    const auto root = juce::ValueTree::fromXml (*xml);
+
+    const auto saved = mm::InstanceId::fromString (root.getProperty ("id").toString().toStdString());
+    cloneOf = root.getProperty ("cloneOf").toString().toStdString();
+    if (! saved.isNull() && hubPtr->restoreId (slotIndex, id, saved) == mm::Hub::Restore::Clone)
+        cloneOf = saved.toString();
+
+    roleA.store ((uint8_t) std::clamp ((int) root.getProperty ("role", 0), 0, 2), std::memory_order_relaxed);
+    subA.store ((uint8_t) std::clamp ((int) root.getProperty ("subRole", 0), 0, 2), std::memory_order_relaxed);
+    groupA.store ((uint8_t) std::clamp ((int) root.getProperty ("group", 0), 0, mm::kMaxGroups - 1), std::memory_order_relaxed);
+    styleA.store (std::clamp ((int) root.getProperty ("style", 0), 0, mm::kNumStyles - 1), std::memory_order_relaxed);
+    roleUserSet = (int) root.getProperty ("roleUserSet", 0) != 0;
+    if (name.empty()) name = root.getProperty ("trackName").toString().toStdString();
+    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
+
+    const auto params = root.getChildWithName (apvts.state.getType());
+    if (params.isValid()) apvts.replaceState (params);
+}
+
+void MakeMixProcessor::updateTrackProperties (const TrackProperties& props)
+{
+    if (props.name.has_value()) name = props.name->toStdString();
+    if (slotIndex >= 0) hubPtr->setName (slotIndex, name);
+}
+
+//==============================================================================
+mm::ParamSet MakeMixProcessor::hubSnapshotParams() const
+{
+    mm::ParamSet s;
+    s.values.reserve ((size_t) mm::kNumParams);
+    for (int i = 0; i < mm::kNumParams; ++i) s.values.emplace_back (mm::kParams[i].id, raw[(size_t) i]->load (std::memory_order_relaxed));
+    return s;
+}
+mm::LearnedProfile MakeMixProcessor::hubSnapshotProfile() const { return learnedProfile; }
+void MakeMixProcessor::hubApply (const mm::ParamSet& set, const mm::LearnedProfile& profile)
+{
+    applyParams (set, false);
+    learnedProfile = profile;
+    compBox.write (profile.comp);
+}
+void MakeMixProcessor::hubSetStyle (mm::StyleId s)                          { setStyle (s, false); }
+std::shared_ptr<mm::CaptureData> MakeMixProcessor::hubMakeCapture (int, double) { return nullptr; }   // 桩：不采样
+void MakeMixProcessor::hubReleaseCapture()                                 {}
+bool MakeMixProcessor::hubSidechainConnected() const                       { return false; }
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new MakeMixProcessor(); }

@@ -1,37 +1,20 @@
 #pragma once
-#include <juce_audio_processors/juce_audio_processors.h>
+// MAKE MIX 编辑器（第 8 节）。
+// 【WP0 桩】空类，桩处理器不引用（createEditor 返回通用编辑器）。WP4 替换；WP2 之后在 createEditor 里 new MakeMixEditor (*this)。
 #include "PluginProcessor.h"
+#include "Look.h"
 
-// 黑底 + 一种红（和 MAKE STUDIO / MV 的配色一样）。上面一排 8 个大旋钮，下面是输入输出和电平表。
-class VoxLook : public juce::LookAndFeel_V4
+class MakeMixEditor : public juce::AudioProcessorEditor
 {
 public:
-    VoxLook();
-    void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
-    void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
-    juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::FontOptions (14.0f, juce::Font::bold); }
-};
-
-class MakeVoxEditor : public juce::AudioProcessorEditor, private juce::Timer
-{
-public:
-    explicit MakeVoxEditor (MakeVoxProcessor&);
-    ~MakeVoxEditor() override;
+    explicit MakeMixEditor (MakeMixProcessor&);
+    ~MakeMixEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
-    void timerCallback() override;
-    struct Knob { juce::Slider s; juce::String label, hint; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
+    MakeMixProcessor& proc;
+    MixLook look;
 
-    MakeVoxProcessor& proc;
-    VoxLook look;
-    std::array<Knob, 8> big;
-    Knob input, output;
-    juce::ComboBox preset, echoTime;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> echoAtt;
-    float mIn = 0, mOut = 0, mComp = 0, mDe = 0;
-    int shownProgram = -1;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MakeVoxEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MakeMixEditor)
 };
