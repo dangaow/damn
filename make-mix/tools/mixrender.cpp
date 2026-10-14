@@ -102,7 +102,7 @@ float maxDiffDb (const Stereo& a, const Stereo& b)
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
-    std::vector<juce::File> vocals, beats; juce::File outDir ("mix_out"); std::string styleName = "trap"; double bpm = 120; bool noBus = false, randomBlocks = false;
+    std::vector<juce::File> vocals, beats; juce::File outDir ("mix_out"), refFile; std::string styleName = "trap"; double bpm = 120; bool noBus = false, randomBlocks = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i]; auto next = [&] { return i + 1 < argc ? std::string (argv[++i]) : std::string(); };
@@ -111,6 +111,26 @@ int main (int argc, char** argv)
         else if (a == "--style") styleName = next();
         else if (a == "--bpm") bpm = std::stod (next());
         else if (a == "--no-bus") noBus = true;
+        else if (a == "--reference") refFile = juce::File::getCurrentWorkingDirectory().getChildFile (next());
+        else if (a == "--measure")              // 量一首成品：--measure vocal.wav beat.wav mix.wav（训练风格目标用）
+        {
+            double sr = 0; const Stereo v = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
+            const Stereo b = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
+            const Stereo m = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
+            auto arr = [] (const std::array<float, kOctBands>& a) { std::string t; for (float x : a) t += " " + juce::String (x, 1).toStdString(); return t; };
+            std::cout << "vocal_ltas" << arr (analysis::octaveLtas (v, sr)) << "\n"
+                      << "mix_ltas" << arr (analysis::octaveLtas (m, sr)) << "\n"
+                      << "beat_ltas" << arr (analysis::octaveLtas (b, sr)) << "\n"
+                      << "vbr " << analysis::integrated (v, sr, true) - analysis::integrated (b, sr, true) << "\n"
+                      << "vocal_spread " << analysis::spread (v, sr) << "\n"
+                      << "vocal_sib " << analysis::sibilance (v, sr) << "\n"
+                      << "masked " << analysis::maskedFraction (v, b, sr) << "\n"
+                      << "mix_lufs " << analysis::integrated (m, sr) << "\n"
+                      << "mix_tp " << analysis::truePeakDb (m) << "\n"
+                      << "mix_corr " << analysis::correlation (m) << "\n"
+                      << "beat_low " << analysis::lowShare (b, sr) << "\n";
+            return 0;
+        }
         else if (a == "--blocks") randomBlocks = next() == "random";
         else if (a == "--snapshot")             // 把三个角色的界面各截一张 PNG（检查排版）
         {
@@ -238,6 +258,19 @@ int main (int argc, char** argv)
         std::cout << "  bus out  " << juce::String (I (busOut, false), 1) << " LUFS (style " << juce::String (mm::style (sid).lufsStyle, 1) << ")  TP "
                   << juce::String (analysis::truePeakDb (busOut), 2) << " dBTP  sample peak " << juce::String (analysis::samplePeakDb (busOut), 2) << " dBFS\n"
                   << "  solver: learned " << juce::String (m.seconds, 1) << " s, bus " << juce::String (m.busLufs, 1) << " LUFS, glue " << juce::String (m.glueGr, 1) << " dB\n";
+    if (busT.p && refFile.existsAsFile())                // 和原曲母带比：频谱形状距离、响度差（越小越像发行版）
+    {
+        double rfs = 0; const Stereo ref = readWav (refFile, rfs);
+        const auto a = analysis::octaveLtas (busOut, fs), b = analysis::octaveLtas (ref, rfs);
+        float d = 0; for (int k = 1; k < kOctBands; ++k) d += (a[(size_t) k] - b[(size_t) k]) * (a[(size_t) k] - b[(size_t) k]);
+        const Stereo rawCut = raw;
+        const auto c = analysis::octaveLtas (rawCut, fs);
+        float d0 = 0; for (int k = 1; k < kOctBands; ++k) d0 += (c[(size_t) k] - b[(size_t) k]) * (c[(size_t) k] - b[(size_t) k]);
+        std::cout << "  vs released master: tone distance " << juce::String (std::sqrt (d / 9), 2) << " dB (raw sum " << juce::String (std::sqrt (d0 / 9), 2)
+                  << ")  loudness " << juce::String (I (busOut, false) - I (ref, false), 1) << " LU\n    curve diff:";
+        for (int k = 0; k < kOctBands; ++k) std::cout << " " << juce::String (a[(size_t) k] - b[(size_t) k], 1);
+        std::cout << "\n";
+    }
     const double songSec = (double) total / fs;
     for (auto& t : src) std::cout << "  CPU " << (t.p->role() == Role::Vocal ? "VOCAL " : "BEAT  ") << juce::String (100 * t.cpu / songSec, 2) << " % of one core\n";
     if (busT.p) std::cout << "  CPU BUS   " << juce::String (100 * busT.cpu / songSec, 2) << " % of one core\n";

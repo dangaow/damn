@@ -8,6 +8,8 @@ using analysis::Stereo;
 namespace
 {
 constexpr int kSimBlock = 512;
+// 从发行版里量出来的目标（tools/mixrender --measure，4 首歌的平均）：人声被伴奏盖住的比例、人声齿音
+constexpr float kMaskTarget = 0.38f, kSibTarget = 10.0f;
 
 template <typename F> Stereo runChain (const Stereo& in, double fs, F&& proc)
 {
@@ -98,12 +100,12 @@ Out solve (const In& in)
         p.hpf = std::clamp (0.5f * (st.vHpfMin + st.vHpfMax), 40.0f, 300.0f);
         const auto lt = analysis::octaveLtas (v, fs);
         auto dev = [&] (int k) { return lt[(size_t) k] - analysis::kRefVocal[k]; };
-        p.mud  = std::clamp (st.vMudG - st.vMatch * 0.45f * std::max (0.0f, dev (3)), -6.0f, 0.0f);
-        p.pres = std::clamp (st.vPresG - st.vMatch * 0.6f * 0.5f * (dev (6) + dev (7)), -3.0f, 8.0f);
-        p.air  = std::clamp (st.vAirG - st.vMatch * 0.6f * dev (8), -3.0f, 8.0f);
+        // EQ：风格的方向 + 一半的「离专业人声多远」修正，幅度收窄（宁可少动，不要假）
+        p.mud  = std::clamp (st.vMudG - st.vMatch * 0.4f * std::max (0.0f, dev (3)), -5.0f, 0.0f);
+        p.pres = std::clamp (st.vPresG - st.vMatch * 0.5f * 0.5f * (dev (6) + dev (7)), -2.0f, 5.0f);
+        p.air  = std::clamp (st.vAirG - st.vMatch * 0.5f * dev (8), -2.0f, 5.0f);
         p.warmth = std::clamp (st.vWarmth, 0.0f, 1.0f);
         const float sib = analysis::sibilance (v, fs);
-        p.deess = std::clamp (0.3f + (sib - 12.0f) / 10.0f + 0.08f * st.vDeessMargin, 0.1f, 0.85f);
         // 压缩：用真实链子模拟，两步牛顿把动态（P90-P10）拉到风格目标
         auto dry = p;
         const float s0 = analysis::spread (v, fs);
@@ -115,11 +117,28 @@ Out solve (const In& in)
             k = std::clamp (k + (s1 - st.vSpread) / 8.0f, 0.0f, 1.0f);
         }
         p.comp = k;
+        // 去齿音：模拟着二分，把齿音压到发行版人声的水平；本来就不重就只轻轻带一点
+        float sibOut = sib;
+        {
+            dry.comp = k; float lo = 0.05f, hi = 0.9f;
+            dry.deess = lo; const float sLo = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
+            if (sLo <= kSibTarget + st.vDeessMargin * 0.5f) { p.deess = lo; sibOut = sLo; }
+            else
+            {
+                for (int it = 0; it < 5; ++it)
+                {
+                    dry.deess = 0.5f * (lo + hi);
+                    sibOut = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
+                    (sibOut > kSibTarget + st.vDeessMargin * 0.5f ? lo : hi) = dry.deess;
+                }
+                p.deess = 0.5f * (lo + hi);
+            }
+        }
         p.level = 0;
         vp.push_back (p);
         ClientOut co; co.client = in.vocals[i].client; co.set = in.vocals[i].current;
         co.note = fmt ("輸入 %+.1f dB（歸一到參考電平）\n", p.input) + fmt ("去渾濁 %.1f dB  存在感 %+.1f dB  空氣感 %+.1f dB\n", p.mud, p.pres, p.air)
-                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, st.vSpread) + fmt ("去齒音 %.0f%%  溫暖 %.0f%%\n", p.deess * 100, p.warmth * 100);
+                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, st.vSpread) + fmt ("去齒音 %.0f%%（齒音 %.1f → %.1f dB）  ", p.deess * 100, sib, sibOut) + fmt ("溫暖 %.0f%%\n", p.warmth * 100);
         o.clients.push_back (co);
     }
     // 3) 伴奏：低切 + 固定的人声口袋 + 动态让位深度（风格）
@@ -149,7 +168,7 @@ Out solve (const In& in)
         o.m.vbrBefore = analysis::integrated (rawVocal, fs, true) - analysis::integrated (rawBeat, fs, true);
         o.m.maskBefore = analysis::maskedFraction (rawVocal, rawBeat, fs);
     }
-    for (int it = 0; it < 2; ++it)
+    auto setLevels = [&]
     {
         simAll();
         const float Lb = bin.empty() ? 0.0f : analysis::integrated (sum (bout), fs, true);
@@ -160,7 +179,28 @@ Out solve (const In& in)
             const float want = bin.empty() ? analysis::integrated (vin[i], fs, true) : Lb + st.vbr;
             vp[i].level = std::clamp (vp[i].level + want - Lv, -24.0f, 24.0f);
         }
+    };
+    setLevels();
+    // 伴奏让位深度：二分到「发行版那样的遮蔽比例」——不把伴奏挖空（那样很假），只让到和成品差不多
+    if (! vin.empty() && ! bin.empty())
+    {
+        KeyStore keys; std::vector<Stereo> vtmp (vin.size());
+        for (size_t i = 0; i < vin.size(); ++i) vtmp[i] = runVocal (vin[i], vp[i], in.style, fs, in.bpm, a, &keys);
+        const Stereo vs = sum (vtmp);
+        auto maskAt = [&] (float depth) { std::vector<Stereo> bt (bin.size());
+            for (size_t j = 0; j < bin.size(); ++j) { auto q = bp[j]; q.unmask = depth; bt[j] = runBeat (bin[j], q, in.style, fs, a, &keys); }
+            return analysis::maskedFraction (vs, sum (bt), fs); };
+        float depth = 0;
+        if (maskAt (0) > kMaskTarget)
+        {
+            float lo = 0, hi = std::clamp (st.bDmax * 1.5f, 3.0f, 12.0f);
+            if (maskAt (hi) > kMaskTarget) depth = hi;
+            else { for (int it = 0; it < 6; ++it) { const float m = 0.5f * (lo + hi); (maskAt (m) > kMaskTarget ? lo : hi) = m; } depth = 0.5f * (lo + hi); }
+        }
+        for (auto& q : bp) q.unmask = depth;
+        setLevels(); setLevels();
     }
+    else setLevels();
     simAll();
     if (! vin.empty() && ! bin.empty())
     {
@@ -179,6 +219,8 @@ Out solve (const In& in)
     {
         auto& s = o.clients[vin.size() + j].set; const auto& p = bp[j];
         s[B_HPF] = p.hpf; s[B_POCKET] = p.pocket; s[B_UNMASK] = p.unmask;
+        o.clients[vin.size() + j].note = fmt ("低切 %.0f Hz  人聲口袋 %.1f dB @ %.0f Hz\n", p.hpf, p.pocket, st.bPocketF)
+                                       + fmt ("人聲唱的時候在對應頻段讓位，最多 %.1f dB\n", p.unmask);
         if (! vin.empty()) o.clients[vin.size() + j].note += fmt ("人聲被蓋住的部分 %.0f%% → %.0f%%\n", o.m.maskBefore * 100, o.m.maskAfter * 100);
     }
     // 5) 总线：音色向风格曲线靠、粘合到风格的平均压缩量、推到风格响度（-1 dBTP 天花板）
