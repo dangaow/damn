@@ -253,11 +253,11 @@ Out solve (const In& in)
         const Stereo mix = sum (all);
         auto p = BusChain::fromSet (in.busCurrent);
         const auto lt = analysis::octaveLtas (mix, fs);
-        // 只往风格曲线靠 30 %、最多 ±2 dB：保留这首歌自己的音色
-        p.low  = std::clamp (0.5f * 0.5f * ((st.busCurve[0] - lt[0]) + (st.busCurve[1] - lt[1])), -3.0f, 3.0f);
-        p.high = std::clamp (0.3f * 0.5f * ((st.busCurve[8] - lt[8]) + (st.busCurve[9] - lt[9])), -2.0f, 2.0f);
-        // 中低频（125–250 Hz 发闷 / 发虚）：这里的偏差最影响「干净不干净」，修六成，最多 ±3 dB
-        p.mid  = std::clamp (0.6f * 0.5f * ((st.busCurve[2] - lt[2]) + (st.busCurve[3] - lt[3])), -3.0f, 3.0f);
+        // 期望的音色改动：只往风格曲线靠一部分，保留这首歌自己的音色
+        //   低频修五成（±3），中低频（125–250 Hz 发闷 / 发虚，最影响干不干净）修六成（±3），高频修三成（±2）
+        auto dev2 = [&] (int a) { return 0.5f * ((st.busCurve[(size_t) a] - lt[(size_t) a]) + (st.busCurve[(size_t) a + 1] - lt[(size_t) a + 1])); };
+        const float wantLo = std::clamp (0.5f * dev2 (0), -3.0f, 3.0f), wantMid = std::clamp (0.6f * dev2 (2), -3.0f, 3.0f), wantHi = std::clamp (0.3f * dev2 (8), -2.0f, 2.0f);
+        p.low = wantLo; p.mid = wantMid; p.high = wantHi;
         p.width = 100; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
         p.lift = kStyleLift[std::clamp (in.style, 0, kNumStyles - 1)];
         float lo = 0, hi = 1, gr = 0;                    // 粘合：二分到风格的平均压缩量
@@ -271,6 +271,22 @@ Out solve (const In& in)
             (analysis::integrated (out, fs) < st.lufsStyle ? lo : hi) = p.drive;
         }
         p.drive = 0.5f * (lo + hi); out = runBus (mix, p, in.style, fs, &gr);
+        // 闭环：提升（低频泛音、压缩补偿）、磁带、限幅也会改音色。量出总线实际改了多少，把三个 EQ 旋钮补到期望值
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            const auto lo2 = analysis::octaveLtas (out, fs);
+            auto got = [&] (int a) { return 0.5f * ((lo2[(size_t) a] - lt[(size_t) a]) + (lo2[(size_t) a + 1] - lt[(size_t) a + 1])); };
+            p.low  = std::clamp (p.low  + wantLo  - got (0), -6.0f, 6.0f);
+            p.mid  = std::clamp (p.mid  + wantMid - got (2), -6.0f, 6.0f);
+            p.high = std::clamp (p.high + wantHi  - got (8), -6.0f, 6.0f);
+            lo = p.drive - 3; hi = p.drive + 3;                // EQ 变了响度也变：在附近重新找推子
+            for (int it = 0; it < 6; ++it)
+            {
+                p.drive = std::clamp (0.5f * (lo + hi), -12.0f, 18.0f); out = runBus (mix, p, in.style, fs, &gr);
+                (analysis::integrated (out, fs) < st.lufsStyle ? lo : hi) = p.drive;
+            }
+            p.drive = std::clamp (0.5f * (lo + hi), -12.0f, 18.0f); out = runBus (mix, p, in.style, fs, &gr);
+        }
         o.m.busLufs = analysis::integrated (out, fs); o.m.busTp = analysis::truePeakDb (out); o.m.glueGr = gr;
         ClientOut co; co.client = in.busClient; co.set = in.busCurrent;
         co.set[M_LOW] = p.low; co.set[M_HIGH] = p.high; co.set[M_MID] = p.mid; co.set[M_GLUE] = p.glue; co.set[M_LIFT] = p.lift; co.set[M_WIDTH] = p.width; co.set[M_DRIVE] = p.drive; co.set[M_CEILING] = p.ceiling;
