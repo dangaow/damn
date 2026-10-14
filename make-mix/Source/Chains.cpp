@@ -6,7 +6,7 @@ namespace mm
 VocalChain::P VocalChain::fromSet (const ParamSet& s)
 {
     P p; p.input = s[V_INPUT]; p.hpf = s[V_HPF]; p.mud = s[V_MUD]; p.pres = s[V_PRES]; p.air = s[V_AIR]; p.comp = s[V_COMP];
-    p.deess = s[V_DEESS]; p.warmth = s[V_WARMTH]; p.echo = s[V_ECHO]; p.echoTime = (int) std::lround (s[V_ECHOTIME]); p.space = s[V_SPACE]; p.level = s[V_LEVEL];
+    p.deess = s[V_DEESS]; p.warmth = s[V_WARMTH]; p.level = s[V_LEVEL];
     return p;
 }
 
@@ -19,26 +19,25 @@ void VocalChain::prepare (double sampleRate, int maxBlock, int latency)
     pad.prepare (latency - osLat);
     sat.prepare (fs * 2);
     deess.prepare ({ fs, (juce::uint32) maxBlock, 2 });
-    echo.prepare (fs); space.prepare (fs); key.prepare (fs);
-    sendL.setSize (1, maxBlock); sendR.setSize (1, maxBlock);
-    for (auto* s : { &inGain, &outGain, &echoSend, &spaceSend }) s->reset (fs, 0.03);
+    key.prepare (fs);
+    for (auto* s : { &inGain, &outGain }) s->reset (fs, 0.03);
     comp.prepare (fs, 4.0f, 90.0f);
     setParams (p, style, bpm);
-    for (auto* s : { &inGain, &outGain, &echoSend, &spaceSend }) s->setCurrentAndTargetValue (s->getTargetValue());
+    for (auto* s : { &inGain, &outGain }) s->setCurrentAndTargetValue (s->getTargetValue());
     reset();
 }
 
 void VocalChain::reset()
 {
     for (auto* b : { &hpA, &hpB, &mud, &pres, &air }) b->reset();
-    comp.grDb = 0; deess.reset(); sat.prepare (fs * 2); if (os) os->reset(); echo.reset(); space.reset(); pad.reset(); key.reset();
+    comp.grDb = 0; deess.reset(); sat.prepare (fs * 2); if (os) os->reset(); pad.reset(); key.reset();
     grComp = grDeess = 0;
 }
 
 void VocalChain::setParams (const P& np, StyleId sid, double tempo)
 {
     const auto& st = mm::style (sid);
-    p = np; style = sid; bpm = tempo;
+    p = np; style = sid; bpm = tempo;   // bpm 目前没用（以前给回声同步）
     hpA.highPass (fs, p.hpf, st.vHpfSlope >= 24 ? 0.5412 : 0.7071);
     if (st.vHpfSlope >= 24) hpB.highPass (fs, p.hpf, 1.3066); else hpB.set (1, 0, 0, 1, 0, 0);
     mud.peak (fs, st.vMudF, 1.1, p.mud);
@@ -54,18 +53,8 @@ void VocalChain::setParams (const P& np, StyleId sid, double tempo)
     deess.active = p.deess > 0.01f;
     deess.thresholdDb = -24 - 18 * p.deess; deess.ratio = 3 + 5 * p.deess; deess.rangeDb = 3 + 9 * p.deess;
     sat.set (1 + 7 * p.warmth, 0.08f * p.warmth, std::min (1.0f, 2.2f * p.warmth));
-    echo.send = 0.55f * p.echo; echo.feedback = std::clamp (st.vEchoFb + 0.15f * p.echo, 0.0f, 0.6f); echo.duck = std::clamp (0.4f + 0.06f * st.vWetDuck, 0.0f, 0.9f);
-    echo.setTime (kEchoBeats[std::clamp (p.echoTime, 0, 5)] * 60.0 / std::max (40.0, bpm));
-    {
-        juce::Reverb::Parameters rp = space.verb.getParameters();
-        rp.roomSize = std::clamp (0.45f + 0.15f * st.vRevDecay, 0.45f, 0.93f);
-        if (std::abs (rp.roomSize - space.verb.getParameters().roomSize) > 1e-4f) space.verb.setParameters (rp);
-        space.preDelay = (float) (fs * std::clamp (st.vPreDelayMs, 0.0f, 90.0f) * 0.001);
-    }
     inGain.setTargetValue (dbToGain (p.input));
     outGain.setTargetValue (dbToGain (p.level + makeupDb));
-    echoSend.setTargetValue (p.echo > 0.0005f ? 1.0f : 0.0f);
-    spaceSend.setTargetValue (0.5f * p.space);
 }
 
 void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink) noexcept
@@ -100,28 +89,13 @@ void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink
         }
         os->processSamplesDown (block);
     }
-    // 3) 电平 → key → 回声 / 空间送出
-    auto* sl = sendL.getWritePointer (0); auto* sr = sendR.getWritePointer (0);
+    // 3) 电平 → key → 补齐固定延迟
     for (int i = 0; i < n; ++i)
     {
         const float g = outGain.getNextValue();
-        c0[i] *= g; if (nCh > 1) c1[i] *= g;
-        const float mono = nCh > 1 ? 0.5f * (c0[i] + c1[i]) : c0[i];
-        key.push (mono);
+        float l = c0[i] * g, r = nCh > 1 ? c1[i] * g : 0.0f;
+        key.push (nCh > 1 ? 0.5f * (l + r) : l);
         if (sink != nullptr && (pos + i + 1) % hop == 0) { key.take (keyDb); sink->publish ((pos + i) / hop, keyDb); }
-        float wl = 0, wr = 0;
-        echo.process (mono, mono * echoSend.getNextValue(), wl, wr);
-        const float pre = space.pre[0].read (space.preDelay);
-        space.pre[0].push (mono);
-        const float sv = space.lp.process (space.hp.process (pre, 0), 0) * spaceSend.getNextValue();
-        sl[i] = sv; sr[i] = sv;
-        if (nCh > 1) { c0[i] += wl; c1[i] += wr; } else c0[i] += 0.5f * (wl + wr);
-    }
-    space.verb.processStereo (sl, sr, n);
-    for (int i = 0; i < n; ++i)
-    {
-        float l = c0[i] + sl[i], r = nCh > 1 ? c1[i] + sr[i] : 0.0f;
-        if (nCh == 1) l = c0[i] + 0.5f * (sl[i] + sr[i]);
         pad.frame (l, r);
         c0[i] = l; if (nCh > 1) c1[i] = r;
     }

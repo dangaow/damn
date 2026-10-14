@@ -107,7 +107,7 @@ Out solve (const In& in)
         const float sib = analysis::sibilance (v, fs);
         p.deess = std::clamp (0.3f + (sib - 12.0f) / 10.0f + 0.08f * st.vDeessMargin, 0.1f, 0.85f);
         // 压缩：用真实链子模拟，两步牛顿把动态（P90-P10）拉到风格目标
-        auto dry = p; dry.echo = 0; dry.space = 0;
+        auto dry = p;
         const float s0 = analysis::spread (v, fs);
         float k = std::clamp (0.25f + (s0 - st.vSpread) / 8.0f, 0.05f, 0.95f);
         for (int it = 0; it < 2; ++it)
@@ -117,8 +117,6 @@ Out solve (const In& in)
             k = std::clamp (k + (s1 - st.vSpread) / 8.0f, 0.0f, 1.0f);
         }
         p.comp = k;
-        p.echo = std::clamp ((st.vEchoWdr + 30.0f) / 24.0f, 0.0f, 1.0f); p.echoTime = std::clamp (st.vEchoTime, 0, 5);
-        p.space = std::clamp ((st.vRevWdr + 32.0f) / 24.0f, 0.0f, 1.0f);
         p.level = 0;
         vp.push_back (p);
         ClientOut co; co.client = in.vocals[i].client; co.set = in.vocals[i].current;
@@ -175,7 +173,7 @@ Out solve (const In& in)
     {
         auto& s = o.clients[i].set; const auto& p = vp[i];
         s[V_INPUT] = p.input; s[V_HPF] = p.hpf; s[V_MUD] = p.mud; s[V_PRES] = p.pres; s[V_AIR] = p.air; s[V_COMP] = p.comp; s[V_DEESS] = p.deess;
-        s[V_WARMTH] = p.warmth; s[V_ECHO] = p.echo; s[V_ECHOTIME] = (float) p.echoTime; s[V_SPACE] = p.space; s[V_LEVEL] = p.level;
+        s[V_WARMTH] = p.warmth; s[V_LEVEL] = p.level;
         o.clients[i].note += bin.empty() ? fmt ("LEVEL %+.1f dB (kept loudness, no BEAT linked)\n", p.level)
                                          : fmt ("LEVEL %+.1f dB  vocal vs beat %+.1f dB (style %+.1f)\n", p.level, o.m.vbrAfter, st.vbr);
     }

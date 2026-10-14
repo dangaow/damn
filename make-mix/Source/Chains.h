@@ -41,7 +41,7 @@ struct BandMeter
 class VocalChain
 {
 public:
-    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, echo = 0.15f; int echoTime = 2; float space = 0.2f, level = 0; };
+    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, level = 0; };
     static P fromSet (const ParamSet&);
     void prepare (double fs, int maxBlock, int latency);
     void reset();
@@ -55,9 +55,8 @@ private:
     P p; StyleId style = 0;
     vox::Biquad hpA, hpB, mud, pres, air; vox::Compressor comp; vox::DeEsser deess; vox::Saturator sat;
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
-    vox::Echo echo; vox::Space space; Pad pad; BandMeter key; float keyDb[kKeyBands] {};
-    juce::SmoothedValue<float> inGain, outGain, echoSend, spaceSend;
-    juce::AudioBuffer<float> work, sendL, sendR;
+    Pad pad; BandMeter key; float keyDb[kKeyBands] {};
+    juce::SmoothedValue<float> inGain, outGain;
     float makeupDb = 0;
 };
 

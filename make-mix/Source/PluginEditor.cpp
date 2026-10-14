@@ -5,7 +5,7 @@ namespace
 {
 const juce::Colour bg (0xff0a0b10), panel (0xff12141b), line (0xff23262f), red (0xffe0112b), silver (0xffc9ced6), dim (0xff6b7080);
 // 旋钮下面的短名字（和 kParams 顺序一致）
-const char* kShort[kNumParams] = { "INPUT", "LOW CUT", "MUD", "PRESENCE", "AIR", "COMPRESS", "DE-ESS", "WARMTH", "ECHO", "ECHO TIME", "SPACE", "LEVEL",
+const char* kShort[kNumParams] = { "INPUT", "LOW CUT", "MUD", "PRESENCE", "AIR", "COMPRESS", "DE-ESS", "WARMTH", "LEVEL",
                                    "LOW CUT", "POCKET", "UNMASK", "LEVEL",
                                    "LOW", "HIGH", "GLUE", "WIDTH", "DRIVE", "CEILING" };
 const char* kRoleName[3] = { "VOCAL", "BEAT", "BUS" };
@@ -89,7 +89,6 @@ MakeMixEditor::MakeMixEditor (MakeMixProcessor& p) : AudioProcessorEditor (&p), 
     setLookAndFeel (&look);
     for (int i = 0; i < kNumParams; ++i)
     {
-        if (kParams[i].kind == PKind::Choice) continue;
         auto& k = knobs[(size_t) i]; k.param = i;
         k.s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
         k.s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 76, 18);
@@ -99,9 +98,6 @@ MakeMixEditor::MakeMixEditor (MakeMixProcessor& p) : AudioProcessorEditor (&p), 
         addChildComponent (k.s);
         k.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, kParams[i].id, k.s);
     }
-    for (auto* c : kEchoChoices) echoTime.addItem (c, echoTime.getNumItems() + 1);
-    addChildComponent (echoTime);
-    echoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "v_echoTime", echoTime);
 
     for (int r = 0; r < 3; ++r)
     {
@@ -131,8 +127,7 @@ void MakeMixEditor::showRole()
 {
     shownRole = (int) proc.role();
     for (int r = 0; r < 3; ++r) roleBtn[r].setToggleState (r == shownRole, juce::dontSendNotification);
-    for (int i = 0; i < kNumParams; ++i) if (kParams[i].kind != PKind::Choice) knobs[(size_t) i].s.setVisible ((int) kParams[i].role == shownRole);
-    echoTime.setVisible (shownRole == (int) Role::Vocal);
+    for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible ((int) kParams[i].role == shownRole);
     resized(); repaint();
 }
 
@@ -169,9 +164,9 @@ void MakeMixEditor::paint (juce::Graphics& g)
     g.setFont (MixLook::ui (12.0f, true));
     for (int i = 0; i < kNumParams; ++i)
     {
-        const bool vis = kParams[i].kind == PKind::Choice ? echoTime.isVisible() : knobs[(size_t) i].s.isVisible();
+        const bool vis = knobs[(size_t) i].s.isVisible();
         if (! vis) continue;
-        const auto b = kParams[i].kind == PKind::Choice ? echoTime.getBounds() : knobs[(size_t) i].s.getBounds();
+        const auto b = knobs[(size_t) i].s.getBounds();
         g.setColour (silver); g.drawText (kShort[i], b.getX() - 10, b.getY() - 18, b.getWidth() + 20, 14, juce::Justification::centred);
     }
 
@@ -213,13 +208,12 @@ void MakeMixEditor::resized()
     // 当前角色的旋钮：最多 6 个一排
     std::vector<juce::Component*> vis; std::vector<int> ids;
     for (int i = 0; i < kNumParams; ++i)
-        if ((int) kParams[i].role == shownRole) { vis.push_back (kParams[i].kind == PKind::Choice ? (juce::Component*) &echoTime : &knobs[(size_t) i].s); ids.push_back (i); }
+        if ((int) kParams[i].role == shownRole) { vis.push_back (&knobs[(size_t) i].s); ids.push_back (i); }
     const int cols = 6, kw = 110, kh = 110, gap = (getWidth() - 40 - cols * kw) / (cols - 1);
     for (size_t j = 0; j < vis.size(); ++j)
     {
         const int col = (int) j % cols, row = (int) j / cols, x = 20 + col * (kw + gap), y = vis.size() <= (size_t) cols ? 170 : 104 + row * 146;
-        if (vis[j] == &echoTime) echoTime.setBounds (x + 8, y + 40, kw - 16, 30);
-        else vis[j]->setBounds (x, y, kw, kh);
+        vis[j]->setBounds (x, y, kw, kh);
     }
     mixBtn.setBounds (36, 396, 200, 74);
     undoBtn.setBounds (36, 478, 96, 32);

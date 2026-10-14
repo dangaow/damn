@@ -1,10 +1,11 @@
 #pragma once
 // 参数表：三个角色共用一套 APVTS 布局（界面只显示当前角色的那几个）。不依赖 JUCE。
+// 只做人声染色和混音：没有混响、没有回声。
 #include "Shared.h"
 
 namespace mm
 {
-enum class PKind { Db, Hz, Amount, Choice, Percent };
+enum class PKind { Db, Hz, Amount, Percent };
 struct ParamDef { const char* id; const char* name; Role role; PKind kind; float min, max, def, skew; };
 
 // skew：JUCE NormalisableRange 的 centre（<= 0 表示线性）
@@ -17,9 +18,6 @@ inline constexpr ParamDef kParams[] = {
     { "v_comp",     "Vocal Compress", Role::Vocal, PKind::Amount,   0, 1, 0.4f, 0 },
     { "v_deess",    "Vocal De-ess",   Role::Vocal, PKind::Amount,   0, 1, 0.4f, 0 },
     { "v_warmth",   "Vocal Warmth",   Role::Vocal, PKind::Amount,   0, 1, 0.2f, 0 },
-    { "v_echo",     "Vocal Echo",     Role::Vocal, PKind::Amount,   0, 1, 0.15f, 0 },
-    { "v_echoTime", "Echo Time",      Role::Vocal, PKind::Choice,   0, 5, 2, 0 },
-    { "v_space",    "Vocal Space",    Role::Vocal, PKind::Amount,   0, 1, 0.2f, 0 },
     { "v_level",    "Vocal Level",    Role::Vocal, PKind::Db,     -24, 24, 0, 0 },
     { "b_hpf",      "Beat Low Cut",   Role::Beat,  PKind::Hz,      20, 200, 25, 60 },
     { "b_pocket",   "Beat Pocket",    Role::Beat,  PKind::Db,      -6, 0, -1.5f, 0 },
@@ -33,10 +31,8 @@ inline constexpr ParamDef kParams[] = {
     { "m_ceiling",  "Bus Ceiling",    Role::Bus,   PKind::Db,      -3, 0, -1, 0 },
 };
 constexpr int kNumParams = (int) (sizeof (kParams) / sizeof (kParams[0]));
-inline constexpr const char* kEchoChoices[] = { "1/16", "1/8", "1/8 D", "1/4", "1/4 D", "1/2" };
-inline constexpr float kEchoBeats[] = { 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
 
-enum PIdx { V_INPUT, V_HPF, V_MUD, V_PRES, V_AIR, V_COMP, V_DEESS, V_WARMTH, V_ECHO, V_ECHOTIME, V_SPACE, V_LEVEL,
+enum PIdx { V_INPUT, V_HPF, V_MUD, V_PRES, V_AIR, V_COMP, V_DEESS, V_WARMTH, V_LEVEL,
             B_HPF, B_POCKET, B_UNMASK, B_LEVEL, M_LOW, M_HIGH, M_GLUE, M_WIDTH, M_DRIVE, M_CEILING };
 
 inline int paramIndex (const std::string& id)

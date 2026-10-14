@@ -9,12 +9,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayo
     for (const auto& d : kParams)
     {
         const juce::ParameterID id { d.id, 1 };
-        if (d.kind == PKind::Choice)
-        {
-            juce::StringArray ch; for (auto* c : kEchoChoices) ch.add (c);
-            layout.add (std::make_unique<juce::AudioParameterChoice> (id, d.name, ch, (int) d.def));
-            continue;
-        }
         juce::NormalisableRange<float> r (d.min, d.max, d.kind == PKind::Percent ? 1.0f : 0.0f);
         if (d.skew > 0) r.setSkewForCentre (d.skew);
         auto attr = juce::AudioParameterFloatAttributes();
@@ -23,7 +17,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayo
             case PKind::Db:      attr = attr.withLabel ("dB").withStringFromValueFunction ([] (float v, int) { return juce::String (v, 1) + " dB"; }); break;
             case PKind::Hz:      attr = attr.withLabel ("Hz").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; }); break;
             case PKind::Percent: attr = attr.withLabel ("%").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + "%"; }); break;
-            case PKind::Amount: case PKind::Choice: attr = attr.withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; }); break;
+            case PKind::Amount: attr = attr.withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; }); break;
         }
         layout.add (std::make_unique<juce::AudioParameterFloat> (id, d.name, r, d.def, attr));
     }
@@ -156,8 +150,7 @@ void MakeMixProcessor::loadStyleDefaults()
         case Role::Vocal:
             s[V_HPF] = 0.5f * (st.vHpfMin + st.vHpfMax); s[V_MUD] = st.vMudG; s[V_PRES] = st.vPresG; s[V_AIR] = st.vAirG;
             s[V_COMP] = 0.4f; s[V_DEESS] = 0.4f; s[V_WARMTH] = st.vWarmth;
-            s[V_ECHO] = std::clamp ((st.vEchoWdr + 30.0f) / 24.0f, 0.0f, 1.0f); s[V_ECHOTIME] = (float) st.vEchoTime;
-            s[V_SPACE] = std::clamp ((st.vRevWdr + 32.0f) / 24.0f, 0.0f, 1.0f); break;
+            break;
         case Role::Beat:
             s[B_HPF] = st.bHpf; s[B_POCKET] = st.bPocketStatic; s[B_UNMASK] = st.bDmax; break;
         case Role::Bus:

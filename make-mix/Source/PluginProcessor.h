@@ -22,7 +22,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 6.0; }
+    double getTailLengthSeconds() const override { return 0.2; }
 
     int getNumPrograms() override { return mm::kNumStyles; }
     int getCurrentProgram() override { return style(); }

@@ -32,8 +32,7 @@ private:
     MakeMixProcessor& proc;
     MixLook look;
     std::array<Knob, mm::kNumParams> knobs;
-    juce::ComboBox echoTime, styleBox;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> echoAtt;
+    juce::ComboBox styleBox;
     juce::TextButton roleBtn[3], mixBtn, undoBtn, defaultsBtn;
     juce::String status, link, noteText;
     float mIn = 0, mOut = 0, mG1 = 0, mG2 = 0; std::array<float, mm::kKeyBands> mCut {};
