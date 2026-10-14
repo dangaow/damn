@@ -33,7 +33,10 @@ private:
     MixLook look;
     std::array<Knob, mm::kNumParams> knobs;
     juce::ComboBox styleBox;
-    juce::TextButton roleBtn[3], mixBtn, undoBtn, defaultsBtn;
+    juce::TextButton roleBtn[3], mixBtn, undoBtn, defaultsBtn, analyzeBtn, closeBtn, useStyleBtn;
+    std::shared_ptr<const mm::analysis::Report> rep; bool showReport = false;
+    void setReportVisible (bool);
+    void paintReport (juce::Graphics&);
     juce::String status, link, noteText;
     float mIn = 0, mOut = 0, mG1 = 0, mG2 = 0; std::array<float, mm::kKeyBands> mCut {};
     int shownRole = -1, shownStyle = -1;

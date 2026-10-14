@@ -8,8 +8,6 @@ using analysis::Stereo;
 namespace
 {
 constexpr int kSimBlock = 512;
-// 专业人声的大致倍频程谱形（相对 500/1k/2k 平均，dB），用来判断录音偏浑 / 偏暗 / 偏亮
-constexpr float kRefVocal[kOctBands] = { -30, -24, -12, -4, 1, 1, -1, -5, -11, -22 };
 
 template <typename F> Stereo runChain (const Stereo& in, double fs, F&& proc)
 {
@@ -99,7 +97,7 @@ Out solve (const In& in)
         p.input = std::clamp (-20.0f - Lin, -24.0f, 24.0f);
         p.hpf = std::clamp (0.5f * (st.vHpfMin + st.vHpfMax), 40.0f, 300.0f);
         const auto lt = analysis::octaveLtas (v, fs);
-        auto dev = [&] (int k) { return lt[(size_t) k] - kRefVocal[k]; };
+        auto dev = [&] (int k) { return lt[(size_t) k] - analysis::kRefVocal[k]; };
         p.mud  = std::clamp (st.vMudG - st.vMatch * 0.45f * std::max (0.0f, dev (3)), -6.0f, 0.0f);
         p.pres = std::clamp (st.vPresG - st.vMatch * 0.6f * 0.5f * (dev (6) + dev (7)), -3.0f, 8.0f);
         p.air  = std::clamp (st.vAirG - st.vMatch * 0.6f * dev (8), -3.0f, 8.0f);

@@ -10,6 +10,11 @@
 - **風格化**：12 種風格（TRAP / DRILL / MELODIC RAP / BOOM BAP / R&B / 華語流行 / 華語抒情 / LO-FI / POP / ROCK / EDM / AFROBEATS），
   每種都有自己的人聲音色、動態、人聲比伴奏、伴奏讓位、總線響度和音色曲線。
 
+**ANALYZE**（一鍵分析，單個實例就能用，不用別的實例）：播放時按一下，聽 10 秒自己這條軌，然後顯示：
+- 伴奏：響度、真峰值、調性（例如 C# minor / E major）、低頻佔比（808 / 底鼓多重）、人聲頻段有多擠、立體聲寬度、最接近的風格（一鍵 USE）。
+- 人聲：響度、動態、齒音，和專業人聲的頻譜比哪裡偏渾 / 偏暗 / 偏亮，以及該怎麼調。
+- 總線：整體響度和真峰值對比風格目標、低 / 中 / 高頻對比風格曲線、立體聲相關（單聲道兼容）。
+
 所有結果都寫進普通參數：旋鈕會動到新位置，可以接著手調，FL 的撤銷能用，**UNDO MIX** 一鍵回到 MIX 之前。導出和實時播放結果完全一樣。
 
 ## 安裝（Windows）
@@ -43,6 +48,7 @@ ninja -C build MakeMix_VST3 mm_mixrender
 ```
 mm_mixrender --vocal vocal.wav --beat beat.wav --style trap --bpm 94 --out out_dir
 mm_mixrender --snapshot ui_dir          # 三個角色的界面截圖
+mm_mixrender --bpm 94 --analyze beat beat.wav [report.png]   # 一鍵分析（vocal / beat / bus）
 ```
 
 結構：`Source/Chains.*`（三條處理鏈，插件和解算器共用同一份代碼）、`Hub.*`（實例登記、人聲 key、錄音、MIX 流程）、

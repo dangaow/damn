@@ -113,20 +113,36 @@ MakeMixEditor::MakeMixEditor (MakeMixProcessor& p) : AudioProcessorEditor (&p), 
     mixBtn.onClick = [this] { proc.requestMix(); };
     undoBtn.setButtonText ("UNDO MIX"); undoBtn.onClick = [this] { proc.requestUndo(); };
     defaultsBtn.setButtonText ("STYLE DEFAULTS"); defaultsBtn.onClick = [this] { proc.loadStyleDefaults(); };
-    for (auto* b : { &mixBtn, &undoBtn, &defaultsBtn }) addAndMakeVisible (*b);
+    analyzeBtn.setButtonText ("ANALYZE"); analyzeBtn.onClick = [this] { proc.requestAnalyze(); };
+    closeBtn.setButtonText ("CLOSE"); closeBtn.onClick = [this] { setReportVisible (false); };
+    useStyleBtn.onClick = [this] { if (rep && rep->suggestedStyle >= 0) proc.setStyle (rep->suggestedStyle, true); };
+    for (auto* b : { &mixBtn, &undoBtn, &defaultsBtn, &analyzeBtn }) addAndMakeVisible (*b);
+    addChildComponent (closeBtn); addChildComponent (useStyleBtn);
 
     styleBox.setSelectedId (proc.style() + 1, juce::dontSendNotification); shownStyle = proc.style();
     setSize (960, 540);
     showRole();
+    timerCallback();
     startTimerHz (30);
 }
 
 MakeMixEditor::~MakeMixEditor() { setLookAndFeel (nullptr); }
 
+void MakeMixEditor::setReportVisible (bool v)
+{
+    showReport = v && rep != nullptr;
+    closeBtn.setVisible (showReport);
+    useStyleBtn.setVisible (showReport && rep->role == 1 && rep->suggestedStyle >= 0);
+    if (useStyleBtn.isVisible()) useStyleBtn.setButtonText ("USE " + juce::String::fromUTF8 (mm::style (rep->suggestedStyle).name));
+    for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible (! showReport && (int) kParams[i].role == shownRole);
+    repaint();
+}
+
 void MakeMixEditor::showRole()
 {
     shownRole = (int) proc.role();
     for (int r = 0; r < 3; ++r) roleBtn[r].setToggleState (r == shownRole, juce::dontSendNotification);
+    showReport = false; closeBtn.setVisible (false); useStyleBtn.setVisible (false);
     for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible ((int) kParams[i].role == shownRole);
     resized(); repaint();
 }
@@ -144,6 +160,14 @@ void MakeMixEditor::timerCallback()
     undoBtn.setEnabled (proc.hub().canUndo());
     link = proc.isBridged() ? juce::String ("LINK OFF - BRIDGED: Wrapper > Processing > untick 'Make bridged'") : juce::String::fromUTF8 (proc.hub().linkSummary().c_str());
     noteText = proc.note();
+    proc.tickAnalyze();
+    switch (proc.analyzeState())
+    {
+        case MakeMixProcessor::Analyze::Listening: analyzeBtn.setButtonText ("ANALYZING " + juce::String (juce::roundToInt (std::min (0.99f, proc.analyzeProgress()) * 100)) + "%"); break;
+        case MakeMixProcessor::Analyze::Working:   analyzeBtn.setButtonText ("ANALYZING..."); break;
+        case MakeMixProcessor::Analyze::Idle: case MakeMixProcessor::Analyze::Ready: analyzeBtn.setButtonText ("ANALYZE"); break;
+    }
+    if (auto r = proc.report(); r != rep && proc.analyzeState() == MakeMixProcessor::Analyze::Ready) { rep = r; if (rep && rep->role == shownRole) setReportVisible (true); }
     repaint();
 }
 
@@ -169,6 +193,8 @@ void MakeMixEditor::paint (juce::Graphics& g)
         const auto b = knobs[(size_t) i].s.getBounds();
         g.setColour (silver); g.drawText (kShort[i], b.getX() - 10, b.getY() - 18, b.getWidth() + 20, 14, juce::Justification::centred);
     }
+
+    if (showReport) paintReport (g);
 
     // 底栏：说明 + 电平表
     g.setColour (panel); g.fillRoundedRectangle (20, 380, (float) getWidth() - 40, 144, 8);
@@ -215,7 +241,53 @@ void MakeMixEditor::resized()
         const int col = (int) j % cols, row = (int) j / cols, x = 20 + col * (kw + gap), y = vis.size() <= (size_t) cols ? 170 : 104 + row * 146;
         vis[j]->setBounds (x, y, kw, kh);
     }
-    mixBtn.setBounds (36, 396, 200, 74);
-    undoBtn.setBounds (36, 478, 96, 32);
-    defaultsBtn.setBounds (140, 478, 96, 32);
+    mixBtn.setBounds (36, 392, 200, 58);
+    analyzeBtn.setBounds (36, 456, 200, 28);
+    undoBtn.setBounds (36, 490, 96, 26);
+    defaultsBtn.setBounds (140, 490, 96, 26);
+    closeBtn.setBounds (getWidth() - 116, 96, 86, 26);
+    useStyleBtn.setBounds (getWidth() - 336, 96, 210, 26);
+}
+
+// 分析报告：左边倍频程谱（红 = 这条轨，灰线 = 参照），右边结果和建议
+void MakeMixEditor::paintReport (juce::Graphics& g)
+{
+    const auto area = juce::Rectangle<int> (20, 88, getWidth() - 40, 284);
+    g.setColour (panel); g.fillRoundedRectangle (area.toFloat(), 8);
+    g.setColour (line); g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 8, 1);
+    const char* who[3] = { "VOCAL ANALYSIS", "BEAT ANALYSIS", "MIX ANALYSIS" };
+    g.setColour (silver); g.setFont (MixLook::ui (15.0f, true)); g.drawText (who[std::clamp (rep->role, 0, 2)], 36, 98, 300, 20, juce::Justification::left);
+    g.setColour (dim); g.setFont (MixLook::ui (11.0f));
+    g.drawText (juce::String (rep->seconds, 1) + " s analysed", 36, 118, 200, 14, juce::Justification::left);
+
+    // 谱
+    const auto plot = juce::Rectangle<float> (48, 146, 400, 196);
+    const float dbTop = 20, dbBot = -40;
+    auto yOf = [&] (float db) { return plot.getY() + plot.getHeight() * (dbTop - juce::jlimit (dbBot, dbTop, db)) / (dbTop - dbBot); };
+    g.setColour (line);
+    for (float db : { 12.0f, 0.0f, -12.0f, -24.0f }) g.drawHorizontalLine ((int) yOf (db), plot.getX(), plot.getRight());
+    const float bw = plot.getWidth() / kOctBands;
+    const char* lab[kOctBands] = { "31", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k" };
+    juce::Path ref;
+    for (int k = 0; k < kOctBands; ++k)
+    {
+        const float x = plot.getX() + k * bw, y = yOf (rep->ltas[(size_t) k]), y0 = yOf (dbBot);
+        g.setColour (red.withAlpha (0.85f)); g.fillRoundedRectangle (x + 6, y, bw - 12, y0 - y, 2);
+        const float ry = yOf (rep->target[(size_t) k]);
+        if (k == 0) ref.startNewSubPath (x + bw / 2, ry); else ref.lineTo (x + bw / 2, ry);
+        g.setColour (dim); g.setFont (MixLook::ui (10.0f)); g.drawText (lab[k], (int) x, (int) plot.getBottom() + 2, (int) bw, 12, juce::Justification::centred);
+    }
+    g.setColour (silver); g.strokePath (ref, juce::PathStrokeType (1.6f));
+    g.setFont (MixLook::ui (10.0f)); g.setColour (dim);
+    g.drawText (rep->role == 0 ? "grey line: typical pro vocal" : rep->role == 1 ? "grey line: closest style curve" : "grey line: style curve", (int) plot.getX() + 200, 118, 200, 14, juce::Justification::right);
+
+    // 文字
+    g.setFont (MixLook::ui (13.0f));
+    int y = 146;
+    for (size_t i = 0; i < rep->lines.size() && y < 360; ++i, y += 22)
+    {
+        const auto& t = rep->lines[i];
+        g.setColour (i == 0 || t.rfind ("KEY", 0) == 0 || t.rfind ("CLOSEST", 0) == 0 ? silver : t.rfind ("!", 0) == 0 ? red : silver.withAlpha (0.75f));
+        g.drawText (juce::String::fromUTF8 (t.c_str()), 480, y, getWidth() - 520, 20, juce::Justification::left);
+    }
 }

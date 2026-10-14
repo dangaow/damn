@@ -6,6 +6,10 @@ namespace mm::analysis
 {
 struct Stereo { std::vector<float> l, r; size_t size() const { return l.size(); } };
 
+// 专业人声的倍频程谱形（每个倍频程的总能量，相对 500/1k/2k 平均，dB）：判断录音偏浑 / 偏暗 / 偏亮。
+// 取自 谎话 / Isolated 两首成品里分离出的人声的平均
+inline constexpr float kRefVocal[kOctBands] = { -36, -28, -13, 1, 6, 0, -6, -3, 2, 1 };
+
 // BS.1770 积分响度（门限 -70 LUFS 绝对 / -10 LU 相对）。hpf150 = true 时先过 150 Hz 高通：「人声频段响度」，
 // 用来比较人声和伴奏（不让 808 / 底鼓的低频能量主导）
 float integrated (const Stereo&, double fs, bool hpf150 = false);
@@ -22,4 +26,21 @@ float truePeakDb (const Stereo&);
 float samplePeakDb (const Stereo&);
 // 掩蔽：人声活跃的帧里，1–5 kHz 伴奏能量大于人声的比例
 float maskedFraction (const Stereo& vocal, const Stereo& beat, double fs);
+
+// 调性：12 个音级的色度 + Krumhansl 调式模板。返回 0..11 = C..B，minor 表示小调，confidence 0..1
+struct Key { int tonic = 0; bool minor = false; float confidence = 0; std::string name() const; std::string relative() const; };
+Key detectKey (const Stereo&, double fs);
+float correlation (const Stereo&);                    // 左右相关（1 = 单声道，0 = 很宽）
+float lowShare (const Stereo&, double fs);            // 150 Hz 以下占 K 计权功率的比例
+
+// 一键分析的报告（界面画的就是这些）
+struct Report
+{
+    int role = 0; float seconds = 0, lufs = -100, tp = -100, spread = 0, width = 0;
+    std::array<float, kOctBands> ltas {}, target {};    // 倍频程谱 / 参照（人声：专业人声谱形；其他：风格曲线）
+    int suggestedStyle = -1; Key key; bool hasKey = false;
+    std::vector<std::string> lines;                     // 结果和建议（英文，界面显示）
+};
+// 角色 0 人声 / 1 伴奏 / 2 总线；style 是当前风格（总线对比它的曲线），bpm 用来猜风格
+Report analyse (int role, const Stereo&, double fs, int style, double bpm);
 } // namespace mm::analysis

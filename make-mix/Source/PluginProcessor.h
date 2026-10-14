@@ -45,6 +45,14 @@ public:
     juce::String note() const { const juce::ScopedLock sl (noteLock); return lastNote; }
     bool isBridged() const noexcept { return bridged; }
 
+    // 一键分析（不需要别的实例）：听 10 秒自己的输入，后台算报告
+    enum class Analyze { Idle, Listening, Working, Ready };
+    void requestAnalyze();                    // 正在听时再按 = 用已有的（至少 3 秒）提前出结果
+    void tickAnalyze();                       // 界面定时器调
+    Analyze analyzeState() const noexcept { return (Analyze) aState.load(); }
+    float analyzeProgress() const noexcept { return (float) aLen.load() / (float) std::max (1.0, 10.0 * fs); }
+    std::shared_ptr<const mm::analysis::Report> report() const { const juce::ScopedLock sl (noteLock); return aReport; }
+
     // 电平表（音频线程写，界面读）
     std::atomic<float> inPeak { 0 }, outPeak { 0 }, gr1 { 0 }, gr2 { 0 }, loud { -100 };
     std::array<std::atomic<float>, mm::kKeyBands> cut {};
@@ -75,6 +83,9 @@ private:
     mm::ParamSet applied; mm::StyleId appliedStyle = -1; double appliedBpm = 0; int lastRole = -1;
     double fs = 44100; int maxBlock = 512, L = 1024; bool prepared = false; int64_t freeCounter = 0;
     juce::CriticalSection noteLock; juce::String lastNote;
+    std::vector<float> aL, aR; std::atomic<int> aLen { 0 }, aState { 0 }; std::atomic<bool> aArmed { false };
+    std::thread aWorker; std::shared_ptr<const mm::analysis::Report> aReport;
+    void startAnalyzeWorker();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MakeMixProcessor)
 };

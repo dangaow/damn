@@ -127,6 +127,33 @@ int main (int argc, char** argv)
             }
             return 0;
         }
+        else if (a == "--analyze")              // 一键分析：--analyze vocal|beat|bus file.wav [snapshot.png]
+        {
+            const std::string rs = next(); const juce::File f = juce::File::getCurrentWorkingDirectory().getChildFile (next());
+            const Role role = rs == "beat" ? Role::Beat : rs == "bus" ? Role::Bus : Role::Vocal;
+            double sr = 0; const Stereo x = readWav (f, sr);
+            MakeMixProcessor p; PlayHead hp; hp.bpm = bpm; p.setPlayHead (&hp); p.fallbackBpm = bpm; p.setRole (role); p.setStyle (styleIndex (styleName) < 0 ? 0 : styleIndex (styleName), false);
+            p.prepareToPlay (sr, 512); p.requestAnalyze();
+            juce::AudioBuffer<float> b (2, 512); juce::MidiBuffer mb;
+            for (size_t s0 = 0; s0 + 512 <= x.size() && p.analyzeState() == MakeMixProcessor::Analyze::Listening; s0 += 512)
+            {
+                hp.pos = (int64_t) s0;
+                for (int j = 0; j < 512; ++j) { b.setSample (0, j, x.l[s0 + (size_t) j]); b.setSample (1, j, x.r[s0 + (size_t) j]); }
+                p.processBlock (b, mb); p.tickAnalyze();
+            }
+            if (p.analyzeState() == MakeMixProcessor::Analyze::Listening) p.requestAnalyze();
+            while (p.analyzeState() != MakeMixProcessor::Analyze::Ready) juce::Thread::sleep (20);
+            for (auto& l : p.report()->lines) std::cout << l << "\n";
+            std::cout << "LTAS"; for (float v : p.report()->ltas) std::cout << " " << juce::String (v, 1); std::cout << "\n";
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor()); ed->setVisible (true);
+                auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                juce::PNGImageFormat png; const juce::File out = juce::File::getCurrentWorkingDirectory().getChildFile (next());
+                out.deleteFile(); juce::FileOutputStream fo (out); png.writeImageToStream (img, fo);
+            }
+            return 0;
+        }
         else if (a == "--out") outDir = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else { std::cerr << "usage: mm_mixrender --vocal v.wav --beat b.wav [--style trap] [--bpm 94] [--no-bus] [--blocks 512|random] --out DIR\n"; return 2; }
     }

@@ -1,5 +1,7 @@
 #include "Analysis.h"
 #include "Dsp.h"
+#include "Styles.h"
+#include <cstdio>
 
 namespace mm::analysis
 {
@@ -173,5 +175,163 @@ float maskedFraction (const Stereo& vocal, const Stereo& beat, double fs)
         }
     }
     return total == 0 ? 0.0f : (float) masked / (float) total;
+}
+
+// ---------------------------------------------------------------------------------------- 调性 / 宽度 / 低频
+namespace
+{
+const char* kNotes[12] = { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
+constexpr float kMajor[12] = { 6.35f, 2.23f, 3.48f, 2.33f, 4.38f, 4.09f, 2.52f, 5.19f, 2.39f, 3.66f, 2.29f, 2.88f };
+constexpr float kMinor[12] = { 6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f, 2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
+float pearson (const float* a, const float* b, int n)
+{
+    float ma = 0, mb = 0; for (int i = 0; i < n; ++i) { ma += a[i]; mb += b[i]; } ma /= n; mb /= n;
+    float sab = 0, saa = 0, sbb = 0;
+    for (int i = 0; i < n; ++i) { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) * (a[i] - ma); sbb += (b[i] - mb) * (b[i] - mb); }
+    return sab / std::sqrt (std::max (1e-12f, saa * sbb));
+}
+std::string f1 (float v) { char b[32]; std::snprintf (b, sizeof b, "%.1f", v); return b; }
+std::string f0 (float v) { char b[32]; std::snprintf (b, sizeof b, "%.0f", v); return b; }
+std::string sgn (float v) { char b[32]; std::snprintf (b, sizeof b, "%+.1f", v); return b; }
+}
+
+std::string Key::name() const { return std::string (kNotes[tonic % 12]) + (minor ? " minor" : " major"); }
+std::string Key::relative() const
+{
+    return minor ? std::string (kNotes[(tonic + 3) % 12]) + " major" : std::string (kNotes[(tonic + 9) % 12]) + " minor";
+}
+
+Key detectKey (const Stereo& x, double fs)
+{
+    constexpr int order = 13, N = 1 << order;            // 8192 点：低音区也分得清半音
+    juce::dsp::FFT fft (order);
+    std::vector<float> win (N), buf (2 * N);
+    for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * i / N);
+    float chroma[12] {};
+    for (size_t s = 0; s + N <= x.size(); s += N / 2)
+    {
+        std::fill (buf.begin(), buf.end(), 0.0f);
+        for (int i = 0; i < N; ++i) buf[(size_t) i] = 0.5f * (x.l[s + (size_t) i] + x.r[s + (size_t) i]) * win[(size_t) i];
+        fft.performFrequencyOnlyForwardTransform (buf.data(), true);
+        // 只取局部峰（谐波），按能量记到音级上；每帧归一，别让响的段落 / 808 一个音统治
+        float frame[12] {}; double tot = 0;
+        for (int b = 2; b < N / 2 - 1; ++b)
+        {
+            const double f = b * fs / N;
+            if (f < 65 || f > 2500) continue;
+            const float m = buf[(size_t) b];
+            if (m <= buf[(size_t) b - 1] || m < buf[(size_t) b + 1]) continue;
+            const int pc = ((int) std::lround (12.0 * std::log2 (f / 440.0)) + 9 + 1200) % 12;
+            const float w = (float) std::sqrt (m) * (f < 160 ? 0.5f : 1.0f);
+            frame[pc] += w; tot += w;
+        }
+        if (tot > 0) for (int i = 0; i < 12; ++i) chroma[i] += (float) (frame[i] / tot);
+    }
+    Key best; float bestR = -2, second = -2;
+    for (int t = 0; t < 12; ++t)
+        for (int m = 0; m < 2; ++m)
+        {
+            float prof[12]; for (int i = 0; i < 12; ++i) prof[i] = (m ? kMinor : kMajor)[(i - t + 12) % 12];
+            const float r = pearson (chroma, prof, 12);
+            if (r > bestR) { second = bestR; bestR = r; best.tonic = t; best.minor = m == 1; }
+            else if (r > second) second = r;
+        }
+    best.confidence = std::clamp ((bestR - second) * 4.0f + bestR * 0.5f, 0.0f, 1.0f);
+    return best;
+}
+
+float correlation (const Stereo& x)
+{
+    double lr = 0, ll = 0, rr = 0;
+    for (size_t i = 0; i < x.size(); ++i) { lr += (double) x.l[i] * x.r[i]; ll += (double) x.l[i] * x.l[i]; rr += (double) x.r[i] * x.r[i]; }
+    return (float) (lr / std::sqrt (std::max (1e-12, ll * rr)));
+}
+
+float lowShare (const Stereo& x, double fs)
+{
+    vox::KWeight kw; kw.prepare (fs); vox::Biquad lp1, lp2; lp1.lowPass (fs, 150, 0.5412); lp2.lowPass (fs, 150, 1.3066); lp1.reset(); lp2.reset();
+    double lo = 0, all = 0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const float m = kw.process (0.5f * (x.l[i] + x.r[i]), 0), l = lp2.process (lp1.process (m, 0), 0);
+        lo += (double) l * l; all += (double) m * m;
+    }
+    return all > 0 ? (float) (lo / all) : 0.0f;
+}
+
+// ---------------------------------------------------------------------------------------- 一键分析
+Report analyse (int role, const Stereo& x, double fs, int style, double bpm)
+{
+    Report r; r.role = role; r.seconds = (float) (x.size() / fs);
+    r.lufs = integrated (x, fs); r.tp = truePeakDb (x); r.ltas = octaveLtas (x, fs); r.width = 1.0f - correlation (x);
+    auto& L = r.lines;
+    if (r.lufs < -69) { L.push_back ("No signal. Press PLAY, then ANALYZE."); return r; }
+    L.push_back ("LOUDNESS " + f1 (r.lufs) + " LUFS   PEAK " + f1 (r.tp) + " dBTP");
+    if (r.tp > -0.3f) L.push_back ("! Peaks at 0 dBFS: lower the level before this insert");
+
+    if (role == 0)                                      // —— 人声
+    {
+        for (int k = 0; k < kOctBands; ++k) r.target[(size_t) k] = kRefVocal[k];
+        const float vb = integrated (x, fs, true); r.spread = spread (x, fs);
+        auto dev = [&] (int k) { return r.ltas[(size_t) k] - kRefVocal[k]; };
+        L.push_back ("DYNAMICS " + f1 (r.spread) + " LU (P90-P10)   SIBILANCE " + f1 (sibilance (x, fs)) + " dB");
+        if (vb < -32) L.push_back ("Quiet recording: MIX will raise INPUT (" + sgn (-20 - vb) + " dB)");
+        if (r.spread > 8) L.push_back ("Uneven level: needs more COMPRESS");
+        else if (r.spread < 4) L.push_back ("Already dense: little compression needed");
+        if (lowShare (x, fs) > 0.08f) L.push_back ("Rumble / plosives below 150 Hz: raise LOW CUT");
+        if (dev (3) > 3) L.push_back ("Boxy / muddy around 250 Hz (" + sgn (dev (3)) + " dB): cut MUD");
+        const float pres = 0.5f * (dev (6) + dev (7));
+        if (pres < -3) L.push_back ("Dull, sits behind the beat (" + sgn (pres) + " dB at 2-4 kHz): add PRESENCE");
+        else if (pres > 3) L.push_back ("Harsh at 2-4 kHz (" + sgn (pres) + " dB): less PRESENCE");
+        if (dev (8) < -4) L.push_back ("Dark top (" + sgn (dev (8)) + " dB at 8 kHz): add AIR");
+        else if (dev (8) > 4) L.push_back ("Very bright top (" + sgn (dev (8)) + " dB at 8 kHz): less AIR, more DE-ESS");
+        if (sibilance (x, fs) > 14) L.push_back ("Strong S sounds: DE-ESS");
+        if (L.size() <= 2) L.push_back ("Healthy vocal: MIX will mostly set level and style");
+    }
+    else if (role == 1)                                 // —— 伴奏
+    {
+        const float low = lowShare (x, fs);
+        r.key = detectKey (x, fs); r.hasKey = true;
+        L.push_back ("KEY " + r.key.name() + "  (or " + r.key.relative() + ")" + (r.key.confidence < 0.35f ? "  - low confidence" : ""));
+        L.push_back ("LOW END " + f0 (low * 100) + "% of the energy below 150 Hz" + (low > 0.6f ? "  (808 / kick heavy)" : low < 0.25f ? "  (light low end)" : ""));
+        const float busy = 0.5f * (r.ltas[6] + r.ltas[7]);
+        L.push_back (busy > 0.5f ? "Busy in the vocal range (2-4 kHz " + sgn (busy) + " dB): UNMASK will matter"
+                     : busy < -4 ? "Leaves room for the vocal at 2-4 kHz (" + sgn (busy) + " dB)"
+                                 : "Moderate density at 2-4 kHz (" + sgn (busy) + " dB)");
+        const float corr = 1.0f - r.width;
+        L.push_back ("STEREO " + std::string (corr > 0.95f ? "near mono" : corr > 0.6f ? "normal width" : corr > 0.3f ? "wide" : "very wide") + "  (correlation " + f1 (corr) + ")");
+        // 最接近的风格：谱形和风格曲线的距离 + 速度是否在这个风格的范围里（半速 / 倍速也算）
+        static const float kTempo[kNumStyles][2] = { { 125, 170 }, { 138, 148 }, { 75, 170 }, { 80, 98 }, { 60, 105 }, { 70, 130 },
+                                                     { 60, 88 }, { 68, 92 }, { 95, 130 }, { 100, 170 }, { 118, 132 }, { 96, 118 } };
+        float bestScore = 1e9;
+        for (int s = 0; s < kNumStyles; ++s)
+        {
+            float d = 0; for (int k = 1; k < kOctBands; ++k) { const float e = r.ltas[(size_t) k] - mm::style (s).busCurve[(size_t) k]; d += e * e; }
+            d = std::sqrt (d / (kOctBands - 1));
+            bool inTempo = false;
+            for (double t : { bpm, bpm * 2, bpm / 2 }) inTempo |= t >= kTempo[s][0] && t <= kTempo[s][1];
+            // 808 / 底鼓很重的伴奏更像说唱类（trap / drill / melodic / edm）
+            const bool heavy = s == 0 || s == 1 || s == 2 || s == 10;
+            const float score = d + (inTempo ? 0.0f : 3.0f) + (low > 0.7f ? (heavy ? -1.5f : 0.0f) : (heavy ? 0.5f : 0.0f));
+            if (score < bestScore) { bestScore = score; r.suggestedStyle = s; }
+        }
+        if (r.suggestedStyle >= 0) L.push_back ("CLOSEST STYLE " + std::string (mm::style (r.suggestedStyle).name) + "  (" + f0 ((float) bpm) + " BPM)");
+        for (int k = 0; k < kOctBands; ++k) r.target[(size_t) k] = mm::style (std::max (0, r.suggestedStyle)).busCurve[(size_t) k];
+    }
+    else                                                // —— 总线（整首混音）
+    {
+        const auto& st = mm::style (style);
+        for (int k = 0; k < kOctBands; ++k) r.target[(size_t) k] = st.busCurve[(size_t) k];
+        auto region = [&] (int a, int b) { float d = 0; for (int k = a; k <= b; ++k) d += r.ltas[(size_t) k] - st.busCurve[(size_t) k]; return d / (b - a + 1); };
+        L.push_back ("TARGET " + std::string (st.name) + ": " + f1 (st.lufsStyle) + " LUFS, " + f1 (st.ceiling) + " dBTP  (now " + sgn (r.lufs - st.lufsStyle) + " LU)");
+        const float lo = region (0, 2), mid = region (3, 6), hi = region (7, 9);
+        L.push_back ("TONE vs style   low " + sgn (lo) + "   mid " + sgn (mid) + "   high " + sgn (hi) + " dB");
+        if (lo > 2.5f) L.push_back ("Too much low end for this style"); else if (lo < -2.5f) L.push_back ("Thin low end for this style");
+        if (hi > 2.5f) L.push_back ("Bright / harsh top for this style"); else if (hi < -2.5f) L.push_back ("Dull top for this style");
+        const float corr = correlation (x);
+        L.push_back ("STEREO correlation " + f1 (corr) + (corr < 0.2f ? "  ! check mono compatibility" : ""));
+        if (r.tp > st.ceiling) L.push_back ("Peaks above the " + f1 (st.ceiling) + " dBTP ceiling: MIX sets the limiter");
+    }
+    return r;
 }
 } // namespace mm::analysis

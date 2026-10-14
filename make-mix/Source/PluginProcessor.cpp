@@ -35,7 +35,7 @@ MakeMixProcessor::MakeMixProcessor()
     slot = hubRef->attach (this);
 }
 
-MakeMixProcessor::~MakeMixProcessor() { hubRef->detach (slot); }
+MakeMixProcessor::~MakeMixProcessor() { if (aWorker.joinable()) aWorker.join(); hubRef->detach (slot); }
 
 const juce::String MakeMixProcessor::getProgramName (int i) { return juce::String::fromUTF8 (mm::style (i).name); }
 
@@ -52,6 +52,8 @@ void MakeMixProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     applyParams (set, style(), lastBpm.load());
     vocal.prepare (fs, maxBlock, L); beat.prepare (fs, maxBlock, L); bus.prepare (fs, maxBlock, L);
     setLatencySamples (L);                                       // 三个角色一样，参数怎么改都不变
+    if (aState.load() != (int) Analyze::Working) { aArmed.store (false); aL.assign ((size_t) (12 * fs), 0.0f); aR.assign ((size_t) (12 * fs), 0.0f); aLen.store (0);
+        if (aState.load() == (int) Analyze::Listening) aState.store ((int) Analyze::Idle); }
     freeCounter = 0; lastRole = -1; prepared = true;
 }
 
@@ -95,6 +97,11 @@ void MakeMixProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         const int m = std::min (maxBlock, n - start);
         float* ch[2] = { buffer.getWritePointer (0, start), buffer.getWritePointer (nCh > 1 ? 1 : 0, start) };
         if (r != (int) Role::Bus) hubRef->capture (slot, ch[0], ch[1], m, pos + start, playing);
+        if (aArmed.load (std::memory_order_acquire))           // 一键分析：录自己的输入
+        {
+            const int len = aLen.load (std::memory_order_relaxed), k = std::min (m, (int) aL.size() - len);
+            if (k > 0) { std::copy (ch[0], ch[0] + k, aL.begin() + len); std::copy (ch[1], ch[1] + k, aR.begin() + len); aLen.store (len + k, std::memory_order_release); }
+        }
         if (r == (int) Role::Vocal)     vocal.process (ch, nCh, m, pos + start, this);
         else if (r == (int) Role::Beat) beat.process (ch, nCh, m, pos + start, playing, this);
         else                            bus.process (ch, nCh, m);
@@ -157,6 +164,35 @@ void MakeMixProcessor::loadStyleDefaults()
             s[M_LOW] = 0; s[M_HIGH] = 0; s[M_GLUE] = 0.35f; s[M_WIDTH] = 100; s[M_CEILING] = st.ceiling; break;
     }
     hubApply (s, std::string ("STYLE DEFAULTS: ") + st.name + "\n");
+}
+
+// ---------------------------------------------------------------------------------------- 一键分析（消息线程）
+void MakeMixProcessor::requestAnalyze()
+{
+    const auto s = analyzeState();
+    if (s == Analyze::Working || aL.empty()) return;
+    if (s == Analyze::Listening) { if (aLen.load() >= (int) (3 * fs)) startAnalyzeWorker(); return; }
+    aLen.store (0); aArmed.store (true, std::memory_order_release); aState.store ((int) Analyze::Listening);
+}
+
+void MakeMixProcessor::tickAnalyze()
+{
+    if (analyzeState() == Analyze::Listening && aLen.load() >= (int) (10 * fs)) startAnalyzeWorker();
+}
+
+void MakeMixProcessor::startAnalyzeWorker()
+{
+    aArmed.store (false, std::memory_order_release);
+    const int len = aLen.load (std::memory_order_acquire);
+    analysis::Stereo x; x.l.assign (aL.begin(), aL.begin() + len); x.r.assign (aR.begin(), aR.begin() + len);
+    aState.store ((int) Analyze::Working);
+    if (aWorker.joinable()) aWorker.join();
+    aWorker = std::thread ([this, x = std::move (x), r = (int) role(), st = style(), sr = fs, bpm = lastBpm.load()]
+    {
+        auto rep = std::make_shared<analysis::Report> (analysis::analyse (r, x, sr, st, bpm));
+        { const juce::ScopedLock sl (noteLock); aReport = std::move (rep); }
+        aState.store ((int) Analyze::Ready);
+    });
 }
 
 // ---------------------------------------------------------------------------------------- 状态
