@@ -219,7 +219,7 @@ void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool pla
 // ====================================================================== BUS
 BusChain::P BusChain::fromSet (const ParamSet& s)
 {
-    P p; p.low = s[M_LOW]; p.high = s[M_HIGH]; p.glue = s[M_GLUE]; p.lift = s[M_LIFT]; p.width = s[M_WIDTH]; p.drive = s[M_DRIVE]; p.ceiling = s[M_CEILING];
+    P p; p.low = s[M_LOW]; p.high = s[M_HIGH]; p.mid = s[M_MID]; p.glue = s[M_GLUE]; p.lift = s[M_LIFT]; p.width = s[M_WIDTH]; p.drive = s[M_DRIVE]; p.ceiling = s[M_CEILING];
     return p;
 }
 
@@ -244,7 +244,7 @@ void BusChain::prepare (double sampleRate, int maxBlock, int latency)
 
 void BusChain::reset()
 {
-    low.reset(); high.reset(); scHp.reset(); glue.grDb = 0; lim.reset(); pad.reset(); kw.reset(); x1.reset(); x2.reset();
+    low.reset(); high.reset(); body.reset(); scHp.reset(); glue.grDb = 0; lim.reset(); pad.reset(); kw.reset(); x1.reset(); x2.reset();
     lowComp.grDb = 0; airShelf.reset(); tape.prepare (fs * 2); if (os) os->reset();
     envHi = envMid = 1e-9f; airDb = 0; dcX = dcY = 0; airCount = 0;
     loudState = 1e-10f; grGlue = grLimit = 0; loudShort = -100;
@@ -256,6 +256,7 @@ void BusChain::setParams (const P& np, StyleId sid)
     p = np; style = sid;
     low.set (vox::Svf::LowShelf, fs, 120, 0.7, p.low);
     high.set (vox::Svf::HighShelf, fs, 7000, 0.7, p.high);
+    body.set (vox::Svf::Bell, fs, 180, 0.8, p.mid);
     scHp.set (vox::Svf::HighPass, fs, std::max (20.0f, st.glueScHpf), 0.7);
     glue.prepare (fs, std::max (1.0f, st.glueAtk), std::max (20.0f, st.glueRel));
     glue.thresholdDb = -4 - 20 * p.glue; glue.ratio = p.glue < 0.01f ? 1.0f : st.glueRatio; glue.kneeDb = 6; glue.makeupDb = 0;
@@ -280,7 +281,7 @@ void BusChain::process (float* const* ch, int nCh, int n) noexcept
         float in[2] = { c0[i], nCh > 1 ? c1[i] : c0[i] }, lo[2], mid[2], hi[2];
         for (int c = 0; c < 2; ++c)
         {
-            const float x = high.process (low.process (in[c], c), c);
+            const float x = body.process (high.process (low.process (in[c], c), c), c);
             float rest; x1.processSample (c, x, lo[c], rest); x2.processSample (c, rest, mid[c], hi[c]);
         }
         // 低频：压紧 → 加一点高八度泛音（小音箱 / 手机也听得到 808）→ 收成单声道

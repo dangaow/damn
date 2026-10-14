@@ -89,7 +89,7 @@ private:
 class BusChain
 {
 public:
-    struct P { float low = 0, high = 0, glue = 0.35f, lift = 0.5f, width = 100, drive = 0, ceiling = -1; };
+    struct P { float low = 0, high = 0, mid = 0, glue = 0.35f, lift = 0.5f, width = 100, drive = 0, ceiling = -1; };
     static P fromSet (const ParamSet&);
     void prepare (double fs, int maxBlock, int latency);
     void reset();
@@ -99,7 +99,7 @@ public:
 
 private:
     double fs = 44100; P p; StyleId style = 0;
-    vox::Svf low, high, scHp; vox::Compressor glue; vox::Limiter lim; Pad pad; vox::KWeight kw;
+    vox::Svf low, high, body, scHp; vox::Compressor glue; vox::Limiter lim; Pad pad; vox::KWeight kw;
     // 提升：三段（120 Hz / 6 kHz，LR4 分频，相加平直）——低频压紧 + 泛音 + 收成单声道，中高频加宽，高频动态空气感，整体 2 倍超采样磁带饱和
     juce::dsp::LinkwitzRileyFilter<float> x1, x2; vox::Compressor lowComp; vox::Svf airShelf; vox::Saturator tape;
     std::unique_ptr<juce::dsp::Oversampling<float>> os; int osLat = 0;

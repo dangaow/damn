@@ -7,7 +7,7 @@ const juce::Colour bg (0xff0a0b10), panel (0xff12141b), line (0xff23262f), red (
 // 旋钮下面的短名字（和 kParams 顺序一致）
 const char* kShort[kNumParams] = { "輸入", "低切", "去渾濁", "存在感", "空氣感", "壓縮", "去齒音", "溫暖", "圓潤", "電平",
                                    "低切", "人聲口袋", "讓位", "粘合", "電平",
-                                   "低頻", "高頻", "粘合", "提升", "寬度", "推子", "天花板" };
+                                   "低頻", "高頻", "中低頻", "粘合", "提升", "寬度", "推子", "天花板" };
 const char* kRoleName[3] = { "人聲", "伴奏", "總線" };
 const char* kRoleHint[3] = { "插在人聲軌（最後一格）", "插在伴奏軌（最後一格）", "插在 Master（最後一格）" };
 juce::String T (const char* s) { return juce::String::fromUTF8 (s); }

@@ -116,12 +116,13 @@ Out solve (const In& in)
         // 只修正一半的差距：20 秒的学习段量出来的动态常比整首大（主歌 / 副歌交界），全修就压扁了
         const float spreadTarget = std::max (st.vSpread + kSpreadCal, s0 - 0.5f * (s0 - (st.vSpread + kSpreadCal)));
         // 学习段只有 20 秒，动态估计有噪声：步子小一点、最多 70 %，宁可少压（压扁就假了）
-        float k = std::clamp (0.25f + (s0 - spreadTarget) / 10.0f, 0.0f, 0.7f);
+        // 至少 15 %：就算动态本来就稳，也让电平器轻轻带着，人声更有录音室的密度
+        float k = std::clamp (0.25f + (s0 - spreadTarget) / 10.0f, 0.15f, 0.7f);
         for (int it = 0; it < 2; ++it)
         {
             dry.comp = k;
             const float s1 = analysis::spread (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
-            k = std::clamp (k + (s1 - spreadTarget) / 10.0f, 0.0f, 0.7f);
+            k = std::clamp (k + (s1 - spreadTarget) / 10.0f, 0.15f, 0.7f);
         }
         p.comp = k;
         // 去齿音：模拟着二分，把齿音压到发行版人声的水平；本来就不重就只轻轻带一点
@@ -163,6 +164,17 @@ Out solve (const In& in)
         ClientOut co; co.client = c.client; co.set = c.current;
         co.note = fmt ("低切 %.0f Hz  人聲口袋 %.1f dB @ %.0f Hz\n", p.hpf, p.pocket, st.bPocketF) + fmt ("人聲唱的時候在對應頻段讓位，最多 %.1f dB\n", p.unmask);
         o.clients.push_back (co);
+    }
+    // 3b) 伴奏电平管理：整组伴奏太响（例如分轨直接相加、推子全开）就一起降下来，分轨之间的比例不变。
+    //     人声电平是按伴奏定的，所以整个混音跟着回到正常的电平，总线不用硬压
+    if (! bin.empty())
+    {
+        const float Lb = analysis::integrated (sum (bin), fs), off = Lb > -14.0f ? std::max (-18.0f, -16.0f - Lb) : 0.0f;
+        if (off < -0.05f)
+            for (size_t j = 0; j < bin.size(); ++j)
+            {
+                bp[j].level = std::clamp (bp[j].level + off, -24.0f, 12.0f);
+            }
     }
     // 4) 人声电平：按风格的「人声比伴奏」（人声频段响度）定；伴奏让位又和人声电平有关，所以迭代两次
     std::vector<Stereo> vout (vin.size()), bout (bin.size());
@@ -228,9 +240,10 @@ Out solve (const In& in)
     for (size_t j = 0; j < bin.size(); ++j)
     {
         auto& s = o.clients[vin.size() + j].set; const auto& p = bp[j];
-        s[B_HPF] = p.hpf; s[B_POCKET] = p.pocket; s[B_UNMASK] = p.unmask; s[B_GLUE] = p.glue;
+        s[B_HPF] = p.hpf; s[B_POCKET] = p.pocket; s[B_UNMASK] = p.unmask; s[B_GLUE] = p.glue; s[B_LEVEL] = p.level;
         o.clients[vin.size() + j].note = fmt ("低切 %.0f Hz  人聲口袋 %.1f dB @ %.0f Hz\n", p.hpf, p.pocket, st.bPocketF)
-                                       + fmt ("人聲唱的時候在對應頻段讓位，最多 %.1f dB\n", p.unmask);
+                                       + fmt ("人聲唱的時候在對應頻段讓位，最多 %.1f dB\n", p.unmask)
+                                       + (std::abs (p.level - in.beats[j].current[B_LEVEL]) > 0.05f ? fmt ("伴奏太響：整組降 %.1f dB，分軌比例不變\n", in.beats[j].current[B_LEVEL] - p.level) : std::string());
         if (! vin.empty()) o.clients[vin.size() + j].note += fmt ("人聲被蓋住的部分 %.0f%% → %.0f%%\n", o.m.maskBefore * 100, o.m.maskAfter * 100);
     }
     // 5) 总线：音色向风格曲线靠、粘合到风格的平均压缩量、推到风格响度（-1 dBTP 天花板）
@@ -241,14 +254,16 @@ Out solve (const In& in)
         auto p = BusChain::fromSet (in.busCurrent);
         const auto lt = analysis::octaveLtas (mix, fs);
         // 只往风格曲线靠 30 %、最多 ±2 dB：保留这首歌自己的音色
-        p.low  = std::clamp (0.3f * 0.5f * ((st.busCurve[1] - lt[1]) + (st.busCurve[2] - lt[2])), -2.0f, 2.0f);
+        p.low  = std::clamp (0.5f * 0.5f * ((st.busCurve[0] - lt[0]) + (st.busCurve[1] - lt[1])), -3.0f, 3.0f);
         p.high = std::clamp (0.3f * 0.5f * ((st.busCurve[8] - lt[8]) + (st.busCurve[9] - lt[9])), -2.0f, 2.0f);
+        // 中低频（125–250 Hz 发闷 / 发虚）：这里的偏差最影响「干净不干净」，修六成，最多 ±3 dB
+        p.mid  = std::clamp (0.6f * 0.5f * ((st.busCurve[2] - lt[2]) + (st.busCurve[3] - lt[3])), -3.0f, 3.0f);
         p.width = 100; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
         p.lift = kStyleLift[std::clamp (in.style, 0, kNumStyles - 1)];
         float lo = 0, hi = 1, gr = 0;                    // 粘合：二分到风格的平均压缩量
         for (int it = 0; it < 7; ++it) { p.glue = 0.5f * (lo + hi); runBus (mix, p, in.style, fs, &gr); (gr < st.glueGr ? lo : hi) = p.glue; }
         p.glue = 0.5f * (lo + hi);
-        lo = 0; hi = 18;                                 // 推子：二分到风格响度
+        lo = -12; hi = 18;                               // 推子：二分到风格响度（太响的时候也会往下收）
         Stereo out;
         for (int it = 0; it < 9; ++it)
         {
@@ -258,8 +273,8 @@ Out solve (const In& in)
         p.drive = 0.5f * (lo + hi); out = runBus (mix, p, in.style, fs, &gr);
         o.m.busLufs = analysis::integrated (out, fs); o.m.busTp = analysis::truePeakDb (out); o.m.glueGr = gr;
         ClientOut co; co.client = in.busClient; co.set = in.busCurrent;
-        co.set[M_LOW] = p.low; co.set[M_HIGH] = p.high; co.set[M_GLUE] = p.glue; co.set[M_LIFT] = p.lift; co.set[M_WIDTH] = p.width; co.set[M_DRIVE] = p.drive; co.set[M_CEILING] = p.ceiling;
-        co.note = fmt ("音色往風格曲線靠：低頻 %+.1f dB  高頻 %+.1f dB\n", p.low, p.high) + fmt ("提升 %.0f%%（低頻壓緊加泛音、中頻磁帶密度、高頻動態空氣、加寬）\n", p.lift * 100) + fmt ("粘合 %.0f%%（平均 %.1f dB）\n", p.glue * 100, gr)
+        co.set[M_LOW] = p.low; co.set[M_HIGH] = p.high; co.set[M_MID] = p.mid; co.set[M_GLUE] = p.glue; co.set[M_LIFT] = p.lift; co.set[M_WIDTH] = p.width; co.set[M_DRIVE] = p.drive; co.set[M_CEILING] = p.ceiling;
+        co.note = fmt ("音色往風格曲線靠：低頻 %+.1f  中低頻 %+.1f  高頻 %+.1f dB\n", p.low, p.mid, p.high) + fmt ("提升 %.0f%%（低頻壓緊加泛音、中頻磁帶密度、高頻動態空氣、加寬）\n", p.lift * 100) + fmt ("粘合 %.0f%%（平均 %.1f dB）\n", p.glue * 100, gr)
                 + fmt ("推子 %+.1f dB → %.1f LUFS，", p.drive, o.m.busLufs) + fmt ("峰值 %.1f dBTP\n", o.m.busTp);
         o.clients.push_back (co);
     }

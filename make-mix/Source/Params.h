@@ -27,16 +27,17 @@ inline constexpr ParamDef kParams[] = {
     { "b_level",    "伴奏 電平",     Role::Beat,  PKind::Db,     -24, 12, 0, 0 },
     { "m_low",      "總線 低頻",        Role::Bus,   PKind::Db,      -6, 6, 0, 0 },
     { "m_high",     "總線 高頻",       Role::Bus,   PKind::Db,      -6, 6, 0, 0 },
+    { "m_mid",      "總線 中低頻",     Role::Bus,   PKind::Db,      -6, 6, 0, 0 },
     { "m_glue",     "總線 粘合",       Role::Bus,   PKind::Amount,   0, 1, 0.35f, 0 },
     { "m_lift",     "總線 提升",       Role::Bus,   PKind::Amount,   0, 1, 0.5f, 0 },
     { "m_width",    "總線 寬度",      Role::Bus,   PKind::Percent, 50, 150, 100, 0 },
-    { "m_drive",    "總線 推子",      Role::Bus,   PKind::Db,       0, 18, 0, 0 },
+    { "m_drive",    "總線 推子",      Role::Bus,   PKind::Db,     -12, 18, 0, 0 },
     { "m_ceiling",  "總線 天花板",    Role::Bus,   PKind::Db,      -3, 0, -1, 0 },
 };
 constexpr int kNumParams = (int) (sizeof (kParams) / sizeof (kParams[0]));
 
 enum PIdx { V_INPUT, V_HPF, V_MUD, V_PRES, V_AIR, V_COMP, V_DEESS, V_WARMTH, V_SMOOTH, V_LEVEL,
-            B_HPF, B_POCKET, B_UNMASK, B_GLUE, B_LEVEL, M_LOW, M_HIGH, M_GLUE, M_LIFT, M_WIDTH, M_DRIVE, M_CEILING };
+            B_HPF, B_POCKET, B_UNMASK, B_GLUE, B_LEVEL, M_LOW, M_HIGH, M_MID, M_GLUE, M_LIFT, M_WIDTH, M_DRIVE, M_CEILING };
 
 inline int paramIndex (const std::string& id)
 {
