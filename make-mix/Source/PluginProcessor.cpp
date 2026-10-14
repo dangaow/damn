@@ -156,12 +156,12 @@ void MakeMixProcessor::loadStyleDefaults()
     {
         case Role::Vocal:
             s[V_HPF] = 0.5f * (st.vHpfMin + st.vHpfMax); s[V_MUD] = st.vMudG; s[V_PRES] = st.vPresG; s[V_AIR] = st.vAirG;
-            s[V_COMP] = 0.4f; s[V_DEESS] = 0.4f; s[V_WARMTH] = st.vWarmth;
+            s[V_COMP] = 0.4f; s[V_DEESS] = 0.4f; s[V_WARMTH] = st.vWarmth; s[V_SMOOTH] = 0.3f;
             break;
         case Role::Beat:
-            s[B_HPF] = st.bHpf; s[B_POCKET] = st.bPocketStatic; s[B_UNMASK] = st.bDmax; break;
+            s[B_HPF] = st.bHpf; s[B_POCKET] = st.bPocketStatic; s[B_UNMASK] = st.bDmax; s[B_GLUE] = kStyleBeatGlue[style()]; break;
         case Role::Bus:
-            s[M_LOW] = 0; s[M_HIGH] = 0; s[M_GLUE] = 0.35f; s[M_WIDTH] = 100; s[M_CEILING] = st.ceiling; break;
+            s[M_LOW] = 0; s[M_HIGH] = 0; s[M_GLUE] = 0.35f; s[M_LIFT] = kStyleLift[style()]; s[M_WIDTH] = 100; s[M_CEILING] = st.ceiling; break;
     }
     hubApply (s, std::string ("已載入風格預設：") + st.name + "\n");
 }

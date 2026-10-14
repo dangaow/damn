@@ -116,6 +116,9 @@ inline constexpr std::array<StyleDef, kNumStyles> kStyles {{
       -10.5f, -9.0f, -1.0f, 2.0f, 20, 150, 1.2f, 120, 1.0f, -11.0f, 120, 22000, 5,
       { 8.5f, 11, 6.2f, 3.1f, 3.1f, 0, -3, -3.3f, -1.5f, -7.5f } },
 }};
+// 每个风格的「总线提升」和「伴奏粘合」默认量（顺序同 kStyles）
+inline constexpr float kStyleLift[kNumStyles]     = { 0.60f, 0.60f, 0.55f, 0.40f, 0.45f, 0.45f, 0.30f, 0.35f, 0.55f, 0.50f, 0.65f, 0.50f, 0.55f };
+inline constexpr float kStyleBeatGlue[kNumStyles] = { 0.30f, 0.30f, 0.30f, 0.45f, 0.30f, 0.30f, 0.20f, 0.45f, 0.30f, 0.40f, 0.35f, 0.30f, 0.30f };
 inline const StyleDef& style (StyleId s) { return kStyles[(size_t) std::clamp (s, 0, kNumStyles - 1)]; }
 
 // 按 key（"trap"）或名字（不分大小写，"MELODIC RAP"）找序号；找不到返回 -1。命令行工具用

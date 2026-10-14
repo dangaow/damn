@@ -102,7 +102,7 @@ float maxDiffDb (const Stereo& a, const Stereo& b)
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
-    std::vector<juce::File> vocals, beats; juce::File outDir ("mix_out"), refFile; std::string styleName = "trap"; double bpm = 120, learnStart = 0; bool noBus = false, randomBlocks = false;
+    std::vector<juce::File> vocals, beats; juce::File outDir ("mix_out"), refFile; std::vector<std::string> sets; std::string styleName = "trap"; double bpm = 120, learnStart = 0; bool noBus = false, randomBlocks = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i]; auto next = [&] { return i + 1 < argc ? std::string (argv[++i]) : std::string(); };
@@ -111,6 +111,7 @@ int main (int argc, char** argv)
         else if (a == "--style") styleName = next();
         else if (a == "--bpm") bpm = std::stod (next());
         else if (a == "--no-bus") noBus = true;
+        else if (a == "--set") sets.push_back (next());                   // MIX 之后强制改参数：--set m_lift=0
         else if (a == "--learn-start") learnStart = std::stod (next());   // 从第几秒开始学（跳过没有人声的前奏）
         else if (a == "--reference") refFile = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--measure")              // 量一首成品：--measure vocal.wav beat.wav mix.wav（训练风格目标用）
@@ -219,6 +220,12 @@ int main (int argc, char** argv)
     for (auto& p : procs) std::cout << "  [" << (p->role() == Role::Vocal ? "VOCAL" : p->role() == Role::Beat ? "BEAT" : "BUS") << "]\n    "
                                     << p->note().replace ("\n", "\n    ").toStdString() << "\n";
 
+    for (auto& kv : sets)                                // --set id=value：所有实例里有这个参数的都改
+    {
+        const auto eq = kv.find ('='); if (eq == std::string::npos) continue;
+        for (auto& p : procs) if (auto* prm = p->apvts.getParameter (kv.substr (0, eq)))
+            prm->setValueNotifyingHost (prm->convertTo0to1 (std::stof (kv.substr (eq + 1))));
+    }
     // 2) 正式渲染（固定 512 块）+ 3 秒尾巴
     const size_t total = songLen + (size_t) (3 * fs) + (size_t) L;
     auto render = [&] (bool rnd, uint32_t seed)

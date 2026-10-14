@@ -107,6 +107,8 @@ Out solve (const In& in)
         p.pres = std::clamp (st.vPresG - st.vMatch * 0.5f * 0.5f * (dev (6) + dev (7)), -2.0f, 5.0f);
         p.air  = std::clamp (st.vAirG - st.vMatch * 0.5f * dev (8), -2.0f, 5.0f);
         p.warmth = std::clamp (st.vWarmth, 0.0f, 1.0f);
+        // 圆润（动态去刺）：2–4 kHz 越比专业人声突出，开得越多
+        p.smooth = std::clamp (0.3f + 0.08f * (0.5f * (dev (6) + dev (7))), 0.15f, 0.75f);
         const float sib = analysis::sibilance (v, fs);
         // 压缩：用真实链子模拟，两步牛顿把动态（P90-P10）拉到风格目标
         auto dry = p;
@@ -145,7 +147,7 @@ Out solve (const In& in)
         vp.push_back (p);
         ClientOut co; co.client = in.vocals[i].client; co.set = in.vocals[i].current;
         co.note = fmt ("輸入 %+.1f dB（歸一到參考電平）\n", p.input) + fmt ("去渾濁 %.1f dB  存在感 %+.1f dB  空氣感 %+.1f dB\n", p.mud, p.pres, p.air)
-                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, spreadTarget) + fmt ("去齒音 %.0f%%（齒音 %.1f → %.1f dB）  ", p.deess * 100, sib, sibOut) + fmt ("溫暖 %.0f%%\n", p.warmth * 100);
+                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, spreadTarget) + fmt ("去齒音 %.0f%%（齒音 %.1f → %.1f dB）  ", p.deess * 100, sib, sibOut) + fmt ("溫暖 %.0f%%  圓潤 %.0f%%\n", p.warmth * 100, p.smooth * 100);
         o.clients.push_back (co);
     }
     // 3) 伴奏：低切 + 固定的人声口袋 + 动态让位深度（风格）
@@ -155,6 +157,7 @@ Out solve (const In& in)
         auto p = BeatChain::fromSet (c.current);
         p.hpf = std::clamp (st.bHpf, 20.0f, 200.0f);
         p.pocket = std::clamp (st.bPocketStatic + (in.vocals.empty() ? 0.0f : st.bPocketLinked), -6.0f, 0.0f);
+        p.glue = kStyleBeatGlue[std::clamp (in.style, 0, kNumStyles - 1)];
         p.unmask = in.vocals.empty() ? 0.0f : std::clamp (st.bDmax, 0.0f, 12.0f);
         bp.push_back (p);
         ClientOut co; co.client = c.client; co.set = c.current;
@@ -218,14 +221,14 @@ Out solve (const In& in)
     {
         auto& s = o.clients[i].set; const auto& p = vp[i];
         s[V_INPUT] = p.input; s[V_HPF] = p.hpf; s[V_MUD] = p.mud; s[V_PRES] = p.pres; s[V_AIR] = p.air; s[V_COMP] = p.comp; s[V_DEESS] = p.deess;
-        s[V_WARMTH] = p.warmth; s[V_LEVEL] = p.level;
+        s[V_WARMTH] = p.warmth; s[V_SMOOTH] = p.smooth; s[V_LEVEL] = p.level;
         o.clients[i].note += bin.empty() ? fmt ("電平 %+.1f dB（沒連上伴奏，保持原響度）\n", p.level)
                                          : fmt ("電平 %+.1f dB  人聲比伴奏 %+.1f dB（風格 %+.1f）\n", p.level, o.m.vbrAfter, st.vbr);
     }
     for (size_t j = 0; j < bin.size(); ++j)
     {
         auto& s = o.clients[vin.size() + j].set; const auto& p = bp[j];
-        s[B_HPF] = p.hpf; s[B_POCKET] = p.pocket; s[B_UNMASK] = p.unmask;
+        s[B_HPF] = p.hpf; s[B_POCKET] = p.pocket; s[B_UNMASK] = p.unmask; s[B_GLUE] = p.glue;
         o.clients[vin.size() + j].note = fmt ("低切 %.0f Hz  人聲口袋 %.1f dB @ %.0f Hz\n", p.hpf, p.pocket, st.bPocketF)
                                        + fmt ("人聲唱的時候在對應頻段讓位，最多 %.1f dB\n", p.unmask);
         if (! vin.empty()) o.clients[vin.size() + j].note += fmt ("人聲被蓋住的部分 %.0f%% → %.0f%%\n", o.m.maskBefore * 100, o.m.maskAfter * 100);
@@ -241,6 +244,7 @@ Out solve (const In& in)
         p.low  = std::clamp (0.3f * 0.5f * ((st.busCurve[1] - lt[1]) + (st.busCurve[2] - lt[2])), -2.0f, 2.0f);
         p.high = std::clamp (0.3f * 0.5f * ((st.busCurve[8] - lt[8]) + (st.busCurve[9] - lt[9])), -2.0f, 2.0f);
         p.width = 100; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
+        p.lift = kStyleLift[std::clamp (in.style, 0, kNumStyles - 1)];
         float lo = 0, hi = 1, gr = 0;                    // 粘合：二分到风格的平均压缩量
         for (int it = 0; it < 7; ++it) { p.glue = 0.5f * (lo + hi); runBus (mix, p, in.style, fs, &gr); (gr < st.glueGr ? lo : hi) = p.glue; }
         p.glue = 0.5f * (lo + hi);
@@ -254,8 +258,8 @@ Out solve (const In& in)
         p.drive = 0.5f * (lo + hi); out = runBus (mix, p, in.style, fs, &gr);
         o.m.busLufs = analysis::integrated (out, fs); o.m.busTp = analysis::truePeakDb (out); o.m.glueGr = gr;
         ClientOut co; co.client = in.busClient; co.set = in.busCurrent;
-        co.set[M_LOW] = p.low; co.set[M_HIGH] = p.high; co.set[M_GLUE] = p.glue; co.set[M_WIDTH] = p.width; co.set[M_DRIVE] = p.drive; co.set[M_CEILING] = p.ceiling;
-        co.note = fmt ("音色往風格曲線靠：低頻 %+.1f dB  高頻 %+.1f dB\n", p.low, p.high) + fmt ("粘合 %.0f%%（平均 %.1f dB）\n", p.glue * 100, gr)
+        co.set[M_LOW] = p.low; co.set[M_HIGH] = p.high; co.set[M_GLUE] = p.glue; co.set[M_LIFT] = p.lift; co.set[M_WIDTH] = p.width; co.set[M_DRIVE] = p.drive; co.set[M_CEILING] = p.ceiling;
+        co.note = fmt ("音色往風格曲線靠：低頻 %+.1f dB  高頻 %+.1f dB\n", p.low, p.high) + fmt ("提升 %.0f%%（低頻壓緊加泛音、中頻磁帶密度、高頻動態空氣、加寬）\n", p.lift * 100) + fmt ("粘合 %.0f%%（平均 %.1f dB）\n", p.glue * 100, gr)
                 + fmt ("推子 %+.1f dB → %.1f LUFS，", p.drive, o.m.busLufs) + fmt ("峰值 %.1f dBTP\n", o.m.busTp);
         o.clients.push_back (co);
     }
