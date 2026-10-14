@@ -1,5 +1,5 @@
 #pragma once
-// MAKE VOX 的各个处理模块。全部在 prepare() 里分配好内存，process 里不分配、不加锁（实时安全）。
+// MAKE MIX 的各个处理模块。全部在 prepare() 里分配好内存，process 里不分配、不加锁（实时安全）。
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <cmath>
@@ -205,5 +205,112 @@ struct Space
         hp.highPass (fs, 240, 0.7); lp.lowPass (fs, 8500, 0.7); hp.reset(); lp.reset();
     }
     void reset() { verb.reset(); for (auto& d : pre) d.reset(); hp.reset(); lp.reset(); }
+};
+
+// ------------------------------------------------------------------ TPT 状态变量滤波器（Cytomic）：增益可以每几个样本改一次而不出咔哒声
+struct Svf
+{
+    enum Type { Bell, LowShelf, HighShelf, BandPass, HighPass };
+    float g = 0, k = 1, a1 = 1, a2 = 0, a3 = 0, m0 = 1, m1 = 0, m2 = 0;
+    std::array<float, 2> s1 {}, s2 {};
+    void reset() { s1.fill (0); s2.fill (0); }
+    void set (Type t, double fs, double f, double q, float db = 0)
+    {
+        const float A = std::pow (10.0f, db / 40.0f);
+        g = (float) std::tan (juce::MathConstants<double>::pi * std::min (f, 0.49 * fs) / fs);
+        switch (t)
+        {
+            case Bell:      k = (float) (1.0 / (q * A)); m0 = 1; m1 = k * (A * A - 1); m2 = 0; break;
+            case LowShelf:  g /= std::sqrt (A); k = (float) (1.0 / q); m0 = 1; m1 = k * (A - 1); m2 = A * A - 1; break;
+            case HighShelf: g *= std::sqrt (A); k = (float) (1.0 / q); m0 = A * A; m1 = k * (1 - A) * A; m2 = 1 - A * A; break;
+            case BandPass:  k = (float) (1.0 / q); m0 = 0; m1 = 1; m2 = 0; break;
+            case HighPass:  k = (float) (1.0 / q); m0 = 1; m1 = -k; m2 = -1; break;
+        }
+        a1 = 1 / (1 + g * (g + k)); a2 = g * a1; a3 = g * a2;
+    }
+    float process (float x, int ch) noexcept
+    {
+        auto& z1 = s1[(size_t) ch]; auto& z2 = s2[(size_t) ch];
+        const float v3 = x - z2, v1 = a1 * z1 + a2 * v3, v2 = z2 + a2 * z1 + a3 * v3;
+        z1 = 2 * v1 - z1; z2 = 2 * v2 - z2;
+        return m0 * x + m1 * v1 + m2 * v2;
+    }
+};
+
+// ------------------------------------------------------------------ K 计权（BS.1770 的两级：+4 dB 高架 + 38 Hz 高通），离线测响度和总线电平表用
+struct KWeight
+{
+    Biquad shelf, hp;
+    void prepare (double fs) { shelf.highShelf (fs, 1681.97, 0.7071, 4.0); hp.highPass (fs, 38.13, 0.5003); reset(); }
+    void reset() { shelf.reset(); hp.reset(); }
+    float process (float x, int ch) noexcept { return hp.process (shelf.process (x, ch), ch); }
+};
+
+// ------------------------------------------------------------------ 真峰值：4 倍多相插值（8 抽头加窗 sinc），只用来检测
+struct TruePeak
+{
+    std::array<std::array<float, 8>, 2> hist {}; std::array<std::array<float, 8>, 4> taps {}; int pos = 0;
+    TruePeak()
+    {
+        const double pi = juce::MathConstants<double>::pi;
+        for (int ph = 0; ph < 4; ++ph)
+            for (int i = 0; i < 8; ++i)
+            {
+                const double x = 3.0 + ph / 4.0 - i;          // 插值点在第 3、4 个样本之间
+                const double sinc = std::abs (x) < 1e-9 ? 1.0 : std::sin (pi * x) / (pi * x);
+                taps[(size_t) ph][(size_t) i] = (float) (sinc * (0.5 + 0.5 * std::cos (pi * x / 4.5)));
+            }
+    }
+    void reset() { for (auto& h : hist) h.fill (0); pos = 0; }
+    // 推入一帧（两个声道），返回最近这段插值后的最大绝对值
+    float push (float l, float r) noexcept
+    {
+        hist[0][(size_t) pos] = l; hist[1][(size_t) pos] = r; pos = (pos + 1) & 7;
+        float m = std::max (std::abs (l), std::abs (r));
+        for (size_t c = 0; c < 2; ++c)
+            for (size_t ph = 1; ph < 4; ++ph)
+            {
+                float acc = 0;
+                for (int i = 0; i < 8; ++i) acc += taps[ph][(size_t) i] * hist[c][(size_t) ((pos + i) & 7)];
+                m = std::max (m, std::abs (acc));
+            }
+        return m;
+    }
+};
+
+// ------------------------------------------------------------------ 预读限幅器：要求的增益在预读窗口里取最小（单调队列），
+// 再做一次略短的窗口平均 → 峰值到来之前增益已经平滑地压到位；最后硬限一次保险
+struct Limiter
+{
+    int la = 64; float ceiling = 0.89f, relMul = 0.9995f, rel = 1, grDb = 0;
+    std::vector<float> dl[2], box, dqVal; std::vector<int64_t> dqIdx;
+    int dw = 0, bw = 0, bl = 56, head = 0, tail = 0, cap = 0; double boxSum = 0; TruePeak tp; int64_t t = 0;
+    void prepare (double fs, int lookahead)
+    {
+        la = std::max (16, lookahead); bl = la - 8; cap = la + 4;
+        for (auto& d : dl) d.assign ((size_t) la + 1, 0.0f);
+        box.assign ((size_t) bl, 1.0f); dqIdx.assign ((size_t) cap, 0); dqVal.assign ((size_t) cap, 1.0f);
+        relMul = (float) std::exp (-1.0 / (fs * 0.12)); reset();
+    }
+    void reset()
+    {
+        for (auto& d : dl) std::fill (d.begin(), d.end(), 0.0f);
+        std::fill (box.begin(), box.end(), 1.0f); boxSum = bl; head = tail = 0; dw = bw = 0; rel = 1; grDb = 0; tp.reset(); t = 0;
+    }
+    int latency() const noexcept { return la; }
+    void process (float& l, float& r) noexcept
+    {
+        const float pk = tp.push (l, r), target = pk > ceiling ? ceiling / pk : 1.0f;
+        while (head != tail && dqVal[(size_t) ((tail + cap - 1) % cap)] >= target) tail = (tail + cap - 1) % cap;
+        dqIdx[(size_t) tail] = t; dqVal[(size_t) tail] = target; tail = (tail + 1) % cap;
+        while (t - dqIdx[(size_t) head] > la) head = (head + 1) % cap;
+        rel = std::min (dqVal[(size_t) head], 1.0f - (1.0f - rel) * relMul);
+        boxSum += rel - box[(size_t) bw]; box[(size_t) bw] = rel; bw = (bw + 1) % bl;
+        const float g = (float) std::min (1.0, boxSum / bl);
+        dl[0][(size_t) dw] = l; dl[1][(size_t) dw] = r; dw = (dw + 1) % (la + 1);
+        l = juce::jlimit (-ceiling, ceiling, dl[0][(size_t) dw] * g);     // dw 现在指向 la 个样本之前写的那一格
+        r = juce::jlimit (-ceiling, ceiling, dl[1][(size_t) dw] * g);
+        ++t; grDb = gainToDb (g);
+    }
 };
 } // namespace vox

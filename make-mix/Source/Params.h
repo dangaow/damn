@@ -1,58 +1,56 @@
 #pragma once
-// 参数表：三个角色共用一份 APVTS 布局（6.1）。ID 和范围一旦发布就冻结，只能在末尾追加。不依赖 JUCE。
+// 参数表：三个角色共用一套 APVTS 布局（界面只显示当前角色的那几个）。不依赖 JUCE。
 #include "Shared.h"
 
 namespace mm
 {
-enum class PKind : uint8_t { Float, Choice };
-struct ParamInfo
-{
-    const char* id; const char* name; Role role; PKind kind;
-    float min, max, def, centre, step;      // centre <= 0 → 线性；step 0 = 连续
-    const char* unit; bool automatable;
-    const char* const* choices; int numChoices;
+enum class PKind { Db, Hz, Amount, Choice, Percent };
+struct ParamDef { const char* id; const char* name; Role role; PKind kind; float min, max, def, skew; };
+
+// skew：JUCE NormalisableRange 的 centre（<= 0 表示线性）
+inline constexpr ParamDef kParams[] = {
+    { "v_input",    "Vocal Input",    Role::Vocal, PKind::Db,     -24, 24, 0, 0 },
+    { "v_hpf",      "Vocal Low Cut",  Role::Vocal, PKind::Hz,      40, 300, 90, 110 },
+    { "v_mud",      "Vocal Mud",      Role::Vocal, PKind::Db,      -9, 3, -2, 0 },
+    { "v_pres",     "Vocal Presence", Role::Vocal, PKind::Db,      -3, 8, 2, 0 },
+    { "v_air",      "Vocal Air",      Role::Vocal, PKind::Db,      -3, 8, 3, 0 },
+    { "v_comp",     "Vocal Compress", Role::Vocal, PKind::Amount,   0, 1, 0.4f, 0 },
+    { "v_deess",    "Vocal De-ess",   Role::Vocal, PKind::Amount,   0, 1, 0.4f, 0 },
+    { "v_warmth",   "Vocal Warmth",   Role::Vocal, PKind::Amount,   0, 1, 0.2f, 0 },
+    { "v_echo",     "Vocal Echo",     Role::Vocal, PKind::Amount,   0, 1, 0.15f, 0 },
+    { "v_echoTime", "Echo Time",      Role::Vocal, PKind::Choice,   0, 5, 2, 0 },
+    { "v_space",    "Vocal Space",    Role::Vocal, PKind::Amount,   0, 1, 0.2f, 0 },
+    { "v_level",    "Vocal Level",    Role::Vocal, PKind::Db,     -24, 24, 0, 0 },
+    { "b_hpf",      "Beat Low Cut",   Role::Beat,  PKind::Hz,      20, 200, 25, 60 },
+    { "b_pocket",   "Beat Pocket",    Role::Beat,  PKind::Db,      -6, 0, -1.5f, 0 },
+    { "b_unmask",   "Beat Unmask",    Role::Beat,  PKind::Db,       0, 12, 6, 0 },
+    { "b_level",    "Beat Level",     Role::Beat,  PKind::Db,     -24, 12, 0, 0 },
+    { "m_low",      "Bus Low",        Role::Bus,   PKind::Db,      -6, 6, 0, 0 },
+    { "m_high",     "Bus High",       Role::Bus,   PKind::Db,      -6, 6, 0, 0 },
+    { "m_glue",     "Bus Glue",       Role::Bus,   PKind::Amount,   0, 1, 0.35f, 0 },
+    { "m_width",    "Bus Width",      Role::Bus,   PKind::Percent, 50, 150, 100, 0 },
+    { "m_drive",    "Bus Drive",      Role::Bus,   PKind::Db,       0, 18, 0, 0 },
+    { "m_ceiling",  "Bus Ceiling",    Role::Bus,   PKind::Db,      -3, 0, -1, 0 },
 };
-extern const ParamInfo kParams[]; extern const int kNumParams;   // 56
+constexpr int kNumParams = (int) (sizeof (kParams) / sizeof (kParams[0]));
+inline constexpr const char* kEchoChoices[] = { "1/16", "1/8", "1/8 D", "1/4", "1/4 D", "1/2" };
+inline constexpr float kEchoBeats[] = { 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
 
-// 和 kParams 的顺序完全一致（单元测试逐个核对）
-enum PIdx : int
+enum PIdx { V_INPUT, V_HPF, V_MUD, V_PRES, V_AIR, V_COMP, V_DEESS, V_WARMTH, V_ECHO, V_ECHOTIME, V_SPACE, V_LEVEL,
+            B_HPF, B_POCKET, B_UNMASK, B_LEVEL, M_LOW, M_HIGH, M_GLUE, M_WIDTH, M_DRIVE, M_CEILING };
+
+inline int paramIndex (const std::string& id)
 {
-    // VOCAL（26）
-    v_input, v_hpf, v_hpfSlope, v_lowF, v_lowG, v_midF, v_midG, v_presF, v_presG, v_airF, v_airG, v_lpf,
-    v_comp, v_compAtk, v_compRel, v_deess, v_deessF, v_warmth, v_echo, v_echoTime, v_echoFb, v_space, v_spaceDecay,
-    v_preDelay, v_wetDuck, v_level,
-    // BEAT（14）
-    b_hpf, b_monoBelow, b_pocketF, b_pocketG, b_pocketQ, b_unmask, b_sens, b_focusLo, b_focusHi, b_release, b_side, b_ride,
-    b_key, b_level,
-    // BUS（16）
-    m_lowG, m_lowMidG, m_presG, m_airG, m_lpf, m_glue, m_glueRatio, m_glueAtk, m_glueRel, m_glueScHpf, m_width, m_monoBelow,
-    m_drive, m_clip, m_ceiling, m_target,
-    kPIdxCount
+    for (int i = 0; i < kNumParams; ++i) if (id == kParams[i].id) return i;
+    return -1;
+}
+// 一组完整的参数值（按 kParams 顺序）
+struct ParamSet
+{
+    std::array<float, kNumParams> v {};
+    ParamSet() { for (int i = 0; i < kNumParams; ++i) v[(size_t) i] = kParams[i].def; }
+    float& operator[] (int i) { return v[(size_t) i]; }
+    float operator[] (int i) const { return v[(size_t) i]; }
 };
-static_assert (kPIdxCount == 56);
-
-// 默认值 = kParams 的 def（= TRAP 的 styleDefaults），这样 VocalParams{} 也是一份合法参数
-struct VocalParams { float input = 0, hpf = 105; int hpfSlope = 1; float lowF = 320, lowG = -3, midF = 1200, midG = 0, presF = 4000, presG = 2.5f,
-                     airF = 11000, airG = 4, lpf = 22000, comp = 0.5f, compAtk = 15, compRel = 180, deess = 0.4f, deessF = 6000,
-                     warmth = 0.25f, echo = 0.2f; int echoTime = 2; float echoFb = 0.25f, space = 0.3f, spaceDecay = 1.2f,
-                     preDelay = 35, wetDuck = 6, level = 0; bool operator== (const VocalParams&) const = default; };
-struct BeatParams  { float hpf = 20, monoBelow = 120, pocketF = 3000, pocketG = 0, pocketQ = 1, unmask = 0.67f, sens = 6, focusLo = 250,
-                     focusHi = 5000, release = 160, side = 0.3f, ride = 0.5f;
-                     int key = 0; float level = 0; bool operator== (const BeatParams&) const = default; };
-struct BusParams   { float lowG = 0, lowMidG = 0, presG = 0, airG = 0, lpf = 22000, glue = -14, glueRatio = 2.5f, glueAtk = 20, glueRel = 120,
-                     glueScHpf = 120, width = 1, monoBelow = 120,
-                     drive = 0, clip = 0, ceiling = -1, target = -9; bool operator== (const BusParams&) const = default; };
-VocalParams vocalFrom (const float* raw);   BeatParams beatFrom (const float* raw);   BusParams busFrom (const float* raw);  // raw[kPIdxCount]
-ParamSet toSet (const VocalParams&); ParamSet toSet (const BeatParams&); ParamSet toSet (const BusParams&);
-VocalParams vocalFrom (const ParamSet&);  BeatParams beatFrom (const ParamSet&);  BusParams busFrom (const ParamSet&);   // 缺的用默认值
-std::string formatValue (int pidx, float v);   // "+2.0 dB" "120 Hz" "3.8 kHz" "45%" "1/8D"
-
-// —— WP0 补充的小工具（只追加）——
-int paramIndex (const std::string& id);        // id → PIdx；没有返回 -1
-float clampParam (int pidx, float v);          // 限制到范围；选项取整；有 step 的按 step 取整
-bool isLevelOwning (int pidx) noexcept;        // v_input / v_level / b_level / m_drive / m_glue / m_target（LOAD DEFAULTS 和预设不动它们）
-
-// v_echoTime 各选项对应的拍数：1/16, 1/8, 1/8D, 1/4, 1/4D, 1/2
-constexpr float kEchoBeats[6] = { 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
-enum class KeyChoice : int { Auto = 0, Link = 1, Sidechain = 2, Off = 3 };   // b_key 的选项序号
+inline float clampParam (int i, float x) { return std::clamp (x, kParams[i].min, kParams[i].max); }
 } // namespace mm

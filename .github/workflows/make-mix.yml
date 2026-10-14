@@ -1,0 +1,67 @@
+# MAKE MIX：Windows x64 VST3（给 FL Studio 用）。推到这个分支或手动触发时编译、跑 pluginval、打包，
+# 并把 zip 放进 GitHub Release「make-mix-v<版本>」（预发布），可以直接下载。
+name: make-mix
+
+on:
+  push:
+    paths: [ 'make-mix/**', '.github/workflows/make-mix.yml' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-8.0.10-${{ runner.os }}
+
+      - name: Configure
+        run: cmake -S make-mix -B build -G "Visual Studio 17 2022" -A x64 -DMAKEMIX_TOOLS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build
+        run: cmake --build build --config Release --target MakeMix_VST3 --parallel
+
+      - name: pluginval
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval
+          .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 600000 "build\MakeMix_artefacts\Release\VST3\MAKE MIX.vst3"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path make-mix/CMakeLists.txt -Pattern 'project\(MakeMix VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item -Recurse "build\MakeMix_artefacts\Release\VST3\MAKE MIX.vst3" dist\
+          Copy-Item make-mix\README.md dist\README.md
+          Compress-Archive -Path dist\* -DestinationPath "MAKE-MIX-$v-Windows-VST3.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MAKE-MIX-Windows-VST3
+          path: MAKE-MIX-*-Windows-VST3.zip
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: make-mix-v${{ env.VERSION }}
+          name: MAKE MIX ${{ env.VERSION }} (Windows VST3)
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          files: MAKE-MIX-*-Windows-VST3.zip
+          body: |
+            MAKE MIX — one plugin, three roles (VOCAL / BEAT / BUS) for FL Studio.
+            Unzip and copy "MAKE MIX.vst3" to C:\Program Files\Common Files\VST3, then rescan plugins in FL Studio.
+            See README.md inside the zip.

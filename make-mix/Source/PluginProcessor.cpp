@@ -1,325 +1,190 @@
-// 【WP0 桩】处理器骨架：完整参数布局、角色分派、分段处理、恒定延迟、状态根属性、程序 = 风格。WP2 换成完整实现（第 3、9 节）。
 #include "PluginProcessor.h"
-#include "AutoMix.h"
-#include "Styles.h"
+#include "PluginEditor.h"
 
-namespace
-{
-// 宿主里手动输入数值："+2.0 dB"、"3.8 kHz"、"45%"、"OFF"
-float parseValue (int pidx, const juce::String& text)
-{
-    const auto& p = mm::kParams[pidx];
-    const auto t = text.trim().toLowerCase();
-    if (t.startsWith ("off")) return (pidx == mm::v_lpf || pidx == mm::m_lpf) ? p.max : p.min;
-    float v = t.getFloatValue();
-    if (juce::String (p.unit) == "%") v *= 0.01f;
-    else if (t.contains ("khz") || t.endsWithChar ('k')) v *= 1000.0f;
-    return mm::clampParam (pidx, v);
-}
-} // namespace
+using namespace mm;
 
 juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
-    for (int i = 0; i < mm::kNumParams; ++i)
+    for (const auto& d : kParams)
     {
-        const auto& p = mm::kParams[i];
-        const juce::ParameterID pid { p.id, 1 };
-        if (p.kind == mm::PKind::Choice)
+        const juce::ParameterID id { d.id, 1 };
+        if (d.kind == PKind::Choice)
         {
-            juce::StringArray items;
-            for (int c = 0; c < p.numChoices; ++c) items.add (p.choices[c]);
-            layout.add (std::make_unique<juce::AudioParameterChoice> (pid, p.name, items, (int) p.def,
-                                                                      juce::AudioParameterChoiceAttributes().withAutomatable (p.automatable)));
+            juce::StringArray ch; for (auto* c : kEchoChoices) ch.add (c);
+            layout.add (std::make_unique<juce::AudioParameterChoice> (id, d.name, ch, (int) d.def));
+            continue;
         }
-        else
+        juce::NormalisableRange<float> r (d.min, d.max, d.kind == PKind::Percent ? 1.0f : 0.0f);
+        if (d.skew > 0) r.setSkewForCentre (d.skew);
+        auto attr = juce::AudioParameterFloatAttributes();
+        switch (d.kind)
         {
-            juce::NormalisableRange<float> range (p.min, p.max, p.step);
-            if (p.centre > 0) range.setSkewForCentre (p.centre);
-            const auto attr = juce::AudioParameterFloatAttributes()
-                                  .withAutomatable (p.automatable)
-                                  .withStringFromValueFunction ([i] (float v, int) { return juce::String::fromUTF8 (mm::formatValue (i, v).c_str()); })
-                                  .withValueFromStringFunction ([i] (const juce::String& s) { return parseValue (i, s); });
-            layout.add (std::make_unique<juce::AudioParameterFloat> (pid, p.name, range, p.def, attr));
+            case PKind::Db:      attr = attr.withLabel ("dB").withStringFromValueFunction ([] (float v, int) { return juce::String (v, 1) + " dB"; }); break;
+            case PKind::Hz:      attr = attr.withLabel ("Hz").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; }); break;
+            case PKind::Percent: attr = attr.withLabel ("%").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + "%"; }); break;
+            case PKind::Amount: case PKind::Choice: attr = attr.withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; }); break;
         }
+        layout.add (std::make_unique<juce::AudioParameterFloat> (id, d.name, r, d.def, attr));
     }
     return layout;
 }
 
-MakeMixProcessor::MakeMixProcessor (Options options)
+MakeMixProcessor::MakeMixProcessor()
     : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                                       .withInput ("Vox Key", juce::AudioChannelSet::stereo(), true)),   // BEAT 的侧链 key（1.5、6.3）
-      apvts (*this, nullptr, "PARAMS", createLayout())
+                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+      apvts (*this, nullptr, "MAKEMIX", createLayout())
 {
-    for (int i = 0; i < mm::kNumParams; ++i) raw[(size_t) i] = apvts.getRawParameterValue (mm::kParams[i].id);
-
-    if (options.privateHub) { ownHub = std::make_unique<mm::Hub>(); hubPtr = ownHub.get(); }
-    else                    { sharedHub.emplace(); hubPtr = &sharedHub->get(); }
-    slotIndex = hubPtr->attach (*this, id);
-    if (id.isNull()) id = mm::InstanceId::random();
+    for (int i = 0; i < kNumParams; ++i) raw[(size_t) i] = apvts.getRawParameterValue (kParams[i].id);
+    // FL 的「桥接」模式把插件放进单独的 ilbridge 进程，那样就看不到别的实例
     bridged = juce::File::getSpecialLocation (juce::File::hostApplicationPath).getFileName().containsIgnoreCase ("ilbridge");
+    slot = hubRef->attach (this);
 }
 
-MakeMixProcessor::~MakeMixProcessor()
+MakeMixProcessor::~MakeMixProcessor() { hubRef->detach (slot); }
+
+const juce::String MakeMixProcessor::getProgramName (int i) { return juce::String::fromUTF8 (mm::style (i).name); }
+
+bool MakeMixProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 {
-    if (hubPtr != nullptr && slotIndex >= 0) hubPtr->detach (slotIndex);
+    const auto in = l.getMainInputChannelSet(), out = l.getMainOutputChannelSet();
+    return in == out && (out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo());
 }
 
-//==============================================================================
-mm::Role MakeMixProcessor::role() const noexcept        { return (mm::Role) roleA.load (std::memory_order_relaxed); }
-mm::SubRole MakeMixProcessor::subRole() const noexcept  { return (mm::SubRole) subA.load (std::memory_order_relaxed); }
-int MakeMixProcessor::group() const noexcept            { return groupA.load (std::memory_order_relaxed); }
-mm::StyleId MakeMixProcessor::style() const noexcept    { return styleA.load (std::memory_order_relaxed); }
-
-void MakeMixProcessor::setRole (mm::Role r, bool byUser)
-{
-    roleA.store ((uint8_t) std::clamp ((int) r, 0, 2), std::memory_order_relaxed);
-    if (byUser) roleUserSet = true;
-    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
-}
-void MakeMixProcessor::setSubRole (mm::SubRole s)
-{
-    subA.store ((uint8_t) std::clamp ((int) s, 0, 2), std::memory_order_relaxed);
-    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
-}
-void MakeMixProcessor::setGroup (int g)
-{
-    groupA.store ((uint8_t) std::clamp (g, 0, mm::kMaxGroups - 1), std::memory_order_relaxed);
-    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
-}
-void MakeMixProcessor::setStyle (mm::StyleId s, bool broadcast)
-{
-    styleA.store (std::clamp (s, 0, mm::kNumStyles - 1), std::memory_order_relaxed);
-    if (broadcast && slotIndex >= 0) hubPtr->broadcastStyle (slotIndex, style());
-}
-
-void MakeMixProcessor::requestMix()          { if (slotIndex >= 0) hubPtr->beginMix (slotIndex, style()); }
-void MakeMixProcessor::requestStop (bool c)  { if (slotIndex >= 0) hubPtr->stop (slotIndex, c); }
-void MakeMixProcessor::requestUndo()         { if (slotIndex >= 0) hubPtr->undoMix (slotIndex); }
-void MakeMixProcessor::requestRemix()        { if (slotIndex >= 0) hubPtr->remix (slotIndex, style()); }
-void MakeMixProcessor::loadStyleDefaults()   { applyParams (mm::automix::styleDefaults (style(), role()), true); }
-
-mm::Hub* MakeMixProcessor::hub() const noexcept                       { return hubPtr; }
-int MakeMixProcessor::slot() const noexcept                           { return slotIndex; }
-const mm::InstanceId& MakeMixProcessor::instanceId() const noexcept   { return id; }
-const mm::LearnedProfile& MakeMixProcessor::learned() const noexcept  { return learnedProfile; }
-bool MakeMixProcessor::isBridgedHost() const noexcept                 { return bridged; }
-std::string MakeMixProcessor::trackName() const                       { return name; }
-
-// 消息线程：真实值 → 0..1，只写变了的，每个都包在 gesture 里（宿主能撤销、能看到旋钮动）
-void MakeMixProcessor::applyParams (const mm::ParamSet& set, bool keepLevelOwning)
-{
-    for (const auto& [pid, v] : set.values)
-    {
-        const int i = mm::paramIndex (pid);
-        if (i < 0 || (keepLevelOwning && mm::isLevelOwning (i))) continue;
-        if (auto* p = apvts.getParameter (pid))
-        {
-            const float nv = p->convertTo0to1 (mm::clampParam (i, v));
-            if (std::abs (nv - p->getValue()) > 1.0e-6f)
-            {
-                p->beginChangeGesture();
-                p->setValueNotifyingHost (nv);
-                p->endChangeGesture();
-            }
-        }
-    }
-}
-
-//==============================================================================
 void MakeMixProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    maxBlock = std::max (1, samplesPerBlock);
-    const int latency = mm::latencyFor (sampleRate, maxBlock);
-    const mm::ChainSpec spec { sampleRate, maxBlock, 2, latency };
-    vocal.prepare (spec);
-    beat.prepare (spec);
-    bus.prepare (spec);
-    activeRole = -1;
-    prepared = true;
-    setLatencySamples (latency);
+    fs = sampleRate; maxBlock = std::max (32, samplesPerBlock); L = latencyFor (fs, maxBlock);
+    const auto set = hubParams();
+    applyParams (set, style(), lastBpm.load());
+    vocal.prepare (fs, maxBlock, L); beat.prepare (fs, maxBlock, L); bus.prepare (fs, maxBlock, L);
+    setLatencySamples (L);                                       // 三个角色一样，参数怎么改都不变
+    freeCounter = 0; lastRole = -1; prepared = true;
 }
 
-void MakeMixProcessor::reset()
+void MakeMixProcessor::applyParams (const ParamSet& s, StyleId st, double bpm)
 {
-    vocal.reset();
-    beat.reset();
-    bus.reset();
+    vocal.setParams (VocalChain::fromSet (s), st, bpm);
+    beat.setParams (BeatChain::fromSet (s), st);
+    bus.setParams (BusChain::fromSet (s), st);
+    applied = s; appliedStyle = st; appliedBpm = bpm;
 }
 
-bool MakeMixProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-    const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
-    if (in != out || (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())) return false;
-    if (layouts.inputBuses.size() > 1)
-    {
-        const auto key = layouts.inputBuses[1];
-        if (! key.isDisabled() && key != juce::AudioChannelSet::mono() && key != juce::AudioChannelSet::stereo()) return false;
-    }
-    return true;
-}
-
-void MakeMixProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)         { runChains (buffer, false); }
-void MakeMixProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) { runChains (buffer, true); }
-
-void MakeMixProcessor::runChains (juce::AudioBuffer<float>& buffer, bool bypassed)
+void MakeMixProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    const int n = buffer.getNumSamples();
-    for (int c = getTotalNumInputChannels(); c < std::min (getTotalNumOutputChannels(), buffer.getNumChannels()); ++c) buffer.clear (c, 0, n);
-    const int numCh = std::min ({ 2, getMainBusNumOutputChannels(), buffer.getNumChannels() });
-    if (! prepared || numCh <= 0) return;                                  // 没 prepare 就直通（FL Patcher 会这样调）
+    const int n = buffer.getNumSamples(), nCh = std::min (2, buffer.getNumChannels());
+    for (int c = nCh; c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
+    if (! prepared || n == 0 || nCh == 0) return;
 
-    // 播放头：时间线位置和速度
-    bool playing = false;
-    int64_t timeline = -1;
-    double bpm = fallbackBpm;
+    // 宿主时间：播放时用 timeInSamples（各条轨对得上），停着的时候用自己的计数
+    bool playing = false; int64_t pos = freeCounter; double bpm = fallbackBpm;
     if (auto* ph = getPlayHead())
-        if (auto pos = ph->getPosition())
+        if (auto info = ph->getPosition())
         {
-            if (auto t = pos->getTimeInSamples()) { playing = pos->getIsPlaying(); timeline = *t; }
-            if (auto b = pos->getBpm()) if (*b > 20.0 && *b < 400.0) bpm = *b;
+            if (auto b = info->getBpm()) bpm = *b;
+            playing = info->getIsPlaying();
+            if (playing) if (auto t = info->getTimeInSamples()) pos = *t;
         }
+    lastBpm.store (bpm);
 
-    const int r = std::clamp ((int) roleA.load (std::memory_order_relaxed), 0, 2);
-    if (r != activeRole)
+    ParamSet now;
+    for (int i = 0; i < kNumParams; ++i) now[i] = raw[(size_t) i]->load (std::memory_order_relaxed);
+    const StyleId st = style();
+    if (now.v != applied.v || st != appliedStyle || std::abs (bpm - appliedBpm) > 0.01) applyParams (now, st, bpm);
+
+    const int r = roleA.load();
+    if (r != lastRole) { hubRef->setRole (slot, (Role) r); if (r == 0) vocal.reset(); else if (r == 1) beat.reset(); else bus.reset(); lastRole = r; }
+
+    float pin = 0; for (int c = 0; c < nCh; ++c) pin = std::max (pin, buffer.getMagnitude (c, 0, n));
+    for (int start = 0; start < n; start += maxBlock)
     {
-        if (r == 0) vocal.reset(); else if (r == 1) beat.reset(); else bus.reset();
-        activeRole = r;
+        const int m = std::min (maxBlock, n - start);
+        float* ch[2] = { buffer.getWritePointer (0, start), buffer.getWritePointer (nCh > 1 ? 1 : 0, start) };
+        if (r != (int) Role::Bus) hubRef->capture (slot, ch[0], ch[1], m, pos + start, playing);
+        if (r == (int) Role::Vocal)     vocal.process (ch, nCh, m, pos + start, this);
+        else if (r == (int) Role::Beat) beat.process (ch, nCh, m, pos + start, playing, this);
+        else                            bus.process (ch, nCh, m);
     }
-    float values[mm::kPIdxCount];
-    for (size_t i = 0; i < raw.size(); ++i) values[i] = raw[i]->load (std::memory_order_relaxed);
-    compBox.read (compAudio, compSeq);
-    if (r == 0)      vocal.setParams (mm::vocalFrom (values), compAudio);
-    else if (r == 1) beat.setParams (mm::beatFrom (values), compAudio);
-    else             bus.setParams (mm::busFrom (values), compAudio);
-    if (n == 0) return;                                                    // 0 样本的块：参数已经读进链了，直接返回
+    freeCounter += n;
 
-    // 侧链 key（第二个输入总线）
-    int auxCh = 0, auxOffset = 0;
-    if (getBusCount (true) > 1)
-        if (auto* key = getBus (true, 1); key != nullptr && key->isEnabled())
-        {
-            auxOffset = getChannelIndexInProcessBlockBuffer (true, 1, 0);
-            auxCh = std::min (2, key->getNumberOfChannels());
-            if (auxOffset + auxCh > buffer.getNumChannels()) auxCh = 0;
-        }
-
-    float inPeak = 0;
-    for (int c = 0; c < numCh; ++c) inPeak = std::max (inPeak, buffer.getMagnitude (c, 0, n));
-
-    for (int start = 0; start < n; start += maxBlock)                     // 宿主给的块比 prepareToPlay 说的大时分段处理
-    {
-        const int len = std::min (maxBlock, n - start);
-        float* ch[2] = { buffer.getWritePointer (0, start), numCh > 1 ? buffer.getWritePointer (1, start) : nullptr };
-        const float* aux[2] = { nullptr, nullptr };
-        for (int c = 0; c < auxCh; ++c) aux[c] = buffer.getReadPointer (auxOffset + c, start);
-        const mm::ProcessContext ctx { playing ? timeline + start : -1, bpm };
-        if (r == 0)
-        {
-            if (bypassed) vocal.processBypassed (ch, numCh, len, ctx, nullptr);
-            else          vocal.process (ch, numCh, len, ctx, nullptr);
-        }
-        else if (r == 1)
-        {
-            if (bypassed) beat.processBypassed (ch, numCh, len);
-            else          beat.process (ch, numCh, aux, auxCh, len, ctx, nullptr);
-        }
-        else
-        {
-            if (bypassed) bus.processBypassed (ch, numCh, len);
-            else          bus.process (ch, numCh, len, ctx);
-        }
-    }
-
-    float outPeak = 0;
-    for (int c = 0; c < numCh; ++c) outPeak = std::max (outPeak, buffer.getMagnitude (c, 0, n));
-    meters.inPeak.store (inPeak, std::memory_order_relaxed);
-    meters.outPeak.store (outPeak, std::memory_order_relaxed);
+    float pout = 0; for (int c = 0; c < nCh; ++c) pout = std::max (pout, buffer.getMagnitude (c, 0, n));
+    inPeak.store (pin); outPeak.store (pout);
+    if (r == 0) { gr1.store (vocal.grComp); gr2.store (vocal.grDeess); }
+    else if (r == 1) { for (int k = 0; k < kKeyBands; ++k) cut[(size_t) k].store (beat.cutDb[k]); }
+    else { gr1.store (bus.grGlue); gr2.store (bus.grLimit); loud.store (bus.loudShort); }
 }
 
-//==============================================================================
-juce::AudioProcessorEditor* MakeMixProcessor::createEditor() { return new juce::GenericAudioProcessorEditor (*this); }
-
-int MakeMixProcessor::getNumPrograms()     { return mm::kNumStyles; }
-int MakeMixProcessor::getCurrentProgram()  { return style(); }
-void MakeMixProcessor::setCurrentProgram (int index)
+// ---------------------------------------------------------------------------------------- 角色 / 风格 / 参数（消息线程）
+void MakeMixProcessor::setRole (Role r)
 {
-    if (! juce::isPositiveAndBelow (index, mm::kNumStyles)) return;
-    setStyle (index, true);
-    loadStyleDefaults();
-}
-const juce::String MakeMixProcessor::getProgramName (int index)
-{
-    return juce::isPositiveAndBelow (index, mm::kNumStyles) ? juce::String::fromUTF8 (mm::kStyles[(size_t) index].name) : juce::String();
+    roleA.store ((int) r);
+    hubRef->setRole (slot, r);
 }
 
-//==============================================================================
-// 9.1：<MAKEMIX stateVersion id cloneOf role subRole group style roleUserSet trackName><PARAMS …/></MAKEMIX>（桩不存 LEARNED）
-void MakeMixProcessor::getStateInformation (juce::MemoryBlock& destData)
+void MakeMixProcessor::setStyle (StyleId s, bool broadcast)
 {
-    juce::ValueTree root ("MAKEMIX");
-    root.setProperty ("stateVersion", 1, nullptr);
-    root.setProperty ("id", juce::String (id.toString()), nullptr);
-    root.setProperty ("cloneOf", juce::String (cloneOf), nullptr);
-    root.setProperty ("role", (int) role(), nullptr);
-    root.setProperty ("subRole", (int) subRole(), nullptr);
-    root.setProperty ("group", group(), nullptr);
-    root.setProperty ("style", style(), nullptr);
-    root.setProperty ("roleUserSet", roleUserSet ? 1 : 0, nullptr);
-    root.setProperty ("trackName", juce::String::fromUTF8 (name.c_str()), nullptr);
-    root.appendChild (apvts.copyState(), nullptr);
-    if (auto xml = root.createXml()) copyXmlToBinary (*xml, destData);
+    s = std::clamp (s, 0, kNumStyles - 1);
+    if (broadcast) hubRef->broadcastStyle (s); else styleA.store (s);
+    updateHostDisplay (ChangeDetails().withProgramChanged (true));
 }
 
-void MakeMixProcessor::setStateInformation (const void* data, int sizeInBytes)
+ParamSet MakeMixProcessor::hubParams() const
 {
-    const auto xml = getXmlFromBinary (data, sizeInBytes);
-    if (xml == nullptr || ! xml->hasTagName ("MAKEMIX")) return;           // 不认识的（包括 v0）忽略
-    const auto root = juce::ValueTree::fromXml (*xml);
-
-    const auto saved = mm::InstanceId::fromString (root.getProperty ("id").toString().toStdString());
-    cloneOf = root.getProperty ("cloneOf").toString().toStdString();
-    if (! saved.isNull() && hubPtr->restoreId (slotIndex, id, saved) == mm::Hub::Restore::Clone)
-        cloneOf = saved.toString();
-
-    roleA.store ((uint8_t) std::clamp ((int) root.getProperty ("role", 0), 0, 2), std::memory_order_relaxed);
-    subA.store ((uint8_t) std::clamp ((int) root.getProperty ("subRole", 0), 0, 2), std::memory_order_relaxed);
-    groupA.store ((uint8_t) std::clamp ((int) root.getProperty ("group", 0), 0, mm::kMaxGroups - 1), std::memory_order_relaxed);
-    styleA.store (std::clamp ((int) root.getProperty ("style", 0), 0, mm::kNumStyles - 1), std::memory_order_relaxed);
-    roleUserSet = (int) root.getProperty ("roleUserSet", 0) != 0;
-    if (name.empty()) name = root.getProperty ("trackName").toString().toStdString();
-    if (slotIndex >= 0) hubPtr->setInfo (slotIndex, role(), subRole(), group());
-
-    const auto params = root.getChildWithName (apvts.state.getType());
-    if (params.isValid()) apvts.replaceState (params);
-}
-
-void MakeMixProcessor::updateTrackProperties (const TrackProperties& props)
-{
-    if (props.name.has_value()) name = props.name->toStdString();
-    if (slotIndex >= 0) hubPtr->setName (slotIndex, name);
-}
-
-//==============================================================================
-mm::ParamSet MakeMixProcessor::hubSnapshotParams() const
-{
-    mm::ParamSet s;
-    s.values.reserve ((size_t) mm::kNumParams);
-    for (int i = 0; i < mm::kNumParams; ++i) s.values.emplace_back (mm::kParams[i].id, raw[(size_t) i]->load (std::memory_order_relaxed));
+    ParamSet s;
+    for (int i = 0; i < kNumParams; ++i) s[i] = raw[(size_t) i]->load();
     return s;
 }
-mm::LearnedProfile MakeMixProcessor::hubSnapshotProfile() const { return learnedProfile; }
-void MakeMixProcessor::hubApply (const mm::ParamSet& set, const mm::LearnedProfile& profile)
+
+void MakeMixProcessor::hubApply (const ParamSet& s, const std::string& n)
 {
-    applyParams (set, false);
-    learnedProfile = profile;
-    compBox.write (profile.comp);
+    for (int i = 0; i < kNumParams; ++i)
+    {
+        auto* p = apvts.getParameter (kParams[i].id);
+        const float v = clampParam (i, s[i]);
+        if (p == nullptr || std::abs (v - raw[(size_t) i]->load()) < 1e-4f) continue;   // 没变的不写，免得撤销记录太多
+        p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 (v)); p->endChangeGesture();
+    }
+    const juce::ScopedLock sl (noteLock); lastNote = juce::String::fromUTF8 (n.c_str());
 }
-void MakeMixProcessor::hubSetStyle (mm::StyleId s)                          { setStyle (s, false); }
-std::shared_ptr<mm::CaptureData> MakeMixProcessor::hubMakeCapture (int, double) { return nullptr; }   // 桩：不采样
-void MakeMixProcessor::hubReleaseCapture()                                 {}
-bool MakeMixProcessor::hubSidechainConnected() const                       { return false; }
+
+void MakeMixProcessor::loadStyleDefaults()
+{
+    const auto& st = mm::style (style());
+    auto s = hubParams();
+    switch (role())
+    {
+        case Role::Vocal:
+            s[V_HPF] = 0.5f * (st.vHpfMin + st.vHpfMax); s[V_MUD] = st.vMudG; s[V_PRES] = st.vPresG; s[V_AIR] = st.vAirG;
+            s[V_COMP] = 0.4f; s[V_DEESS] = 0.4f; s[V_WARMTH] = st.vWarmth;
+            s[V_ECHO] = std::clamp ((st.vEchoWdr + 30.0f) / 24.0f, 0.0f, 1.0f); s[V_ECHOTIME] = (float) st.vEchoTime;
+            s[V_SPACE] = std::clamp ((st.vRevWdr + 32.0f) / 24.0f, 0.0f, 1.0f); break;
+        case Role::Beat:
+            s[B_HPF] = st.bHpf; s[B_POCKET] = st.bPocketStatic; s[B_UNMASK] = st.bDmax; break;
+        case Role::Bus:
+            s[M_LOW] = 0; s[M_HIGH] = 0; s[M_GLUE] = 0.35f; s[M_WIDTH] = 100; s[M_CEILING] = st.ceiling; break;
+    }
+    hubApply (s, std::string ("STYLE DEFAULTS: ") + st.name + "\n");
+}
+
+// ---------------------------------------------------------------------------------------- 状态
+void MakeMixProcessor::getStateInformation (juce::MemoryBlock& dest)
+{
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    xml->setAttribute ("role", roleA.load()); xml->setAttribute ("style", styleA.load()); xml->setAttribute ("version", 1);
+    copyXmlToBinary (*xml, dest);
+}
+
+void MakeMixProcessor::setStateInformation (const void* data, int size)
+{
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, size));
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
+    roleA.store (std::clamp (xml->getIntAttribute ("role", 0), 0, 2));
+    styleA.store (std::clamp (xml->getIntAttribute ("style", 0), 0, kNumStyles - 1));
+    hubRef->setRole (slot, role());
+    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+}
+
+juce::AudioProcessorEditor* MakeMixProcessor::createEditor() { return new MakeMixEditor (*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new MakeMixProcessor(); }

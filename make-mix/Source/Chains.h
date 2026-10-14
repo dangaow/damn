@@ -1,83 +1,103 @@
 #pragma once
-// 三个角色的处理链（6.2–6.4）。插件在音频线程用，解算器拿来离线仿真：只有一份实现，仿真 = 实际。
-// 【WP0 桩】公开接口是冻结的（6.6）；private 部分和 Chains.cpp 由 WP1 替换。桩的行为：只延迟 spec.latency 个样本。
+// 三条处理链：普通 C++ 类。插件在音频线程里用它们，解算器离线用同一份代码模拟（模拟 = 实际效果）。
 #include "Params.h"
-#include <juce_dsp/juce_dsp.h>
+#include "Styles.h"
+#include "Dsp.h"
 
 namespace mm
 {
-struct ChainSpec { double fs = 48000; int maxBlock = 512; int numCh = 2; int latency = 0; };   // latency 0 = 不补齐（解算仿真用）
-struct ProcessContext { int64_t timeline = -1; double bpm = 120; };   // timeline = 本块第一个输入样本的时间线位置；-1 = 未播放
-struct KeyFrame { int64_t hop = 0; std::array<float, kKeyBands> bandDb {}; float vad = 0; };
-class KeySink   { public: virtual ~KeySink() = default;   virtual void keyFrame (const KeyFrame&) noexcept = 0; };
-class KeySource { public: virtual ~KeySource() = default; virtual KeyRead vocalKey (int64_t hop, float* bandDb) noexcept = 0; };
+// 人声 key：每 hop 一帧，6 个频段的能量（dB）。hop 按「内容时间」编号：floor(内容样本位置 / hop)
+struct KeySink   { virtual ~KeySink() = default;   virtual void publish (int64_t hop, const float* db) noexcept = 0; };
+struct KeySource { virtual ~KeySource() = default; virtual bool read (int64_t hop, bool exact, float* db) noexcept = 0; };
 
-struct VocalTaps { float* dry = nullptr; float* echo = nullptr; float* space = nullptr; float* preSat = nullptr;
-                   float* sibDb = nullptr; float* compGrDb = nullptr; };          // 每个 n 个样本（两声道平均），可为空
-struct BeatTaps  { float* cutMeanDb = nullptr; };
-struct BusTaps   { float* glueGrDb = nullptr; float* limGrDb = nullptr; float* preLimTpDb = nullptr; };
-struct ChainMeters { float inPeak = 0, outPeak = 0, gr1 = 0, gr2 = 0, gr3 = 0, loudM = -100, loudS = -100, loudI = -100, truePeak = -100; };
-
-namespace detail
+// 整数样本延迟（两个声道一起走）
+struct Pad
 {
-// 桩用的补齐延迟（每声道一个环形缓冲；prepare 里分配）
-struct StubDelay
-{
-    std::array<std::vector<float>, 2> buf;
-    int len = 0, pos = 0;
-    void prepare (int latency);
-    void reset() noexcept;
-    void process (float* const* ch, int numCh, int n) noexcept;
+    std::vector<float> buf[2]; int w = 0, d = 0;
+    void prepare (int delay) { d = std::max (0, delay); for (auto& b : buf) b.assign ((size_t) d + 1, 0.0f); w = 0; }
+    void reset() { for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f); w = 0; }
+    void frame (float& l, float& r) noexcept
+    {
+        if (d == 0) return;
+        buf[0][(size_t) w] = l; buf[1][(size_t) w] = r; w = w + 1 > d ? 0 : w + 1;
+        l = buf[0][(size_t) w]; r = buf[1][(size_t) w];
+    }
 };
-} // namespace detail
+
+// 一组带通 + 包络：每 hop 输出 6 个频段的平均能量（dB）
+struct BandMeter
+{
+    vox::Svf bp[kKeyBands]; double acc[kKeyBands] {}; int count = 0;
+    void prepare (double fs) { for (int k = 0; k < kKeyBands; ++k) { bp[k].set (vox::Svf::BandPass, fs, kKeyHz[k], 1.2); bp[k].reset(); } reset(); }
+    void reset() { for (auto& a : acc) a = 0; count = 0; for (auto& b : bp) b.reset(); }
+    void push (float x) noexcept { for (int k = 0; k < kKeyBands; ++k) { const float y = bp[k].process (x, 0); acc[k] += (double) y * y; } ++count; }
+    void take (float* db) noexcept
+    {
+        for (int k = 0; k < kKeyBands; ++k) { db[k] = powToDb ((float) (acc[k] / std::max (1, count)) * 2.0f); acc[k] = 0; }
+        count = 0;
+    }
+};
 
 class VocalChain
 {
 public:
-    void prepare (const ChainSpec&);                       // 分配（非实时）
-    void reset() noexcept;
-    void setParams (const VocalParams&, const CompProfile&) noexcept;   // 每块调用；变了才重算
-    void process (float* const* ch, int numCh, int n, const ProcessContext&, KeySink*, VocalTaps* = nullptr) noexcept;
-    void processBypassed (float* const* ch, int numCh, int n, const ProcessContext&, KeySink*) noexcept;
-    int coreLatency() const noexcept;
-    float autoCompDb() const noexcept;
-    const ChainMeters& meters() const noexcept;            // 本块的值；处理器拷到原子量
+    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, echo = 0.15f; int echoTime = 2; float space = 0.2f, level = 0; };
+    static P fromSet (const ParamSet&);
+    void prepare (double fs, int maxBlock, int latency);
+    void reset();
+    void setParams (const P&, StyleId, double bpm);
+    // ch：nCh（1 或 2）个声道，就地处理 n 个样本；pos：这一块第一个样本的内容位置
+    void process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink) noexcept;
+    float grComp = 0, grDeess = 0;
+
 private:
-    detail::StubDelay pad;
-    ChainMeters m;
+    double fs = 44100, bpm = 120; int hop = 256, osLat = 0;
+    P p; StyleId style = 0;
+    vox::Biquad hpA, hpB, mud, pres, air; vox::Compressor comp; vox::DeEsser deess; vox::Saturator sat;
+    std::unique_ptr<juce::dsp::Oversampling<float>> os;
+    vox::Echo echo; vox::Space space; Pad pad; BandMeter key; float keyDb[kKeyBands] {};
+    juce::SmoothedValue<float> inGain, outGain, echoSend, spaceSend;
+    juce::AudioBuffer<float> work, sendL, sendR;
+    float makeupDb = 0;
 };
-enum class KeyMode : uint8_t { Off = 0, Link = 1, Sidechain = 2 };
+
 class BeatChain
 {
 public:
-    void prepare (const ChainSpec&);                       // spec.latency ≥ keyLookahead + keyHop（插件里 = L）
-    void reset() noexcept;
-    void setParams (const BeatParams&, const CompProfile&) noexcept;
-    void process (float* const* ch, int numCh, const float* const* aux, int auxCh, int n,
-                  const ProcessContext&, KeySource* link, BeatTaps* = nullptr) noexcept;   // link = nullptr：没有 VOCAL 同伴
-    void processBypassed (float* const* ch, int numCh, int n) noexcept;
-    KeyMode keyMode() const noexcept;   uint32_t lateCount() const noexcept;
-    const std::array<float, kKeyBands>& cutDb() const noexcept;
-    const std::array<float, kKeyBands>& beatDb() const noexcept;
-    const ChainMeters& meters() const noexcept;
+    struct P { float hpf = 25, pocket = -1.5f, unmask = 6, level = 0; };
+    static P fromSet (const ParamSet&);
+    void prepare (double fs, int maxBlock, int latency);
+    void reset();
+    void setParams (const P&, StyleId);
+    // playing = false 时宿主时间不可靠：读最新的人声 key（近似）
+    void process (float* const* ch, int nCh, int n, int64_t pos, bool playing, KeySource* src) noexcept;
+    float cutDb[kKeyBands] {};                         // 当前每段让位量（界面显示）
+    int lateHops = 0;                                   // 读 key 时那一帧还没写好的次数（诊断）
+
 private:
-    detail::StubDelay pad;
-    ChainMeters m;
-    std::array<float, kKeyBands> cut {}, beat {};
+    double fs = 44100; int hop = 256, L = 1024;
+    P p; StyleId style = 0;
+    Pad pad; vox::Biquad hpA, hpB; vox::Svf pocket, bell[kKeyBands]; BandMeter meter;
+    std::vector<std::array<float, kKeyBands>> beatRing; int64_t lastHop = INT64_MIN;
+    float target[kKeyBands] {}, cur[kKeyBands] {}, atk = 0, rel = 0; int coefCount = 0;
+    juce::SmoothedValue<float> outGain;
+    void startHop (int64_t h, bool playing, KeySource* src) noexcept;
 };
+
 class BusChain
 {
 public:
-    void prepare (const ChainSpec&);
-    void reset() noexcept;
-    void setParams (const BusParams&, const CompProfile&) noexcept;
-    void process (float* const* ch, int numCh, int n, const ProcessContext&, BusTaps* = nullptr) noexcept;
-    void processBypassed (float* const* ch, int numCh, int n) noexcept;
-    int coreLatency() const noexcept;
-    void resetIntegrated() noexcept;                        // 播放开始时清积分响度
-    const ChainMeters& meters() const noexcept;
+    struct P { float low = 0, high = 0, glue = 0.35f, width = 100, drive = 0, ceiling = -1; };
+    static P fromSet (const ParamSet&);
+    void prepare (double fs, int maxBlock, int latency);
+    void reset();
+    void setParams (const P&, StyleId);
+    void process (float* const* ch, int nCh, int n) noexcept;
+    float grGlue = 0, grLimit = 0, loudShort = -100;   // 电平表：粘合 / 限幅压缩量，短期响度（3 秒）
+
 private:
-    detail::StubDelay pad;
-    ChainMeters m;
+    double fs = 44100; P p; StyleId style = 0;
+    vox::Svf low, high, scHp; vox::Compressor glue; vox::Limiter lim; Pad pad; vox::KWeight kw;
+    juce::SmoothedValue<float> drive, width; double loudAcc = 0; int loudN = 0; float loudCoef = 0.999f, loudState = 1e-10f;
 };
 } // namespace mm

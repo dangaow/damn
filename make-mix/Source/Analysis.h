@@ -1,38 +1,25 @@
 #pragma once
-// 离线分析（4.2）：从学习采样算特征，给解算器用。不受实时限制。
-// 【WP0 桩】公开接口是冻结的（4.3）；Analysis.cpp 由 WP3 替换。
+// 离线分析：解算器（和测试工具）在录下来的音频上算响度、频谱、动态、齿音。只在后台线程用，可以分配内存。
 #include "Shared.h"
 
 namespace mm::analysis
 {
-struct FrameSeries                                   // 短帧（时间线对齐）
-{
-    int hop = 0; double fs = 0;
-    std::vector<int32_t> pass; std::vector<int64_t> index;          // 时间线帧号
-    std::vector<std::array<float, kAnaBands>> bandDb;               // 绝对功率 dB
-};
-struct LoudSeries { std::vector<float> momLufs, wLufs; std::vector<int32_t> pass; std::vector<int64_t> index; };  // 100 ms 步长
-struct Features
-{
-    float activeSec = 0, voicedSec = 0, iIn = -100, iActive = -100, tpIn = -100, f0P5 = 0, f0P50 = 0;
-    float crestDb = 12, crestC2 = 10, hfTilt = 0, widthLu = -20;
-    std::array<float, kAnaBands> ltasPink {}, ltasDb {};
-    std::array<float, kOctBands> octMid {};
-    std::array<float, 80> levelW {};
-    std::vector<float> momActive;                     // 有声的 400 ms 响度
-    std::vector<uint8_t> vad;                         // 对应 LoudSeries
-    FrameSeries frames; LoudSeries loud;
-    bool keyActive = false;
-};
-// 时间线信息来自 CaptureData::seg；n = written（只读前缀）
-Features analyse (const CaptureData&, Role, int64_t n);
-Features analyseBuffer (const float* const* ch, int numCh, int64_t n, double fs,
-                        const std::vector<CaptureData::Segment>&, Role);       // 给仿真输出用
-float integratedLufs (const float* const* ch, int numCh, int64_t n, double fs);
-float truePeakDb (const float* const* ch, int numCh, int64_t n, double fs);
-struct Joint { bool valid = false; float maskedFraction = 0, sii = 0, vbr = 0, larMid = 0; std::array<float, kAnaBands> medBeatMinusVoc {}; int frames = 0; };
-// vocals / beats：每个实例的特征（要求 frames/loud 已算好）；leadIndex = 只统计该 LEAD 的 vad
-Joint joint (const std::vector<const Features*>& vocals, const std::vector<float>& vocalWeights,
-             const std::vector<const Features*>& beats, int leadIndex = -1);
-std::vector<float> sibilancePercentiles (const float* sibDb, int64_t n, const std::vector<uint8_t>& vadPerSample);   // P50, P90, P99
+struct Stereo { std::vector<float> l, r; size_t size() const { return l.size(); } };
+
+// BS.1770 积分响度（门限 -70 LUFS 绝对 / -10 LU 相对）。hpf150 = true 时先过 150 Hz 高通：「人声频段响度」，
+// 用来比较人声和伴奏（不让 808 / 底鼓的低频能量主导）
+float integrated (const Stereo&, double fs, bool hpf150 = false);
+// 400 ms 窗、100 ms 步进的瞬时响度序列（同样可选 150 Hz 高通）
+std::vector<float> momentary (const Stereo&, double fs, bool hpf150 = false);
+// 活跃帧（瞬时响度高于积分响度 - 20 LU）上的分位数
+float percentile (std::vector<float> v, float q);
+float spread (const Stereo&, double fs);              // 人声动态：活跃帧上 P90 - P10（LU）
+// 倍频程长期平均谱（dB，相对 500/1k/2k 三段的平均），只统计活跃帧
+std::array<float, kOctBands> octaveLtas (const Stereo&, double fs);
+// 齿音：每帧 5–10 kHz 占全频的能量比（dB）的 P95 - P50
+float sibilance (const Stereo&, double fs);
+float truePeakDb (const Stereo&);
+float samplePeakDb (const Stereo&);
+// 掩蔽：人声活跃的帧里，1–5 kHz 伴奏能量大于人声的比例
+float maskedFraction (const Stereo& vocal, const Stereo& beat, double fs);
 } // namespace mm::analysis

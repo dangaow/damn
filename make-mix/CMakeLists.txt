@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(MakeMix VERSION 1.0.0 LANGUAGES C CXX)
 
-# C++20（VocalParams 等结构体用了默认的 operator==）
+# C++20
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -13,10 +13,9 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-option(MAKEMIX_TOOLS "Build mm_render, mm_mixrender and mm_tests" ON)
-option(MAKEMIX_TSAN "ThreadSanitizer for the console targets (mm_tests, mm_mixrender, mm_render); never the plugin" OFF)
+option(MAKEMIX_TOOLS "Build the mm_mixrender test harness" ON)
+option(MAKEMIX_TSAN "ThreadSanitizer for mm_mixrender; never the plugin" OFF)
 option(MAKEMIX_ASAN "AddressSanitizer + UBSan for the console targets; never the plugin" OFF)
-option(MAKEMIX_DIAG "Diagnostic build: lock-free log flushed to %TEMP%/makemix_diag.txt (Appendix A)" OFF)
 option(MAKEMIX_LTO "Link-time optimisation for the plugin (Release)" ON)
 if(MAKEMIX_TSAN AND MAKEMIX_ASAN)
   message(FATAL_ERROR "MAKEMIX_TSAN and MAKEMIX_ASAN cannot be combined; use separate build directories")
@@ -32,16 +31,13 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------------------------
-# 源文件：所有工作包的文件都在这里登记好了，之后各包只改自己的文件，不用再改 CMake
+# 源文件
 set(MM_HEADERS
   Source/Shared.h Source/Params.h Source/Styles.h Source/Dsp.h Source/Chains.h Source/Analysis.h Source/AutoMix.h
-  Source/Solver.h Source/Hub.h Source/PluginProcessor.h Source/PluginEditor.h Source/Look.h)
+  Source/Hub.h Source/PluginProcessor.h Source/PluginEditor.h)
 set(MM_SOURCES
-  Source/Params.cpp Source/Chains.cpp Source/Analysis.cpp Source/AutoMix.cpp Source/Solver.cpp Source/Hub.cpp
-  Source/PluginProcessor.cpp Source/PluginEditor.cpp Source/Look.cpp)
-set(MM_TESTS
-  tests/test_main.cpp tests/dsp_tests.cpp tests/hub_tests.cpp tests/automix_tests.cpp tests/analysis_tests.cpp)
-set(MM_DEFS JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 $<$<BOOL:${MAKEMIX_DIAG}>:MAKEMIX_DIAG=1>)
+  Source/Chains.cpp Source/Analysis.cpp Source/AutoMix.cpp Source/Hub.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+set(MM_DEFS JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 # 源码里有中文注释和中日韩界面字符串：MSVC 必须按 UTF-8 读
 set(MM_OPTS $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
@@ -107,25 +103,7 @@ if(MAKEMIX_TOOLS)
     endif()
   endif()
 
-  # 单实例离线渲染（WP1）
-  add_executable(mm_render tools/render.cpp)
-  target_link_libraries(mm_render PRIVATE mm_core)
-
-  # 多实例测试工具（WP5）
+  # 多实例测试工具：模拟 FL（人声 + 伴奏 + 总线三个实例共用一个 hub），学习 → 解算 → 渲染 → 指标
   add_executable(mm_mixrender tools/mixrender.cpp)
   target_link_libraries(mm_mixrender PRIVATE mm_core)
-
-  # 单元测试（JUCE UnitTest；ctest 运行）
-  # 测试里直接比较浮点数很正常：关掉 -Wfloat-equal（必须排在 JUCE 警告选项之后，所以放进一个后链接的接口库）
-  add_library(mm_test_flags INTERFACE)
-  target_compile_options(mm_test_flags INTERFACE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wno-float-equal>)
-  add_executable(mm_tests ${MM_TESTS})
-  target_link_libraries(mm_tests PRIVATE mm_core mm_test_flags)
-  if(MAKEMIX_TSAN)
-    add_custom_target(mm_tests_tsan)                     # 10.1 里的名字：TSan 构建目录里的 mm_tests
-    add_dependencies(mm_tests_tsan mm_tests)
-  endif()
-
-  enable_testing()
-  add_test(NAME mm_tests COMMAND mm_tests)
 endif()
