@@ -58,10 +58,10 @@ std::string Hub::linkSummary() const
     std::lock_guard<std::mutex> lk (mtx);
     int n[3] {};
     for (auto& s : slots) if (s.client) ++n[(int) s.client->hubRole()];
-    if (n[0] + n[1] + n[2] <= 1) return "ALONE · add MAKE MIX on vocal, beat and master";
-    std::string out = "LINK";
-    const char* names[] = { "VOCAL", "BEAT", "BUS" };
-    for (int r = 0; r < 3; ++r) if (n[r]) out += std::string (" · ") + names[r] + (n[r] > 1 ? " x" + std::to_string (n[r]) : "");
+    if (n[0] + n[1] + n[2] <= 1) return "單獨使用 · 在人聲、伴奏、Master 各插一個 MAKE MIX";
+    std::string out = "已連接";
+    const char* names[] = { "人聲", "伴奏", "總線" };
+    for (int r = 0; r < 3; ++r) if (n[r]) out += std::string (" · ") + names[r] + (n[r] > 1 ? " ×" + std::to_string (n[r]) : "");
     return out;
 }
 
@@ -152,7 +152,7 @@ void Hub::tick()
         { std::lock_guard<std::mutex> lk (mtx);
           for (int i : participants) { auto& s = slots[(size_t) i]; if (! s.client || s.client->hubRole() == Role::Bus) continue;
               auto* c = s.cap.load(); if (! c) continue; any = true; minSec = std::min (minSec, c->len.load() / c->fs); } }
-        if (! any) { message = "ADD MAKE MIX ON A VOCAL OR BEAT"; st = State::Failed; doneAt = now(); return; }
+        if (! any) { message = "請在人聲或伴奏軌上也插 MAKE MIX"; st = State::Failed; doneAt = now(); return; }
         if (minSec >= kListenSec) startSolve();
     }
     else if (st == State::Solving)
@@ -182,7 +182,7 @@ void Hub::startSolve()
             (r == Role::Vocal ? in.vocals : in.beats).push_back (std::move (cap));
         }
     }
-    if (in.vocals.empty() && in.beats.empty()) { message = in.hasBus ? "PLAY THE SONG, THEN MIX" : "NOT ENOUGH AUDIO"; st = State::Failed; doneAt = now(); return; }
+    if (in.vocals.empty() && in.beats.empty()) { message = in.hasBus ? "先播放歌曲，再按一鍵混音" : "聲音不夠長"; st = State::Failed; doneAt = now(); return; }
     st = State::Solving; resultReady.store (false);
     auto job = [this, in = std::move (in)]() mutable { result = automix::solve (in); resultReady.store (true, std::memory_order_release); };
     if (synchronous) { job(); applyResult(); }
@@ -215,7 +215,7 @@ void Hub::requestUndo()
     { std::lock_guard<std::mutex> lk (mtx);
       for (auto& [slot, set] : undo) if (slots[(size_t) slot].client) todo.push_back ({ slots[(size_t) slot].client, set });
       undo.clear(); }
-    for (auto& [c, set] : todo) c->hubApply (set, "UNDO: settings before MIX restored\n");
+    for (auto& [c, set] : todo) c->hubApply (set, "已撤銷：恢復到混音之前的設置\n");
 }
 
 bool Hub::canUndo() const { std::lock_guard<std::mutex> lk (mtx); return ! undo.empty(); }
@@ -231,13 +231,13 @@ std::string Hub::statusText() const
             { std::lock_guard<std::mutex> lk (mtx);
               for (int i : participants) { auto& s = slots[(size_t) i]; if (! s.client || s.client->hubRole() == Role::Bus) continue;
                   if (auto* c = s.cap.load()) minSec = std::min (minSec, c->len.load() / c->fs); } }
-            if (minSec > 1e8 || (minSec < 0.05 && now() - listenStart > 1.0)) return "PRESS PLAY";
-            return "LISTENING " + std::to_string ((int) std::min (99.0, 100.0 * minSec / kListenSec)) + "%";
+            if (minSec > 1e8 || (minSec < 0.05 && now() - listenStart > 1.0)) return "請先播放";
+            return "聆聽中 " + std::to_string ((int) std::min (99.0, 100.0 * minSec / kListenSec)) + "%";
         }
-        case State::Solving: return "MIXING...";
-        case State::Done:    return "DONE";
+        case State::Solving: return "混音中…";
+        case State::Done:    return "完成";
         case State::Failed:  return message;
-        case State::Idle: default: return "MIX";
+        case State::Idle: default: return "一鍵混音";
     }
 }
 } // namespace mm

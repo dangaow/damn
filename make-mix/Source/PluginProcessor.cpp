@@ -19,7 +19,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayo
             case PKind::Percent: attr = attr.withLabel ("%").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + "%"; }); break;
             case PKind::Amount: attr = attr.withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; }); break;
         }
-        layout.add (std::make_unique<juce::AudioParameterFloat> (id, d.name, r, d.def, attr));
+        layout.add (std::make_unique<juce::AudioParameterFloat> (id, juce::String::fromUTF8 (d.name), r, d.def, attr));
     }
     return layout;
 }
@@ -163,7 +163,7 @@ void MakeMixProcessor::loadStyleDefaults()
         case Role::Bus:
             s[M_LOW] = 0; s[M_HIGH] = 0; s[M_GLUE] = 0.35f; s[M_WIDTH] = 100; s[M_CEILING] = st.ceiling; break;
     }
-    hubApply (s, std::string ("STYLE DEFAULTS: ") + st.name + "\n");
+    hubApply (s, std::string ("已載入風格預設：") + st.name + "\n");
 }
 
 // ---------------------------------------------------------------------------------------- 一键分析（消息线程）

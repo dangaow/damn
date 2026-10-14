@@ -5,11 +5,12 @@ namespace
 {
 const juce::Colour bg (0xff0a0b10), panel (0xff12141b), line (0xff23262f), red (0xffe0112b), silver (0xffc9ced6), dim (0xff6b7080);
 // 旋钮下面的短名字（和 kParams 顺序一致）
-const char* kShort[kNumParams] = { "INPUT", "LOW CUT", "MUD", "PRESENCE", "AIR", "COMPRESS", "DE-ESS", "WARMTH", "LEVEL",
-                                   "LOW CUT", "POCKET", "UNMASK", "LEVEL",
-                                   "LOW", "HIGH", "GLUE", "WIDTH", "DRIVE", "CEILING" };
-const char* kRoleName[3] = { "VOCAL", "BEAT", "BUS" };
-const char* kRoleHint[3] = { "on the vocal track (last slot)", "on the instrumental track", "on the master (last slot)" };
+const char* kShort[kNumParams] = { "輸入", "低切", "去渾濁", "存在感", "空氣感", "壓縮", "去齒音", "溫暖", "電平",
+                                   "低切", "人聲口袋", "讓位", "電平",
+                                   "低頻", "高頻", "粘合", "寬度", "推子", "天花板" };
+const char* kRoleName[3] = { "人聲", "伴奏", "總線" };
+const char* kRoleHint[3] = { "插在人聲軌（最後一格）", "插在伴奏軌（最後一格）", "插在 Master（最後一格）" };
+juce::String T (const char* s) { return juce::String::fromUTF8 (s); }
 }
 
 // ====================================================================== 外观
@@ -36,7 +37,9 @@ MixLook::MixLook()
 juce::Font MixLook::ui (float size, bool bold)
 {
    #if JUCE_WINDOWS
-    return juce::FontOptions ("Microsoft YaHei UI", size, bold ? juce::Font::bold : juce::Font::plain);   // Windows 默认字体不带中文
+    return juce::FontOptions ("Microsoft JhengHei UI", size, bold ? juce::Font::bold : juce::Font::plain);   // 微軟正黑體（繁體）
+   #elif JUCE_LINUX
+    return juce::FontOptions ("WenQuanYi Zen Hei", size, bold ? juce::Font::bold : juce::Font::plain);
    #else
     return juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain);
    #endif
@@ -101,7 +104,7 @@ MakeMixEditor::MakeMixEditor (MakeMixProcessor& p) : AudioProcessorEditor (&p), 
 
     for (int r = 0; r < 3; ++r)
     {
-        roleBtn[r].setButtonText (kRoleName[r]); roleBtn[r].setClickingTogglesState (false);
+        roleBtn[r].setButtonText (T (kRoleName[r])); roleBtn[r].setClickingTogglesState (false);
         roleBtn[r].onClick = [this, r] { proc.setRole ((Role) r); showRole(); };
         addAndMakeVisible (roleBtn[r]);
     }
@@ -109,12 +112,12 @@ MakeMixEditor::MakeMixEditor (MakeMixProcessor& p) : AudioProcessorEditor (&p), 
     styleBox.onChange = [this] { if (styleBox.getSelectedId() > 0) proc.setStyle (styleBox.getSelectedId() - 1, true); };
     addAndMakeVisible (styleBox);
 
-    mixBtn.getProperties().set ("big", true); mixBtn.setButtonText ("MIX"); mixBtn.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    mixBtn.getProperties().set ("big", true); mixBtn.setButtonText (T ("一鍵混音")); mixBtn.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
     mixBtn.onClick = [this] { proc.requestMix(); };
-    undoBtn.setButtonText ("UNDO MIX"); undoBtn.onClick = [this] { proc.requestUndo(); };
-    defaultsBtn.setButtonText ("STYLE DEFAULTS"); defaultsBtn.onClick = [this] { proc.loadStyleDefaults(); };
-    analyzeBtn.setButtonText ("ANALYZE"); analyzeBtn.onClick = [this] { proc.requestAnalyze(); };
-    closeBtn.setButtonText ("CLOSE"); closeBtn.onClick = [this] { setReportVisible (false); };
+    undoBtn.setButtonText (T ("撤銷混音")); undoBtn.onClick = [this] { proc.requestUndo(); };
+    defaultsBtn.setButtonText (T ("風格預設")); defaultsBtn.onClick = [this] { proc.loadStyleDefaults(); };
+    analyzeBtn.setButtonText (T ("一鍵分析")); analyzeBtn.onClick = [this] { proc.requestAnalyze(); };
+    closeBtn.setButtonText (T ("關閉")); closeBtn.onClick = [this] { setReportVisible (false); };
     useStyleBtn.onClick = [this] { if (rep && rep->suggestedStyle >= 0) proc.setStyle (rep->suggestedStyle, true); };
     for (auto* b : { &mixBtn, &undoBtn, &defaultsBtn, &analyzeBtn }) addAndMakeVisible (*b);
     addChildComponent (closeBtn); addChildComponent (useStyleBtn);
@@ -133,7 +136,7 @@ void MakeMixEditor::setReportVisible (bool v)
     showReport = v && rep != nullptr;
     closeBtn.setVisible (showReport);
     useStyleBtn.setVisible (showReport && rep->role == 1 && rep->suggestedStyle >= 0);
-    if (useStyleBtn.isVisible()) useStyleBtn.setButtonText ("USE " + juce::String::fromUTF8 (mm::style (rep->suggestedStyle).name));
+    if (useStyleBtn.isVisible()) useStyleBtn.setButtonText (T ("套用 ") + juce::String::fromUTF8 (mm::style (rep->suggestedStyle).name));
     for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible (! showReport && (int) kParams[i].role == shownRole);
     repaint();
 }
@@ -158,14 +161,14 @@ void MakeMixEditor::timerCallback()
     const auto st = juce::String::fromUTF8 (proc.hub().statusText().c_str());
     if (st != status) { status = st; mixBtn.setButtonText (st); }
     undoBtn.setEnabled (proc.hub().canUndo());
-    link = proc.isBridged() ? juce::String ("LINK OFF - BRIDGED: Wrapper > Processing > untick 'Make bridged'") : juce::String::fromUTF8 (proc.hub().linkSummary().c_str());
+    link = proc.isBridged() ? T ("未連接（橋接模式）：插件包裝器 > Processing > 取消勾選 Make bridged") : juce::String::fromUTF8 (proc.hub().linkSummary().c_str());
     noteText = proc.note();
     proc.tickAnalyze();
     switch (proc.analyzeState())
     {
-        case MakeMixProcessor::Analyze::Listening: analyzeBtn.setButtonText ("ANALYZING " + juce::String (juce::roundToInt (std::min (0.99f, proc.analyzeProgress()) * 100)) + "%"); break;
-        case MakeMixProcessor::Analyze::Working:   analyzeBtn.setButtonText ("ANALYZING..."); break;
-        case MakeMixProcessor::Analyze::Idle: case MakeMixProcessor::Analyze::Ready: analyzeBtn.setButtonText ("ANALYZE"); break;
+        case MakeMixProcessor::Analyze::Listening: analyzeBtn.setButtonText (T ("分析中 ") + juce::String (juce::roundToInt (std::min (0.99f, proc.analyzeProgress()) * 100)) + "%"); break;
+        case MakeMixProcessor::Analyze::Working:   analyzeBtn.setButtonText (T ("分析中…")); break;
+        case MakeMixProcessor::Analyze::Idle: case MakeMixProcessor::Analyze::Ready: analyzeBtn.setButtonText (T ("一鍵分析")); break;
     }
     if (auto r = proc.report(); r != rep && proc.analyzeState() == MakeMixProcessor::Analyze::Ready) { rep = r; if (rep && rep->role == shownRole) setReportVisible (true); }
     repaint();
@@ -175,13 +178,13 @@ void MakeMixEditor::paint (juce::Graphics& g)
 {
     g.fillAll (bg);
     g.setColour (silver); g.setFont (MixLook::ui (30.0f, true)); g.drawText ("MAKE MIX", 28, 16, 240, 34, juce::Justification::left);
-    g.setColour (dim); g.setFont (MixLook::ui (12.0f)); g.drawText (juce::String (juce::CharPointer_UTF8 ("VOCAL \xc2\xb7 BEAT \xc2\xb7 BUS  \xc2\xb7  MAKE STUDIO")), 30, 50, 300, 16, juce::Justification::left);
+    g.setColour (dim); g.setFont (MixLook::ui (12.0f)); g.drawText (T ("人聲 · 伴奏 · 總線  ·  MAKE STUDIO"), 30, 50, 300, 16, juce::Justification::left);
     g.setColour (red); g.fillRect (30, 72, 46, 3);
     g.setColour (dim); g.setFont (MixLook::ui (11.0f, true));
-    g.drawText ("ROLE", 330, 6, 200, 14, juce::Justification::left);
-    g.drawText ("STYLE", 640, 6, 200, 14, juce::Justification::left);
-    g.setFont (MixLook::ui (12.0f)); g.drawText (juce::String ("put this one ") + kRoleHint[std::max (0, shownRole)], 330, 60, 300, 16, juce::Justification::left);
-    g.setColour (link.startsWith ("LINK OFF") ? red : silver.withAlpha (0.8f)); g.setFont (MixLook::ui (12.0f, true));
+    g.drawText (T ("角色"), 330, 6, 200, 14, juce::Justification::left);
+    g.drawText (T ("風格"), 640, 6, 200, 14, juce::Justification::left);
+    g.setFont (MixLook::ui (12.0f)); g.drawText (T (kRoleHint[std::max (0, shownRole)]), 330, 60, 300, 16, juce::Justification::left);
+    g.setColour (link.startsWith (T ("未連接")) ? red : silver.withAlpha (0.8f)); g.setFont (MixLook::ui (12.0f, true));
     g.drawText (link, 640, 60, 300, 16, juce::Justification::left);
 
     // 旋钮的名字
@@ -191,7 +194,7 @@ void MakeMixEditor::paint (juce::Graphics& g)
         const bool vis = knobs[(size_t) i].s.isVisible();
         if (! vis) continue;
         const auto b = knobs[(size_t) i].s.getBounds();
-        g.setColour (silver); g.drawText (kShort[i], b.getX() - 10, b.getY() - 18, b.getWidth() + 20, 14, juce::Justification::centred);
+        g.setColour (silver); g.drawText (T (kShort[i]), b.getX() - 10, b.getY() - 18, b.getWidth() + 20, 14, juce::Justification::centred);
     }
 
     if (showReport) paintReport (g);
@@ -199,15 +202,15 @@ void MakeMixEditor::paint (juce::Graphics& g)
     // 底栏：说明 + 电平表
     g.setColour (panel); g.fillRoundedRectangle (20, 380, (float) getWidth() - 40, 144, 8);
     g.setColour (line); g.drawRoundedRectangle (20.5f, 380.5f, (float) getWidth() - 41, 143, 8, 1);
-    g.setColour (dim); g.setFont (MixLook::ui (11.0f, true)); g.drawText ("WHAT MIX DID", 260, 390, 200, 14, juce::Justification::left);
+    g.setColour (dim); g.setFont (MixLook::ui (11.0f, true)); g.drawText (T ("混音做了什麼"), 260, 390, 200, 14, juce::Justification::left);
     g.setColour (silver); g.setFont (MixLook::ui (12.0f));
-    g.drawFittedText (noteText.isEmpty() ? juce::String ("Play the song, then press MIX on any instance.\nKeep vocal and beat faders at 0 dB; use LEVEL here.") : noteText,
+    g.drawFittedText (noteText.isEmpty() ? T ("播放歌曲（最好循環副歌），在任一個實例上按「一鍵混音」。\n人聲和伴奏的推子保持 0 dB，音量用這裡的「電平」調。") : noteText,
                       260, 406, 380, 112, juce::Justification::topLeft, 8);
 
     auto meter = [&] (int y, const char* name, float norm, bool reduction, const juce::String& txt)
     {
         const int x0 = 712, w = 150;
-        g.setColour (dim); g.setFont (MixLook::ui (10.0f, true)); g.drawText (name, x0 - 62, y - 1, 58, 12, juce::Justification::right);
+        g.setColour (dim); g.setFont (MixLook::ui (10.0f, true)); g.drawText (T (name), x0 - 66, y - 1, 62, 12, juce::Justification::right);
         g.setColour (line); g.fillRoundedRectangle ((float) x0, (float) y, (float) w, 10, 3);
         const float v = juce::jlimit (0.0f, 1.0f, norm);
         g.setColour (reduction ? red : silver.withAlpha (0.85f)); g.fillRoundedRectangle ((float) x0, (float) y, w * v, 10, 3);
@@ -215,16 +218,16 @@ void MakeMixEditor::paint (juce::Graphics& g)
     };
     auto dbNorm = [] (float lin) { return (gainToDb (lin) + 48.0f) / 48.0f; };
     auto dbTxt = [] (float lin) { return lin < 1.0e-4f ? juce::String ("-inf") : juce::String (gainToDb (lin), 1); };
-    meter (394, "IN", dbNorm (mIn), false, dbTxt (mIn));
-    if (shownRole == 0) { meter (414, "COMP", mG1 / 18, true, "-" + juce::String (mG1, 1)); meter (434, "DE-ESS", mG2 / 12, true, "-" + juce::String (mG2, 1)); }
-    else if (shownRole == 2) { meter (414, "GLUE", mG1 / 8, true, "-" + juce::String (mG1, 1)); meter (434, "LIMIT", mG2 / 8, true, "-" + juce::String (mG2, 1));
-                               const float lu = proc.loud.load(); meter (454, "LUFS-S", (lu + 30) / 30, false, juce::String (lu, 1)); }
+    meter (394, "輸入", dbNorm (mIn), false, dbTxt (mIn));
+    if (shownRole == 0) { meter (414, "壓縮", mG1 / 18, true, "-" + juce::String (mG1, 1)); meter (434, "去齒", mG2 / 12, true, "-" + juce::String (mG2, 1)); }
+    else if (shownRole == 2) { meter (414, "粘合", mG1 / 8, true, "-" + juce::String (mG1, 1)); meter (434, "限幅", mG2 / 8, true, "-" + juce::String (mG2, 1));
+                               const float lu = proc.loud.load(); meter (454, "短期響度", (lu + 30) / 30, false, juce::String (lu, 1)); }
     else for (int k = 0; k < kKeyBands; ++k)
     {
-        const char* hz[] = { "280", "560", "1.1k", "2.2k", "3.6k", "6k" };
+        const char* hz[] = { "280", "560", "1.1k", "2.2k", "3.6k", "6k" };  // 讓位的六段
         meter (412 + k * 15, hz[k], mCut[(size_t) k] / 12, true, "-" + juce::String (mCut[(size_t) k], 1));
     }
-    meter (506, "OUT", dbNorm (mOut), false, dbTxt (mOut));
+    meter (506, "輸出", dbNorm (mOut), false, dbTxt (mOut));
 }
 
 void MakeMixEditor::resized()
@@ -255,10 +258,10 @@ void MakeMixEditor::paintReport (juce::Graphics& g)
     const auto area = juce::Rectangle<int> (20, 88, getWidth() - 40, 284);
     g.setColour (panel); g.fillRoundedRectangle (area.toFloat(), 8);
     g.setColour (line); g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 8, 1);
-    const char* who[3] = { "VOCAL ANALYSIS", "BEAT ANALYSIS", "MIX ANALYSIS" };
-    g.setColour (silver); g.setFont (MixLook::ui (15.0f, true)); g.drawText (who[std::clamp (rep->role, 0, 2)], 36, 98, 300, 20, juce::Justification::left);
+    const char* who[3] = { "人聲分析", "伴奏分析", "混音分析" };
+    g.setColour (silver); g.setFont (MixLook::ui (15.0f, true)); g.drawText (T (who[std::clamp (rep->role, 0, 2)]), 36, 98, 300, 20, juce::Justification::left);
     g.setColour (dim); g.setFont (MixLook::ui (11.0f));
-    g.drawText (juce::String (rep->seconds, 1) + " s analysed", 36, 118, 200, 14, juce::Justification::left);
+    g.drawText (T ("分析了 ") + juce::String (rep->seconds, 1) + T (" 秒"), 36, 118, 200, 14, juce::Justification::left);
 
     // 谱
     const auto plot = juce::Rectangle<float> (48, 146, 400, 196);
@@ -279,7 +282,7 @@ void MakeMixEditor::paintReport (juce::Graphics& g)
     }
     g.setColour (silver); g.strokePath (ref, juce::PathStrokeType (1.6f));
     g.setFont (MixLook::ui (10.0f)); g.setColour (dim);
-    g.drawText (rep->role == 0 ? "grey line: typical pro vocal" : rep->role == 1 ? "grey line: closest style curve" : "grey line: style curve", (int) plot.getX() + 200, 118, 200, 14, juce::Justification::right);
+    g.drawText (T (rep->role == 0 ? "灰線：專業人聲" : rep->role == 1 ? "灰線：最接近的風格" : "灰線：風格曲線"), (int) plot.getX() + 200, 118, 200, 14, juce::Justification::right);
 
     // 文字
     g.setFont (MixLook::ui (13.0f));
@@ -287,7 +290,7 @@ void MakeMixEditor::paintReport (juce::Graphics& g)
     for (size_t i = 0; i < rep->lines.size() && y < 360; ++i, y += 22)
     {
         const auto& t = rep->lines[i];
-        g.setColour (i == 0 || t.rfind ("KEY", 0) == 0 || t.rfind ("CLOSEST", 0) == 0 ? silver : t.rfind ("!", 0) == 0 ? red : silver.withAlpha (0.75f));
+        g.setColour (i == 0 || t.rfind ("調性", 0) == 0 || t.rfind ("最接近", 0) == 0 ? silver : t.rfind ("!", 0) == 0 ? red : silver.withAlpha (0.75f));
         g.drawText (juce::String::fromUTF8 (t.c_str()), 480, y, getWidth() - 520, 20, juce::Justification::left);
     }
 }

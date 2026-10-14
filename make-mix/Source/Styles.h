@@ -7,7 +7,7 @@ namespace mm
 {
 struct StyleDef
 {
-    const char* key; const char* name;                  // "trap", "TRAP" / "MANDOPOP 华语流行"
+    const char* key; const char* name;                  // "trap", "TRAP" / "華語流行 MANDOPOP"
     // 人声音色（表 A）
     float vTilt, vMudF, vMudG, vPresF, vPresG, vAirF, vAirG, vHpfK, vHpfMin, vHpfMax; int vHpfSlope; float vLpf, vMatch;
     // 人声动态 / 空间 / 电平（表 B）
@@ -65,13 +65,13 @@ inline constexpr std::array<StyleDef, kNumStyles> kStyles {{
       4, 4, 200, 5000, 220, 0.3f, 0.5f, 3000, -1.5f, 0, 20, 120,
       -10.0f, -9.5f, -1.0f, 1.8f, 30, 200, 1.0f, 120, 0.0f, -9.5f, 120, 22000, 4,
       { 4, 9, 6.5f, 4, 2.5f, 0, -2.5f, -4, -5, -9 } },
-    { "mandopop", "MANDOPOP 华语流行",
+    { "mandopop", "華語流行 MANDOPOP",
       -1.0f, 320, -2.5f, 3200, 2.0f, 11000, 3.0f, 0.70f, 70, 95, 24, 22000, 0.70f,
       5.5f, 0.0f, 2.5f, 0.08f, 2.3f, 60, -15, 3, 0.28f, -19, 3, 2.5f, -10, -10,
       5, 5, 250, 5000, 200, 0.3f, 0.75f, 2800, -2.0f, 0, 20, 120,
       -9.5f, -9.0f, -1.0f, 1.8f, 30, 200, 1.5f, 120, 0.5f, -9.5f, 120, 22000, 4,
       { 1, 6, 5.5f, 3.5f, 2, 0, -2, -3.5f, -5, -10 } },
-    { "ballad", "BALLAD 华语抒情",
+    { "ballad", "華語抒情 BALLAD",
       -1.5f, 350, -1.0f, 3000, 1.5f, 10000, 3.0f, 0.60f, 60, 85, 12, 22000, 0.60f,
       7.0f, 0.5f, 3.0f, 0.05f, 2.8f, 75, -13, 3, 0.32f, -18, 2.5f, 3.5f, -11, -11,
       5, 5, 250, 4000, 250, 0.3f, 1.5f, 2200, -2.0f, -0.5f, 20, 100,

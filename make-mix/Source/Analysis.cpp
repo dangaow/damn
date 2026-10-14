@@ -265,41 +265,41 @@ Report analyse (int role, const Stereo& x, double fs, int style, double bpm)
     Report r; r.role = role; r.seconds = (float) (x.size() / fs);
     r.lufs = integrated (x, fs); r.tp = truePeakDb (x); r.ltas = octaveLtas (x, fs); r.width = 1.0f - correlation (x);
     auto& L = r.lines;
-    if (r.lufs < -69) { L.push_back ("No signal. Press PLAY, then ANALYZE."); return r; }
-    L.push_back ("LOUDNESS " + f1 (r.lufs) + " LUFS   PEAK " + f1 (r.tp) + " dBTP");
-    if (r.tp > -0.3f) L.push_back ("! Peaks at 0 dBFS: lower the level before this insert");
+    if (r.lufs < -69) { L.push_back ("沒有聲音。先播放，再按一鍵分析。"); return r; }
+    L.push_back ("響度 " + f1 (r.lufs) + " LUFS   峰值 " + f1 (r.tp) + " dBTP");
+    if (r.tp > -0.3f) L.push_back ("! 峰值頂到 0 dBFS：在這個插件之前把音量調低一點");
 
     if (role == 0)                                      // —— 人声
     {
         for (int k = 0; k < kOctBands; ++k) r.target[(size_t) k] = kRefVocal[k];
         const float vb = integrated (x, fs, true); r.spread = spread (x, fs);
         auto dev = [&] (int k) { return r.ltas[(size_t) k] - kRefVocal[k]; };
-        L.push_back ("DYNAMICS " + f1 (r.spread) + " LU (P90-P10)   SIBILANCE " + f1 (sibilance (x, fs)) + " dB");
-        if (vb < -32) L.push_back ("Quiet recording: MIX will raise INPUT (" + sgn (-20 - vb) + " dB)");
-        if (r.spread > 8) L.push_back ("Uneven level: needs more COMPRESS");
-        else if (r.spread < 4) L.push_back ("Already dense: little compression needed");
-        if (lowShare (x, fs) > 0.08f) L.push_back ("Rumble / plosives below 150 Hz: raise LOW CUT");
-        if (dev (3) > 3) L.push_back ("Boxy / muddy around 250 Hz (" + sgn (dev (3)) + " dB): cut MUD");
+        L.push_back ("動態 " + f1 (r.spread) + " LU（P90-P10）   齒音 " + f1 (sibilance (x, fs)) + " dB");
+        if (vb < -32) L.push_back ("錄音偏小聲：一鍵混音會把輸入提高 " + sgn (-20 - vb) + " dB");
+        if (r.spread > 8) L.push_back ("音量忽大忽小：需要多一點壓縮");
+        else if (r.spread < 4) L.push_back ("已經很密了：只需要很少的壓縮");
+        if (lowShare (x, fs) > 0.08f) L.push_back ("150 Hz 以下有轟聲 / 噴麥：把低切調高");
+        if (dev (3) > 3) L.push_back ("250 Hz 附近發悶發渾（" + sgn (dev (3)) + " dB）：加大去渾濁");
         const float pres = 0.5f * (dev (6) + dev (7));
-        if (pres < -3) L.push_back ("Dull, sits behind the beat (" + sgn (pres) + " dB at 2-4 kHz): add PRESENCE");
-        else if (pres > 3) L.push_back ("Harsh at 2-4 kHz (" + sgn (pres) + " dB): less PRESENCE");
-        if (dev (8) < -4) L.push_back ("Dark top (" + sgn (dev (8)) + " dB at 8 kHz): add AIR");
-        else if (dev (8) > 4) L.push_back ("Very bright top (" + sgn (dev (8)) + " dB at 8 kHz): less AIR, more DE-ESS");
-        if (sibilance (x, fs) > 14) L.push_back ("Strong S sounds: DE-ESS");
-        if (L.size() <= 2) L.push_back ("Healthy vocal: MIX will mostly set level and style");
+        if (pres < -3) L.push_back ("偏悶、躲在伴奏後面（2-4 kHz " + sgn (pres) + " dB）：加存在感");
+        else if (pres > 3) L.push_back ("2-4 kHz 偏刺（" + sgn (pres) + " dB）：少一點存在感");
+        if (dev (8) < -4) L.push_back ("高頻偏暗（8 kHz " + sgn (dev (8)) + " dB）：加空氣感");
+        else if (dev (8) > 4) L.push_back ("高頻很亮（8 kHz " + sgn (dev (8)) + " dB）：少一點空氣感、多一點去齒音");
+        if (sibilance (x, fs) > 14) L.push_back ("齒音（ㄙ、ㄘ、ㄕ）很重：加去齒音");
+        if (L.size() <= 2) L.push_back ("人聲狀態健康：一鍵混音主要調電平和風格");
     }
     else if (role == 1)                                 // —— 伴奏
     {
         const float low = lowShare (x, fs);
         r.key = detectKey (x, fs); r.hasKey = true;
-        L.push_back ("KEY " + r.key.name() + "  (or " + r.key.relative() + ")" + (r.key.confidence < 0.35f ? "  - low confidence" : ""));
-        L.push_back ("LOW END " + f0 (low * 100) + "% of the energy below 150 Hz" + (low > 0.6f ? "  (808 / kick heavy)" : low < 0.25f ? "  (light low end)" : ""));
+        L.push_back ("調性 " + r.key.name() + "（或關係調 " + r.key.relative() + "）" + (r.key.confidence < 0.35f ? "  - 不太確定" : ""));
+        L.push_back ("低頻 " + f0 (low * 100) + "% 的能量在 150 Hz 以下" + (low > 0.6f ? "（808 / 底鼓很重）" : low < 0.25f ? "（低頻偏輕）" : ""));
         const float busy = 0.5f * (r.ltas[6] + r.ltas[7]);
-        L.push_back (busy > 0.5f ? "Busy in the vocal range (2-4 kHz " + sgn (busy) + " dB): UNMASK will matter"
-                     : busy < -4 ? "Leaves room for the vocal at 2-4 kHz (" + sgn (busy) + " dB)"
-                                 : "Moderate density at 2-4 kHz (" + sgn (busy) + " dB)");
+        L.push_back (busy > 0.5f ? "人聲頻段很擠（2-4 kHz " + sgn (busy) + " dB）：伴奏讓位很重要"
+                     : busy < -4 ? "給人聲留了空間（2-4 kHz " + sgn (busy) + " dB）"
+                                 : "人聲頻段密度中等（2-4 kHz " + sgn (busy) + " dB）");
         const float corr = 1.0f - r.width;
-        L.push_back ("STEREO " + std::string (corr > 0.95f ? "near mono" : corr > 0.6f ? "normal width" : corr > 0.3f ? "wide" : "very wide") + "  (correlation " + f1 (corr) + ")");
+        L.push_back ("立體聲 " + std::string (corr > 0.95f ? "接近單聲道" : corr > 0.6f ? "正常寬度" : corr > 0.3f ? "偏寬" : "很寬") + "（相關 " + f1 (corr) + "）");
         // 最接近的风格：谱形和风格曲线的距离 + 速度是否在这个风格的范围里（半速 / 倍速也算）
         static const float kTempo[kNumStyles][2] = { { 125, 170 }, { 138, 148 }, { 75, 170 }, { 80, 98 }, { 60, 105 }, { 70, 130 },
                                                      { 60, 88 }, { 68, 92 }, { 95, 130 }, { 100, 170 }, { 118, 132 }, { 96, 118 } };
@@ -315,7 +315,7 @@ Report analyse (int role, const Stereo& x, double fs, int style, double bpm)
             const float score = d + (inTempo ? 0.0f : 3.0f) + (low > 0.7f ? (heavy ? -1.5f : 0.0f) : (heavy ? 0.5f : 0.0f));
             if (score < bestScore) { bestScore = score; r.suggestedStyle = s; }
         }
-        if (r.suggestedStyle >= 0) L.push_back ("CLOSEST STYLE " + std::string (mm::style (r.suggestedStyle).name) + "  (" + f0 ((float) bpm) + " BPM)");
+        if (r.suggestedStyle >= 0) L.push_back ("最接近的風格 " + std::string (mm::style (r.suggestedStyle).name) + "（" + f0 ((float) bpm) + " BPM）");
         for (int k = 0; k < kOctBands; ++k) r.target[(size_t) k] = mm::style (std::max (0, r.suggestedStyle)).busCurve[(size_t) k];
     }
     else                                                // —— 总线（整首混音）
@@ -323,14 +323,14 @@ Report analyse (int role, const Stereo& x, double fs, int style, double bpm)
         const auto& st = mm::style (style);
         for (int k = 0; k < kOctBands; ++k) r.target[(size_t) k] = st.busCurve[(size_t) k];
         auto region = [&] (int a, int b) { float d = 0; for (int k = a; k <= b; ++k) d += r.ltas[(size_t) k] - st.busCurve[(size_t) k]; return d / (b - a + 1); };
-        L.push_back ("TARGET " + std::string (st.name) + ": " + f1 (st.lufsStyle) + " LUFS, " + f1 (st.ceiling) + " dBTP  (now " + sgn (r.lufs - st.lufsStyle) + " LU)");
+        L.push_back ("目標 " + std::string (st.name) + "：" + f1 (st.lufsStyle) + " LUFS，" + f1 (st.ceiling) + " dBTP（現在差 " + sgn (r.lufs - st.lufsStyle) + " LU）");
         const float lo = region (0, 2), mid = region (3, 6), hi = region (7, 9);
-        L.push_back ("TONE vs style   low " + sgn (lo) + "   mid " + sgn (mid) + "   high " + sgn (hi) + " dB");
-        if (lo > 2.5f) L.push_back ("Too much low end for this style"); else if (lo < -2.5f) L.push_back ("Thin low end for this style");
-        if (hi > 2.5f) L.push_back ("Bright / harsh top for this style"); else if (hi < -2.5f) L.push_back ("Dull top for this style");
+        L.push_back ("對比風格曲線   低頻 " + sgn (lo) + "   中頻 " + sgn (mid) + "   高頻 " + sgn (hi) + " dB");
+        if (lo > 2.5f) L.push_back ("對這個風格來說低頻太多"); else if (lo < -2.5f) L.push_back ("對這個風格來說低頻偏薄");
+        if (hi > 2.5f) L.push_back ("對這個風格來說高頻偏亮 / 偏刺"); else if (hi < -2.5f) L.push_back ("對這個風格來說高頻偏悶");
         const float corr = correlation (x);
-        L.push_back ("STEREO correlation " + f1 (corr) + (corr < 0.2f ? "  ! check mono compatibility" : ""));
-        if (r.tp > st.ceiling) L.push_back ("Peaks above the " + f1 (st.ceiling) + " dBTP ceiling: MIX sets the limiter");
+        L.push_back ("立體聲相關 " + f1 (corr) + (corr < 0.2f ? "  ! 檢查單聲道兼容" : ""));
+        if (r.tp > st.ceiling) L.push_back ("峰值超過 " + f1 (st.ceiling) + " dBTP 天花板：一鍵混音會設好限幅");
     }
     return r;
 }

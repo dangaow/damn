@@ -72,20 +72,20 @@ Stereo runBus (const Stereo& in, const BusChain::P& p, StyleId st, double fs, fl
 Out solve (const In& in)
 {
     Out o; const auto& st = mm::style (in.style); const double fs = in.fs;
-    if (in.vocals.empty() && in.beats.empty() && ! in.hasBus) { o.error = "NOTHING TO MIX"; return o; }
+    if (in.vocals.empty() && in.beats.empty() && ! in.hasBus) { o.error = "沒有可混的軌"; return o; }
     // 1) 对齐：只用所有录音共同覆盖的那段内容时间
     int64_t a = INT64_MIN, b = INT64_MAX;
     for (auto* v : { &in.vocals, &in.beats }) for (auto& c : *v) { a = std::max (a, c.start); b = std::min (b, c.start + (int64_t) c.audio.size()); }
     if (a == INT64_MIN) { a = 0; b = 0; }
     if (! in.vocals.empty() || ! in.beats.empty())
-        if (b - a < (int64_t) (5 * fs)) { o.error = "NOT ENOUGH AUDIO (PLAY 15 s)"; return o; }
+        if (b - a < (int64_t) (5 * fs)) { o.error = "聲音不夠長（請播放 15 秒）"; return o; }
     auto trim = [&] (const Capture& c) { Stereo s; const size_t off = (size_t) (a - c.start), n = (size_t) (b - a);
         s.l.assign (c.audio.l.begin() + (long) off, c.audio.l.begin() + (long) (off + n)); s.r.assign (c.audio.r.begin() + (long) off, c.audio.r.begin() + (long) (off + n)); return s; };
     std::vector<Stereo> vin, bin;
     for (auto& c : in.vocals) vin.push_back (trim (c));
     for (auto& c : in.beats) bin.push_back (trim (c));
     o.m.seconds = (float) ((b - a) / fs);
-    for (auto& v : vin) if (analysis::integrated (v, fs, true) < -55) { o.error = "NOT ENOUGH VOCAL"; return o; }
+    for (auto& v : vin) if (analysis::integrated (v, fs, true) < -55) { o.error = "沒聽到人聲"; return o; }
 
     // 2) 人声音色和动态（每路人声各自解）
     std::vector<VocalChain::P> vp;
@@ -118,8 +118,8 @@ Out solve (const In& in)
         p.level = 0;
         vp.push_back (p);
         ClientOut co; co.client = in.vocals[i].client; co.set = in.vocals[i].current;
-        co.note = fmt ("INPUT %+.1f dB to reference\n", p.input) + fmt ("MUD %.1f dB  PRESENCE %+.1f dB  AIR %+.1f dB\n", p.mud, p.pres, p.air)
-                + fmt ("COMPRESS %.0f%%  (spread %.1f LU -> target %.1f)\n", k * 100, s0, st.vSpread) + fmt ("DE-ESS %.0f%%  WARMTH %.0f%%\n", p.deess * 100, p.warmth * 100);
+        co.note = fmt ("輸入 %+.1f dB（歸一到參考電平）\n", p.input) + fmt ("去渾濁 %.1f dB  存在感 %+.1f dB  空氣感 %+.1f dB\n", p.mud, p.pres, p.air)
+                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, st.vSpread) + fmt ("去齒音 %.0f%%  溫暖 %.0f%%\n", p.deess * 100, p.warmth * 100);
         o.clients.push_back (co);
     }
     // 3) 伴奏：低切 + 固定的人声口袋 + 动态让位深度（风格）
@@ -132,7 +132,7 @@ Out solve (const In& in)
         p.unmask = in.vocals.empty() ? 0.0f : std::clamp (st.bDmax, 0.0f, 12.0f);
         bp.push_back (p);
         ClientOut co; co.client = c.client; co.set = c.current;
-        co.note = fmt ("LOW CUT %.0f Hz  POCKET %.1f dB @ %.0f Hz\n", p.hpf, p.pocket, st.bPocketF) + fmt ("UNMASK up to %.1f dB where the vocal sings\n", p.unmask);
+        co.note = fmt ("低切 %.0f Hz  人聲口袋 %.1f dB @ %.0f Hz\n", p.hpf, p.pocket, st.bPocketF) + fmt ("人聲唱的時候在對應頻段讓位，最多 %.1f dB\n", p.unmask);
         o.clients.push_back (co);
     }
     // 4) 人声电平：按风格的「人声比伴奏」（人声频段响度）定；伴奏让位又和人声电平有关，所以迭代两次
@@ -172,14 +172,14 @@ Out solve (const In& in)
         auto& s = o.clients[i].set; const auto& p = vp[i];
         s[V_INPUT] = p.input; s[V_HPF] = p.hpf; s[V_MUD] = p.mud; s[V_PRES] = p.pres; s[V_AIR] = p.air; s[V_COMP] = p.comp; s[V_DEESS] = p.deess;
         s[V_WARMTH] = p.warmth; s[V_LEVEL] = p.level;
-        o.clients[i].note += bin.empty() ? fmt ("LEVEL %+.1f dB (kept loudness, no BEAT linked)\n", p.level)
-                                         : fmt ("LEVEL %+.1f dB  vocal vs beat %+.1f dB (style %+.1f)\n", p.level, o.m.vbrAfter, st.vbr);
+        o.clients[i].note += bin.empty() ? fmt ("電平 %+.1f dB（沒連上伴奏，保持原響度）\n", p.level)
+                                         : fmt ("電平 %+.1f dB  人聲比伴奏 %+.1f dB（風格 %+.1f）\n", p.level, o.m.vbrAfter, st.vbr);
     }
     for (size_t j = 0; j < bin.size(); ++j)
     {
         auto& s = o.clients[vin.size() + j].set; const auto& p = bp[j];
         s[B_HPF] = p.hpf; s[B_POCKET] = p.pocket; s[B_UNMASK] = p.unmask;
-        if (! vin.empty()) o.clients[vin.size() + j].note += fmt ("masked cells %.0f%% -> %.0f%%\n", o.m.maskBefore * 100, o.m.maskAfter * 100);
+        if (! vin.empty()) o.clients[vin.size() + j].note += fmt ("人聲被蓋住的部分 %.0f%% → %.0f%%\n", o.m.maskBefore * 100, o.m.maskAfter * 100);
     }
     // 5) 总线：音色向风格曲线靠、粘合到风格的平均压缩量、推到风格响度（-1 dBTP 天花板）
     if (in.hasBus && (! vout.empty() || ! bout.empty()))
@@ -205,12 +205,12 @@ Out solve (const In& in)
         o.m.busLufs = analysis::integrated (out, fs); o.m.busTp = analysis::truePeakDb (out); o.m.glueGr = gr;
         ClientOut co; co.client = in.busClient; co.set = in.busCurrent;
         co.set[M_LOW] = p.low; co.set[M_HIGH] = p.high; co.set[M_GLUE] = p.glue; co.set[M_WIDTH] = p.width; co.set[M_DRIVE] = p.drive; co.set[M_CEILING] = p.ceiling;
-        co.note = fmt ("TONE low %+.1f dB  high %+.1f dB toward the style curve\n", p.low, p.high) + fmt ("GLUE %.0f%% (avg %.1f dB)\n", p.glue * 100, gr)
-                + fmt ("DRIVE %+.1f dB -> %.1f LUFS, ", p.drive, o.m.busLufs) + fmt ("peak %.1f dBTP\n", o.m.busTp);
+        co.note = fmt ("音色往風格曲線靠：低頻 %+.1f dB  高頻 %+.1f dB\n", p.low, p.high) + fmt ("粘合 %.0f%%（平均 %.1f dB）\n", p.glue * 100, gr)
+                + fmt ("推子 %+.1f dB → %.1f LUFS，", p.drive, o.m.busLufs) + fmt ("峰值 %.1f dBTP\n", o.m.busTp);
         o.clients.push_back (co);
     }
     o.ok = true;
-    o.summary = std::string ("MIX DONE · ") + st.name;
+    o.summary = std::string ("混音完成 · ") + st.name;
     return o;
 }
 } // namespace mm::automix
