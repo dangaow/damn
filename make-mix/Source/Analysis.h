@@ -7,8 +7,8 @@ namespace mm::analysis
 struct Stereo { std::vector<float> l, r; size_t size() const { return l.size(); } };
 
 // 专业人声的倍频程谱形（每个倍频程的总能量，相对 500/1k/2k 平均，dB）：判断录音偏浑 / 偏暗 / 偏亮。
-// 取自 谎话 / Isolated 两首成品里分离出的人声的平均
-inline constexpr float kRefVocal[kOctBands] = { -36, -28, -13, 1, 6, 0, -6, -3, 2, 1 };
+// 取自 谎话 / Isolated / 灰烬 / 枷锁 四首发行版里分离出的人声的平均（最低两段有分离串音，按经验压低）
+inline constexpr float kRefVocal[kOctBands] = { -36, -28, -12, 1, 5, 0, -4, -2.5f, 0.5f, -4 };
 
 // BS.1770 积分响度（门限 -70 LUFS 绝对 / -10 LU 相对）。hpf150 = true 时先过 150 Hz 高通：「人声频段响度」，
 // 用来比较人声和伴奏（不让 808 / 底鼓的低频能量主导）

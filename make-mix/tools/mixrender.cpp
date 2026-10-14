@@ -102,7 +102,7 @@ float maxDiffDb (const Stereo& a, const Stereo& b)
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
-    std::vector<juce::File> vocals, beats; juce::File outDir ("mix_out"), refFile; std::string styleName = "trap"; double bpm = 120; bool noBus = false, randomBlocks = false;
+    std::vector<juce::File> vocals, beats; juce::File outDir ("mix_out"), refFile; std::string styleName = "trap"; double bpm = 120, learnStart = 0; bool noBus = false, randomBlocks = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i]; auto next = [&] { return i + 1 < argc ? std::string (argv[++i]) : std::string(); };
@@ -111,13 +111,14 @@ int main (int argc, char** argv)
         else if (a == "--style") styleName = next();
         else if (a == "--bpm") bpm = std::stod (next());
         else if (a == "--no-bus") noBus = true;
+        else if (a == "--learn-start") learnStart = std::stod (next());   // 从第几秒开始学（跳过没有人声的前奏）
         else if (a == "--reference") refFile = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--measure")              // 量一首成品：--measure vocal.wav beat.wav mix.wav（训练风格目标用）
         {
             double sr = 0; const Stereo v = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
             const Stereo b = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
             const Stereo m = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
-            auto arr = [] (const std::array<float, kOctBands>& a) { std::string t; for (float x : a) t += " " + juce::String (x, 1).toStdString(); return t; };
+            auto arr = [] (const std::array<float, kOctBands>& bands) { std::string t; for (float x : bands) t += " " + juce::String (x, 1).toStdString(); return t; };
             std::cout << "vocal_ltas" << arr (analysis::octaveLtas (v, sr)) << "\n"
                       << "mix_ltas" << arr (analysis::octaveLtas (m, sr)) << "\n"
                       << "beat_ltas" << arr (analysis::octaveLtas (b, sr)) << "\n"
@@ -201,15 +202,16 @@ int main (int argc, char** argv)
               << hub.linkSummary() << "\n";
 
     // 1) 学习：从头播放，第一块之后按 MIX，听到会话结束（最多两遍歌）
-    procs.back()->requestMix();
-    size_t sinceTick = 0;
+    if (learnStart <= 0) procs.back()->requestMix();
+    size_t sinceTick = 0; bool asked = learnStart <= 0;
     const auto tLearn = std::chrono::steady_clock::now();
-    for (int pass = 0; pass < 2 && hub.state() == Hub::State::Listening; ++pass)
-        run (src, busT.p ? &busT : nullptr, ph, songLen, maxBlock, false, 1, [&] (size_t)
+    for (int pass = 0; pass < 2 && (! asked || hub.state() == Hub::State::Listening); ++pass)
+        run (src, busT.p ? &busT : nullptr, ph, songLen, maxBlock, false, 1, [&] (size_t pos)
         {
+            if (! asked && pos >= (size_t) (learnStart * fs)) { asked = true; procs.back()->requestMix(); }
             sinceTick += maxBlock;
             if (sinceTick >= (size_t) (0.1 * fs)) { sinceTick = 0; hub.tick(); }
-            return hub.state() == Hub::State::Listening;
+            return ! asked || hub.state() == Hub::State::Listening;
         });
     if (hub.state() == Hub::State::Listening) procs.back()->requestMix();      // 歌比 15 秒短：用已有的
     const double solveSec = std::chrono::duration<double> (std::chrono::steady_clock::now() - tLearn).count();

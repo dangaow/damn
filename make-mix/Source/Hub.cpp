@@ -2,7 +2,7 @@
 
 namespace mm
 {
-namespace { constexpr double kListenSec = 15.0, kMaxCaptureSec = 24.0, kMinSec = 6.0; }
+namespace { constexpr double kListenSec = 20.0, kMaxCaptureSec = 28.0, kMinSec = 6.0; }
 
 double Hub::now() { return juce::Time::getMillisecondCounterHiRes() * 0.001; }
 

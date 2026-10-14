@@ -9,7 +9,9 @@ namespace
 {
 constexpr int kSimBlock = 512;
 // 从发行版里量出来的目标（tools/mixrender --measure，4 首歌的平均）：人声被伴奏盖住的比例、人声齿音
-constexpr float kMaskTarget = 0.38f, kSibTarget = 10.0f;
+constexpr float kMaskTarget = 0.42f, kSibTarget = 11.0f;
+// 发行版人声量出来的动态（P90-P10）比风格表（来自资料）大约 1.5 LU：按这个校正，免得把人声压扁
+constexpr float kSpreadCal = 1.5f;
 
 template <typename F> Stereo runChain (const Stereo& in, double fs, F&& proc)
 {
@@ -109,12 +111,15 @@ Out solve (const In& in)
         // 压缩：用真实链子模拟，两步牛顿把动态（P90-P10）拉到风格目标
         auto dry = p;
         const float s0 = analysis::spread (v, fs);
-        float k = std::clamp (0.25f + (s0 - st.vSpread) / 8.0f, 0.05f, 0.95f);
+        // 只修正一半的差距：20 秒的学习段量出来的动态常比整首大（主歌 / 副歌交界），全修就压扁了
+        const float spreadTarget = std::max (st.vSpread + kSpreadCal, s0 - 0.5f * (s0 - (st.vSpread + kSpreadCal)));
+        // 学习段只有 20 秒，动态估计有噪声：步子小一点、最多 70 %，宁可少压（压扁就假了）
+        float k = std::clamp (0.25f + (s0 - spreadTarget) / 10.0f, 0.0f, 0.7f);
         for (int it = 0; it < 2; ++it)
         {
             dry.comp = k;
             const float s1 = analysis::spread (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
-            k = std::clamp (k + (s1 - st.vSpread) / 8.0f, 0.0f, 1.0f);
+            k = std::clamp (k + (s1 - spreadTarget) / 10.0f, 0.0f, 0.7f);
         }
         p.comp = k;
         // 去齿音：模拟着二分，把齿音压到发行版人声的水平；本来就不重就只轻轻带一点
@@ -122,7 +127,9 @@ Out solve (const In& in)
         {
             dry.comp = k; float lo = 0.05f, hi = 0.9f;
             dry.deess = lo; const float sLo = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
+            dry.deess = hi; const float sHi = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
             if (sLo <= kSibTarget + st.vDeessMargin * 0.5f) { p.deess = lo; sibOut = sLo; }
+            else if (sLo - sHi < 1.0f) { p.deess = 0.25f; sibOut = sLo; }   // 去齿音压不下这种齿音：不硬开（只会把高频压暗）
             else
             {
                 for (int it = 0; it < 5; ++it)
@@ -138,7 +145,7 @@ Out solve (const In& in)
         vp.push_back (p);
         ClientOut co; co.client = in.vocals[i].client; co.set = in.vocals[i].current;
         co.note = fmt ("輸入 %+.1f dB（歸一到參考電平）\n", p.input) + fmt ("去渾濁 %.1f dB  存在感 %+.1f dB  空氣感 %+.1f dB\n", p.mud, p.pres, p.air)
-                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, st.vSpread) + fmt ("去齒音 %.0f%%（齒音 %.1f → %.1f dB）  ", p.deess * 100, sib, sibOut) + fmt ("溫暖 %.0f%%\n", p.warmth * 100);
+                + fmt ("壓縮 %.0f%%（動態 %.1f LU → 目標 %.1f）\n", k * 100, s0, spreadTarget) + fmt ("去齒音 %.0f%%（齒音 %.1f → %.1f dB）  ", p.deess * 100, sib, sibOut) + fmt ("溫暖 %.0f%%\n", p.warmth * 100);
         o.clients.push_back (co);
     }
     // 3) 伴奏：低切 + 固定的人声口袋 + 动态让位深度（风格）
@@ -193,7 +200,7 @@ Out solve (const In& in)
         float depth = 0;
         if (maskAt (0) > kMaskTarget)
         {
-            float lo = 0, hi = std::clamp (st.bDmax * 1.5f, 3.0f, 12.0f);
+            float lo = 0, hi = std::clamp (st.bDmax, 2.0f, 12.0f);
             if (maskAt (hi) > kMaskTarget) depth = hi;
             else { for (int it = 0; it < 6; ++it) { const float m = 0.5f * (lo + hi); (maskAt (m) > kMaskTarget ? lo : hi) = m; } depth = 0.5f * (lo + hi); }
         }
@@ -230,8 +237,9 @@ Out solve (const In& in)
         const Stereo mix = sum (all);
         auto p = BusChain::fromSet (in.busCurrent);
         const auto lt = analysis::octaveLtas (mix, fs);
-        p.low  = std::clamp (0.6f * 0.5f * ((st.busCurve[1] - lt[1]) + (st.busCurve[2] - lt[2])), -4.0f, 4.0f);
-        p.high = std::clamp (0.6f * 0.5f * ((st.busCurve[8] - lt[8]) + (st.busCurve[9] - lt[9])), -4.0f, 4.0f);
+        // 只往风格曲线靠 30 %、最多 ±2 dB：保留这首歌自己的音色
+        p.low  = std::clamp (0.3f * 0.5f * ((st.busCurve[1] - lt[1]) + (st.busCurve[2] - lt[2])), -2.0f, 2.0f);
+        p.high = std::clamp (0.3f * 0.5f * ((st.busCurve[8] - lt[8]) + (st.busCurve[9] - lt[9])), -2.0f, 2.0f);
         p.width = 100; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
         float lo = 0, hi = 1, gr = 0;                    // 粘合：二分到风格的平均压缩量
         for (int it = 0; it < 7; ++it) { p.glue = 0.5f * (lo + hi); runBus (mix, p, in.style, fs, &gr); (gr < st.glueGr ? lo : hi) = p.glue; }
