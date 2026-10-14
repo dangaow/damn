@@ -105,6 +105,14 @@ void Hub::capture (int slot, const float* l, const float* r, int n, int64_t pos,
     if (! juce::isPositiveAndBelow (slot, kMaxSlots) || n <= 0) return;
     auto* c = slots[(size_t) slot].cap.load (std::memory_order_acquire);
     if (c == nullptr || ! c->armed.load (std::memory_order_acquire) || ! playing) return;
+    if (! heard.load (std::memory_order_acquire))
+    {
+        if (slots[(size_t) slot].role.load (std::memory_order_relaxed) != (int) Role::Vocal) return;
+        float pk = 0;
+        for (int i = 0; i < n; ++i) pk = std::max (pk, std::max (std::abs (l[i]), std::abs (r[i])));
+        if (pk < 0.0158f) return;                                          // -36 dBFS 以下当作没唱
+        heard.store (true, std::memory_order_release);
+    }
     const int g = c->gen.load (std::memory_order_acquire);   // 写到一半被新一轮 MIX 重置了，就不更新长度
     int len = c->len.load (std::memory_order_relaxed);
     if (len > 0 && c->start.load (std::memory_order_relaxed) + len != pos) len = 0;   // 跳了位置：从这里重新录
@@ -123,6 +131,9 @@ void Hub::requestMix (StyleId sid)
     {
     std::lock_guard<std::mutex> lk (mtx);
     participants.clear(); sessionStyle = sid; message.clear();
+    bool anyVocal = false;
+    for (auto& s : slots) if (s.client && s.client->hubRole() == Role::Vocal) anyVocal = true;
+    heard.store (! anyVocal, std::memory_order_release); waitVocal = anyVocal;
     for (int i = 0; i < kMaxSlots; ++i)
     {
         auto& s = slots[(size_t) i]; if (! s.client) continue;
@@ -155,6 +166,15 @@ void Hub::tick()
           for (int i : participants) { auto& s = slots[(size_t) i]; if (! s.client || s.client->hubRole() == Role::Bus) continue;
               auto* c = s.cap.load(); if (! c) continue; any = true; minSec = std::min (minSec, c->len.load() / c->fs); } }
         if (! any) { message = "請在人聲或伴奏軌上也插 MAKE MIX"; st = State::Failed; doneAt = now(); return; }
+        if (waitVocal)
+        {
+            if (! heard.load (std::memory_order_acquire))
+            {
+                if (now() - listenStart > 90.0) { message = "沒聽到人聲：請播放有人聲的段落"; st = State::Failed; doneAt = now(); }
+                return;
+            }
+            waitVocal = false; listenStart = now();                       // 超时从人声进来开始算
+        }
         // 有的轨没在处理（静音 / FL 智能禁用）录音就不会长：最多等 40 秒，用已经录到的（每轨至少 6 秒）解算
         if (minSec >= kListenSec || now() - listenStart > 40.0) startSolve();
     }
@@ -234,6 +254,7 @@ std::string Hub::statusText() const
             { std::lock_guard<std::mutex> lk (mtx);
               for (int i : participants) { auto& s = slots[(size_t) i]; if (! s.client || s.client->hubRole() == Role::Bus) continue;
                   if (auto* c = s.cap.load()) minSec = std::min (minSec, c->len.load() / c->fs); } }
+            if (! heard.load() && now() - listenStart > 1.0) return "等人聲進來…";
             if (minSec > 1e8 || (minSec < 0.05 && now() - listenStart > 1.0)) return "請先播放";
             return "聆聽中 " + std::to_string ((int) std::min (99.0, 100.0 * minSec / kListenSec)) + "%";
         }

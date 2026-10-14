@@ -65,6 +65,7 @@ private:
     mutable std::mutex mtx;                                  // 登记表（消息线程）
 
     std::atomic<State> st { State::Idle };
+    std::atomic<bool> heard { true }; bool waitVocal = false;   // 有人声轨时：等人声真的唱起来才开始录（前奏不算）
     std::vector<int> participants; StyleId sessionStyle = 0; double listenStart = 0; std::string message;
     std::thread worker; std::atomic<bool> resultReady { false }; automix::Out result; automix::Metrics metrics;
     std::vector<std::pair<int, ParamSet>> undo; std::vector<int> resultSlots;
