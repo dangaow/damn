@@ -48,10 +48,25 @@ jobs:
           Copy-Item make-mix\README.md dist\README.md
           Compress-Archive -Path dist\* -DestinationPath "MAKE-MIX-$v-Windows-VST3.zip"
 
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $p = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $p)) { choco install innosetup -y --no-progress | Out-Null }
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          } else { $iscc = $iscc.Source }
+          & $iscc "/DAppVer=$env:VERSION" make-mix\installer\MakeMix.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist\*.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: MAKE-MIX-Windows-VST3
-          path: MAKE-MIX-*-Windows-VST3.zip
+          path: |
+            MAKE-MIX-*-Windows-VST3.zip
+            dist/MAKE-MIX-*-Setup.exe
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -60,8 +75,10 @@ jobs:
           name: MAKE MIX ${{ env.VERSION }} (Windows VST3)
           target_commitish: ${{ github.sha }}
           prerelease: true
-          files: MAKE-MIX-*-Windows-VST3.zip
+          files: |
+            dist/MAKE-MIX-*-Setup.exe
+            MAKE-MIX-*-Windows-VST3.zip
           body: |
             MAKE MIX — one plugin, three roles (VOCAL / BEAT / BUS) for FL Studio.
-            Unzip and copy "MAKE MIX.vst3" to C:\Program Files\Common Files\VST3, then rescan plugins in FL Studio.
-            See README.md inside the zip.
+            推薦：下載 MAKE-MIX-<版本>-Setup.exe，雙擊安裝（裝到 C:\Program Files\Common Files\VST3），然後在 FL Studio 裡重新掃描插件。
+            也可以用 zip：解壓後把 "MAKE MIX.vst3" 複製到 C:\Program Files\Common Files\VST3。
