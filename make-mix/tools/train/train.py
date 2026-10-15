@@ -8,7 +8,9 @@ import numpy as np
 C = sys.argv[1]
 MM = sys.argv[2] if len(sys.argv) > 2 else '/home/user/build-mix/mm_mixrender'
 man = json.load(open(f'{C}/manifest.json'))
-os.makedirs(f'{C}/measure', exist_ok=True)
+SEP = os.environ.get('SEP_DIR', f'{C}/sep')                          # 分离结果目录（MSST 或 htdemucs）
+MEAS = f'{C}/measure_' + os.path.basename(SEP.rstrip('/'))            # 量测缓存跟着分离结果走
+os.makedirs(MEAS, exist_ok=True)
 
 
 def bpm_of(path):
@@ -23,9 +25,9 @@ def bpm_of(path):
 
 songs = []
 for s in man:
-    d = f'{C}/sep/{s["id"]}'
+    d = f'{SEP}/{s["id"]}'
     if not os.path.exists(f'{d}/inst.wav'): continue
-    mp = f'{C}/measure/{s["id"]}.json'
+    mp = f'{MEAS}/{s["id"]}.json'
     if not os.path.exists(mp):
         out = subprocess.run([MM, '--measure-song', f'{d}/vocals.wav', f'{d}/inst.wav', f'{d}/mix.wav'], capture_output=True, text=True, check=True).stdout
         m = json.loads(out); m['bpm'] = bpm_of(f'{d}/inst.wav')
@@ -98,7 +100,7 @@ if X:
                                      centroids={l: Z[Y == l].mean(0).round(4).tolist() for l in labels},
                                      loso_accuracy=float(correct / len(Y)), windows=int(len(Y)))
 
-json.dump(report, open(f'{C}/report.json', 'w'), ensure_ascii=False, indent=1)
+json.dump(report, open(MEAS + '_report.json', 'w'), ensure_ascii=False, indent=1)
 
 
 def f(x, k='med', d=1):

@@ -13,7 +13,7 @@ namespace mm
 enum class Role : int { Vocal = 0, Beat = 1, Bus = 2 };
 using StyleId = int;                                   // kStyles 的下标
 
-constexpr int kNumStyles = 13, kOctBands = 10, kMaxSlots = 32;
+constexpr int kNumStyles = 15, kOctBands = 10, kMaxSlots = 32;
 constexpr float kOctCentresHz[kOctBands] = { 31.5f, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000 };
 
 // 人声 key 的 6 个频段（伴奏在这些频段给人声让位）和每段的重要度

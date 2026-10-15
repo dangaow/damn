@@ -9,7 +9,7 @@ namespace
 {
 constexpr int kSimBlock = 512;
 // 从发行版里量出来的目标（tools/mixrender --measure，4 首歌的平均）：人声被伴奏盖住的比例、人声齿音
-constexpr float kMaskTarget = 0.42f, kSibTarget = 11.0f;
+// 遮蔽 / 齿音的目标按风格训练（Styles.h 的 kStyleMask / kStyleSib）
 // 发行版人声量出来的动态（P90-P10）比风格表（来自资料）大约 1.5 LU：按这个校正，免得把人声压扁
 constexpr float kSpreadCal = 1.5f;
 
@@ -126,12 +126,12 @@ Out solve (const In& in)
         }
         p.comp = k;
         // 去齿音：模拟着二分，把齿音压到发行版人声的水平；本来就不重就只轻轻带一点
-        float sibOut = sib;
+        float sibOut = sib; const float sibTarget = kStyleSib[std::clamp (in.style, 0, kNumStyles - 1)];
         {
             dry.comp = k; float lo = 0.05f, hi = 0.9f;
             dry.deess = lo; const float sLo = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
             dry.deess = hi; const float sHi = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
-            if (sLo <= kSibTarget + st.vDeessMargin * 0.5f) { p.deess = lo; sibOut = sLo; }
+            if (sLo <= sibTarget + st.vDeessMargin * 0.5f) { p.deess = lo; sibOut = sLo; }
             else if (sLo - sHi < 1.0f) { p.deess = 0.25f; sibOut = sLo; }   // 去齿音压不下这种齿音：不硬开（只会把高频压暗）
             else
             {
@@ -139,7 +139,7 @@ Out solve (const In& in)
                 {
                     dry.deess = 0.5f * (lo + hi);
                     sibOut = analysis::sibilance (runVocal (v, dry, in.style, fs, in.bpm, a, nullptr), fs);
-                    (sibOut > kSibTarget + st.vDeessMargin * 0.5f ? lo : hi) = dry.deess;
+                    (sibOut > sibTarget + st.vDeessMargin * 0.5f ? lo : hi) = dry.deess;
                 }
                 p.deess = 0.5f * (lo + hi);
             }
@@ -213,11 +213,12 @@ Out solve (const In& in)
             for (size_t j = 0; j < bin.size(); ++j) { auto q = bp[j]; q.unmask = depth; bt[j] = runBeat (bin[j], q, in.style, fs, a, &keys); }
             return analysis::maskedFraction (vs, sum (bt), fs); };
         float depth = 0;
-        if (maskAt (0) > kMaskTarget)
+        const float maskTarget = kStyleMask[std::clamp (in.style, 0, kNumStyles - 1)];
+        if (maskAt (0) > maskTarget)
         {
             float lo = 0, hi = std::clamp (st.bDmax, 2.0f, 12.0f);
-            if (maskAt (hi) > kMaskTarget) depth = hi;
-            else { for (int it = 0; it < 6; ++it) { const float m = 0.5f * (lo + hi); (maskAt (m) > kMaskTarget ? lo : hi) = m; } depth = 0.5f * (lo + hi); }
+            if (maskAt (hi) > maskTarget) depth = hi;
+            else { for (int it = 0; it < 6; ++it) { const float m = 0.5f * (lo + hi); (maskAt (m) > maskTarget ? lo : hi) = m; } depth = 0.5f * (lo + hi); }
         }
         for (auto& q : bp) q.unmask = depth;
         setLevels(); setLevels();
@@ -256,9 +257,13 @@ Out solve (const In& in)
         // 期望的音色改动：只往风格曲线靠一部分，保留这首歌自己的音色
         //   低频修五成（±3），中低频（125–250 Hz 发闷 / 发虚，最影响干不干净）修六成（±3），高频修三成（±2）
         auto dev2 = [&] (int k) { return 0.5f * ((st.busCurve[(size_t) k] - lt[(size_t) k]) + (st.busCurve[(size_t) k + 1] - lt[(size_t) k + 1])); };
-        const float wantLo = std::clamp (0.5f * dev2 (0), -3.0f, 3.0f), wantMid = std::clamp (0.6f * dev2 (2), -3.0f, 3.0f), wantHi = std::clamp (0.3f * dev2 (8), -2.0f, 2.0f);
+        //   风格里各首歌本来就差很多的频段（训练时量的四分位距）修得更少
+        const auto& iqr = kStyleCurveIqr[(size_t) std::clamp (in.style, 0, kNumStyles - 1)];
+        auto trust = [] (float q) { return std::clamp (2.5f / std::max (q, 0.1f), 0.3f, 1.0f); };
+        const float wantLo = std::clamp (0.5f * trust (iqr[0]) * dev2 (0), -3.0f, 3.0f), wantMid = std::clamp (0.6f * trust (iqr[1]) * dev2 (2), -3.0f, 3.0f),
+                    wantHi = std::clamp (0.3f * trust (iqr[2]) * dev2 (8), -2.0f, 2.0f);
         p.low = wantLo; p.mid = wantMid; p.high = wantHi;
-        p.width = 100; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
+        p.width = kStyleWidth[std::clamp (in.style, 0, kNumStyles - 1)]; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
         p.lift = kStyleLift[std::clamp (in.style, 0, kNumStyles - 1)];
         float lo = 0, hi = 1, gr = 0;                    // 粘合：二分到风格的平均压缩量
         for (int it = 0; it < 7; ++it) { p.glue = 0.5f * (lo + hi); runBus (mix, p, in.style, fs, &gr); (gr < st.glueGr ? lo : hi) = p.glue; }

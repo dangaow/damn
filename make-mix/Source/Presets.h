@@ -68,6 +68,14 @@ inline constexpr Preset kPresets[] = {
     { "收音機（整首）", Role::Bus,   { { M_LIFT, 0.3f }, { M_FX, FxRadio }, { M_FXAMT, 1 } } },
     { "電話（整首）",   Role::Bus,   { { M_LIFT, 0.3f }, { M_FX, FxPhone }, { M_FXAMT, 1 } } },
     { "遊戲機 8-bit",   Role::Bus,   { { M_LIFT, 0.4f }, { M_FX, FxGame }, { M_FXAMT, 0.4f } } },
+
+    // —— 训练出来的（Geebar 16 首 / GAMEBOI 25 首）——————————————————————————
+    { "GEEBAR 夜色",    Role::Vocal, { { V_HPF, 85 }, { V_MUD, -1 }, { V_PRES, 1.5f }, { V_AIR, 1 }, { V_COMP, 0.5f }, { V_DEESS, 0.45f }, { V_WARMTH, 0.35f }, { V_SMOOTH, 0.5f } } },
+    { "UDG 頂麥",       Role::Vocal, { { V_HPF, 110 }, { V_MUD, -3 }, { V_PRES, 4 }, { V_AIR, 3.5f }, { V_COMP, 0.8f }, { V_DEESS, 0.45f }, { V_WARMTH, 0.45f }, { V_SMOOTH, 0.25f } } },
+    { "GEEBAR 留白",    Role::Beat,  { { B_HPF, 30 }, { B_POCKET, -2 }, { B_UNMASK, 7 }, { B_GLUE, 0.3f } } },
+    { "UDG 808 地下",   Role::Beat,  { { B_HPF, 20 }, { B_POCKET, -1 }, { B_UNMASK, 5 }, { B_GLUE, 0.45f } } },
+    { "GEEBAR 夜色",    Role::Bus,   { { M_LOW, 0 }, { M_HIGH, -1.5f }, { M_MID, 0.5f }, { M_GLUE, 0.3f }, { M_LIFT, 0.4f }, { M_WIDTH, 110 } } },
+    { "UDG 地下響",     Role::Bus,   { { M_LOW, 2 }, { M_HIGH, 0.5f }, { M_MID, -1 }, { M_GLUE, 0.55f }, { M_LIFT, 0.7f }, { M_WIDTH, 95 } } },
 };
 constexpr int kNumPresets = (int) (sizeof (kPresets) / sizeof (kPresets[0]));
 

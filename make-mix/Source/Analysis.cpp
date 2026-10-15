@@ -302,11 +302,15 @@ Report analyse (int role, const Stereo& x, double fs, int style, double bpm)
         L.push_back ("立體聲 " + std::string (corr > 0.95f ? "接近單聲道" : corr > 0.6f ? "正常寬度" : corr > 0.3f ? "偏寬" : "很寬") + "（相關 " + f1 (corr) + "）");
         // 最接近的风格：谱形和风格曲线的距离 + 速度是否在这个风格的范围里（半速 / 倍速也算）
         static const float kTempo[kNumStyles][2] = { { 125, 170 }, { 138, 148 }, { 75, 170 }, { 80, 98 }, { 60, 105 }, { 70, 130 },
-                                                     { 60, 88 }, { 68, 92 }, { 95, 130 }, { 100, 170 }, { 118, 132 }, { 96, 118 }, { 0, 0 } };
+                                                     { 60, 88 }, { 68, 92 }, { 95, 130 }, { 100, 170 }, { 118, 132 }, { 96, 118 }, { 0, 0 },
+                                                     { 78, 125 }, { 125, 160 } };
         float bestScore = 1e9;
-        for (int s = 0; s < kNumStyles - 1; ++s)            // 不推荐 MAKE STUDIO（那是自己的风格，不是猜出来的）
+        for (int s = 0; s < kNumStyles; ++s)
         {
-            float d = 0; for (int k = 1; k < kOctBands; ++k) { const float e = r.ltas[(size_t) k] - mm::style (s).busCurve[(size_t) k]; d += e * e; }
+            if (std::string_view (mm::style (s).key) == "makestudio") continue;   // 不推荐 MAKE STUDIO（那是自己的风格，不是猜出来的）
+            // 训练过的风格用真实伴奏的谱形；没训练的用总线曲线近似
+            const auto& bc = kStyleBeatCurve[(size_t) s]; const bool trained = std::abs (bc[5]) + std::abs (bc[1]) > 0.01f;
+            float d = 0; for (int k = 1; k < kOctBands; ++k) { const float e = r.ltas[(size_t) k] - (trained ? bc[(size_t) k] : mm::style (s).busCurve[(size_t) k]); d += e * e; }
             d = std::sqrt (d / (kOctBands - 1));
             bool inTempo = false;
             for (double t : { bpm, bpm * 2, bpm / 2 }) inTempo |= t >= kTempo[s][0] && t <= kTempo[s][1];
