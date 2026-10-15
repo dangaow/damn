@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "Presets.h"
 
 using namespace mm;
 namespace
@@ -7,7 +8,10 @@ const juce::Colour bg (0xff0a0b10), panel (0xff12141b), line (0xff23262f), red (
 // 旋钮下面的短名字（和 kParams 顺序一致）
 const char* kShort[kNumParams] = { "輸入", "低切", "去渾濁", "存在感", "空氣感", "壓縮", "去齒音", "溫暖", "圓潤", "電平",
                                    "低切", "人聲口袋", "讓位", "粘合", "電平",
-                                   "低頻", "高頻", "中低頻", "粘合", "提升", "寬度", "推子", "天花板" };
+                                   "低頻", "高頻", "中低頻", "粘合", "提升", "寬度", "推子", "天花板",
+                                   "效果", "效果量", "效果", "效果量", "效果", "效果量" };
+constexpr int kFxParam[3] = { V_FX, B_FX, M_FX };
+bool isKnob (int i) { return kParams[i].kind != PKind::Choice; }
 const char* kRoleName[3] = { "人聲", "伴奏", "總線" };
 const char* kRoleHint[3] = { "插在人聲軌（最後一格）", "插在伴奏軌（最後一格）", "插在 Master（最後一格）" };
 juce::String T (const char* s) { return juce::String::fromUTF8 (s); }
@@ -108,6 +112,15 @@ MakeMixEditor::MakeMixEditor (MakeMixProcessor& p) : AudioProcessorEditor (&p), 
         roleBtn[r].onClick = [this, r] { proc.setRole ((Role) r); showRole(); };
         addAndMakeVisible (roleBtn[r]);
     }
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int m = 0; m < kNumFx; ++m) fxBox[(size_t) r].addItem (T (kFxNames[m]), m + 1);
+        addChildComponent (fxBox[(size_t) r]);
+        fxAtt[(size_t) r] = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, kParams[kFxParam[r]].id, fxBox[(size_t) r]);
+    }
+    presetBox.setTextWhenNothingSelected (T ("選擇預設…"));
+    presetBox.onChange = [this] { if (presetBox.getSelectedId() > 0) proc.loadPreset (presetBox.getSelectedId() - 1); };
+    addAndMakeVisible (presetBox);
     for (int s = 0; s < kNumStyles; ++s) styleBox.addItem (juce::String::fromUTF8 (mm::style (s).name), s + 1);
     styleBox.onChange = [this] { if (styleBox.getSelectedId() > 0) proc.setStyle (styleBox.getSelectedId() - 1, true); };
     addAndMakeVisible (styleBox);
@@ -137,7 +150,9 @@ void MakeMixEditor::setReportVisible (bool v)
     closeBtn.setVisible (showReport);
     useStyleBtn.setVisible (showReport && rep->role == 1 && rep->suggestedStyle >= 0);
     if (useStyleBtn.isVisible()) useStyleBtn.setButtonText (T ("套用 ") + juce::String::fromUTF8 (mm::style (rep->suggestedStyle).name));
-    for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible (! showReport && (int) kParams[i].role == shownRole);
+    for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible (! showReport && isKnob (i) && (int) kParams[i].role == shownRole);
+    for (int r = 0; r < 3; ++r) fxBox[(size_t) r].setVisible (! showReport && r == shownRole);
+    presetBox.setVisible (! showReport);
     repaint();
 }
 
@@ -146,7 +161,10 @@ void MakeMixEditor::showRole()
     shownRole = (int) proc.role();
     for (int r = 0; r < 3; ++r) roleBtn[r].setToggleState (r == shownRole, juce::dontSendNotification);
     showReport = false; closeBtn.setVisible (false); useStyleBtn.setVisible (false);
-    for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible ((int) kParams[i].role == shownRole);
+    for (int i = 0; i < kNumParams; ++i) knobs[(size_t) i].s.setVisible (isKnob (i) && (int) kParams[i].role == shownRole);
+    for (int r = 0; r < 3; ++r) fxBox[(size_t) r].setVisible (r == shownRole);
+    presetBox.clear (juce::dontSendNotification); presetBox.setVisible (true);
+    for (int i = 0; i < kNumPresets; ++i) if ((int) kPresets[i].role == shownRole) presetBox.addItem (T (kPresets[i].name), i + 1);
     resized(); repaint();
 }
 
@@ -187,7 +205,13 @@ void MakeMixEditor::paint (juce::Graphics& g)
     g.setColour (link.startsWith (T ("未連接")) ? red : silver.withAlpha (0.8f)); g.setFont (MixLook::ui (12.0f, true));
     g.drawText (link, 640, 60, 300, 16, juce::Justification::left);
 
-    // 旋钮的名字
+    // 预设 / 效果选单的标题、旋钮的名字
+    if (! showReport)
+    {
+        g.setColour (dim); g.setFont (MixLook::ui (11.0f, true));
+        g.drawText (T ("預設"), 20, 88, 200, 14, juce::Justification::left);
+        g.drawText (T ("風格化效果（不加混響 / 回聲）"), 290, 88, 300, 14, juce::Justification::left);
+    }
     g.setFont (MixLook::ui (12.0f, true));
     for (int i = 0; i < kNumParams; ++i)
     {
@@ -237,11 +261,13 @@ void MakeMixEditor::resized()
     // 当前角色的旋钮：最多 6 个一排
     std::vector<juce::Component*> vis; std::vector<int> ids;
     for (int i = 0; i < kNumParams; ++i)
-        if ((int) kParams[i].role == shownRole) { vis.push_back (&knobs[(size_t) i].s); ids.push_back (i); }
-    const int cols = 6, kw = 110, kh = 110, gap = (getWidth() - 40 - cols * kw) / (cols - 1);
+        if (isKnob (i) && (int) kParams[i].role == shownRole) { vis.push_back (&knobs[(size_t) i].s); ids.push_back (i); }
+    presetBox.setBounds (20, 104, 250, 28);
+    for (auto& b : fxBox) b.setBounds (290, 104, 200, 28);
+    const int cols = 6, kw = 110, kh = 96, gap = (getWidth() - 40 - cols * kw) / (cols - 1);
     for (size_t j = 0; j < vis.size(); ++j)
     {
-        const int col = (int) j % cols, row = (int) j / cols, x = 20 + col * (kw + gap), y = vis.size() <= (size_t) cols ? 170 : 104 + row * 146;
+        const int col = (int) j % cols, row = (int) j / cols, x = 20 + col * (kw + gap), y = vis.size() <= (size_t) cols ? 196 : 154 + row * 124;
         vis[j]->setBounds (x, y, kw, kh);
     }
     mixBtn.setBounds (36, 392, 200, 58);

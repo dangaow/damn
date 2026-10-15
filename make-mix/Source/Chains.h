@@ -3,6 +3,7 @@
 #include "Params.h"
 #include "Styles.h"
 #include "Dsp.h"
+#include "Fx.h"
 
 namespace mm
 {
@@ -41,7 +42,7 @@ struct BandMeter
 class VocalChain
 {
 public:
-    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, smooth = 0.3f, level = 0; };
+    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, smooth = 0.3f, level = 0; int fx = FxOff; float fxAmt = 1; };
     static P fromSet (const ParamSet&);
     void prepare (double fs, int maxBlock, int latency);
     void reset();
@@ -57,7 +58,7 @@ private:
     float levMs = 0, levCoef = 0.999f;                  // 电平器（慢、RMS）+ 峰值压缩（快）：录音室常见的两级串联
     vox::Svf harshBp, harshBell; float envHarsh = 0, envFull = 0, envCoef = 0.999f, harshCut = 0, harshAtk = 0, harshRel = 0; int harshCount = 0;
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
-    Pad pad; BandMeter key; float keyDb[kKeyBands] {};
+    Pad pad; BandMeter key; float keyDb[kKeyBands] {}; StyleFx fx;
     juce::SmoothedValue<float> inGain, outGain;
     float makeupDb = 0;
 };
@@ -65,7 +66,7 @@ private:
 class BeatChain
 {
 public:
-    struct P { float hpf = 25, pocket = -1.5f, unmask = 6, glue = 0.3f, level = 0; };
+    struct P { float hpf = 25, pocket = -1.5f, unmask = 6, glue = 0.3f, level = 0; int fx = FxOff; float fxAmt = 1; };
     static P fromSet (const ParamSet&);
     void prepare (double fs, int maxBlock, int latency);
     void reset();
@@ -78,7 +79,7 @@ public:
 private:
     double fs = 44100; int hop = 256, L = 1024;
     P p; StyleId style = 0;
-    Pad pad; vox::Biquad hpA, hpB; vox::Svf pocket, bell[kKeyBands]; BandMeter meter;
+    Pad pad; vox::Biquad hpA, hpB; vox::Svf pocket, bell[kKeyBands]; BandMeter meter; StyleFx fx;
     vox::Compressor glue; float glueMakeup = 1;          // 伴奏自己的轻粘合：鼓和 808、旋律更像一体
     std::vector<std::array<float, kKeyBands>> beatRing; int64_t lastHop = INT64_MIN;
     float target[kKeyBands] {}, cur[kKeyBands] {}, atk = 0, rel = 0; int coefCount = 0;
@@ -89,7 +90,7 @@ private:
 class BusChain
 {
 public:
-    struct P { float low = 0, high = 0, mid = 0, glue = 0.35f, lift = 0.5f, width = 100, drive = 0, ceiling = -1; };
+    struct P { float low = 0, high = 0, mid = 0, glue = 0.35f, lift = 0.5f, width = 100, drive = 0, ceiling = -1; int fx = FxOff; float fxAmt = 1; };
     static P fromSet (const ParamSet&);
     void prepare (double fs, int maxBlock, int latency);
     void reset();
@@ -99,7 +100,7 @@ public:
 
 private:
     double fs = 44100; P p; StyleId style = 0;
-    vox::Svf low, high, body, scHp; vox::Compressor glue; vox::Limiter lim; Pad pad; vox::KWeight kw;
+    vox::Svf low, high, body, scHp; vox::Compressor glue; vox::Limiter lim; Pad pad; vox::KWeight kw; StyleFx fx;
     // 提升：三段（120 Hz / 6 kHz，LR4 分频，相加平直）——低频压紧 + 泛音 + 收成单声道，中高频加宽，高频动态空气感，整体 2 倍超采样磁带饱和
     juce::dsp::LinkwitzRileyFilter<float> x1, x2; vox::Compressor lowComp; vox::Svf airShelf; vox::Saturator tape;
     std::unique_ptr<juce::dsp::Oversampling<float>> os; int osLat = 0;

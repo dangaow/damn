@@ -41,6 +41,7 @@ public:
     void requestMix() { hubRef->requestMix (style()); }
     void requestUndo() { hubRef->requestUndo(); }
     void loadStyleDefaults();
+    void loadPreset (int presetIndex);    // kPresets 的序号（必须是当前角色的）
     mm::Hub& hub() noexcept { return *hubRef; }
     juce::String note() const { const juce::ScopedLock sl (noteLock); return lastNote; }
     bool isBridged() const noexcept { return bridged; }

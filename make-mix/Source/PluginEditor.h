@@ -32,7 +32,9 @@ private:
     MakeMixProcessor& proc;
     MixLook look;
     std::array<Knob, mm::kNumParams> knobs;
-    juce::ComboBox styleBox;
+    juce::ComboBox styleBox, presetBox;
+    std::array<juce::ComboBox, 3> fxBox;                 // 每个角色的效果模式（V_FX / B_FX / M_FX）
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>, 3> fxAtt;
     juce::TextButton roleBtn[3], mixBtn, undoBtn, defaultsBtn, analyzeBtn, closeBtn, useStyleBtn;
     std::shared_ptr<const mm::analysis::Report> rep; bool showReport = false;
     void setReportVisible (bool);

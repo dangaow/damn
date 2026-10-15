@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Presets.h"
 
 using namespace mm;
 
@@ -9,6 +10,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayo
     for (const auto& d : kParams)
     {
         const juce::ParameterID id { d.id, 1 };
+        if (d.kind == PKind::Choice)                     // 效果模式：宿主里显示名字
+        {
+            juce::StringArray names; for (const char* n : kFxNames) names.add (juce::String::fromUTF8 (n));
+            layout.add (std::make_unique<juce::AudioParameterChoice> (id, juce::String::fromUTF8 (d.name), names, (int) d.def));
+            continue;
+        }
         juce::NormalisableRange<float> r (d.min, d.max, d.kind == PKind::Percent ? 1.0f : 0.0f);
         if (d.skew > 0) r.setSkewForCentre (d.skew);
         auto attr = juce::AudioParameterFloatAttributes();
@@ -18,6 +25,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayo
             case PKind::Hz:      attr = attr.withLabel ("Hz").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; }); break;
             case PKind::Percent: attr = attr.withLabel ("%").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + "%"; }); break;
             case PKind::Amount: attr = attr.withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; }); break;
+            case PKind::Choice: break;
         }
         layout.add (std::make_unique<juce::AudioParameterFloat> (id, juce::String::fromUTF8 (d.name), r, d.def, attr));
     }
@@ -152,6 +160,12 @@ void MakeMixProcessor::hubApply (const ParamSet& s, const std::string& n)
         p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 (v)); p->endChangeGesture();
     }
     const juce::ScopedLock sl (noteLock); lastNote = juce::String::fromUTF8 (n.c_str());
+}
+
+void MakeMixProcessor::loadPreset (int i)
+{
+    if (! juce::isPositiveAndBelow (i, kNumPresets) || kPresets[i].role != role()) return;
+    hubApply (applyPreset (kPresets[i], hubParams()), std::string ("已載入預設：") + kPresets[i].name + "\n按一鍵混音會按這首歌重新算音色和電平，效果保留。\n");
 }
 
 void MakeMixProcessor::loadStyleDefaults()

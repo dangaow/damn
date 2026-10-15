@@ -144,7 +144,7 @@ struct Saturator
 // ------------------------------------------------------------------ TPT 状态变量滤波器（Cytomic）：增益可以每几个样本改一次而不出咔哒声
 struct Svf
 {
-    enum Type { Bell, LowShelf, HighShelf, BandPass, HighPass };
+    enum Type { Bell, LowShelf, HighShelf, BandPass, HighPass, LowPass };
     float g = 0, k = 1, a1 = 1, a2 = 0, a3 = 0, m0 = 1, m1 = 0, m2 = 0;
     std::array<float, 2> s1 {}, s2 {};
     void reset() { s1.fill (0); s2.fill (0); }
@@ -159,6 +159,7 @@ struct Svf
             case HighShelf: g *= std::sqrt (A); k = (float) (1.0 / q); m0 = A * A; m1 = k * (1 - A) * A; m2 = 1 - A * A; break;
             case BandPass:  k = (float) (1.0 / q); m0 = 0; m1 = 1; m2 = 0; break;
             case HighPass:  k = (float) (1.0 / q); m0 = 1; m1 = -k; m2 = -1; break;
+            case LowPass:   k = (float) (1.0 / q); m0 = 0; m1 = 0; m2 = 1; break;
         }
         a1 = 1 / (1 + g * (g + k)); a2 = g * a1; a3 = g * a2;
     }

@@ -255,7 +255,7 @@ Out solve (const In& in)
         const auto lt = analysis::octaveLtas (mix, fs);
         // 期望的音色改动：只往风格曲线靠一部分，保留这首歌自己的音色
         //   低频修五成（±3），中低频（125–250 Hz 发闷 / 发虚，最影响干不干净）修六成（±3），高频修三成（±2）
-        auto dev2 = [&] (int a) { return 0.5f * ((st.busCurve[(size_t) a] - lt[(size_t) a]) + (st.busCurve[(size_t) a + 1] - lt[(size_t) a + 1])); };
+        auto dev2 = [&] (int k) { return 0.5f * ((st.busCurve[(size_t) k] - lt[(size_t) k]) + (st.busCurve[(size_t) k + 1] - lt[(size_t) k + 1])); };
         const float wantLo = std::clamp (0.5f * dev2 (0), -3.0f, 3.0f), wantMid = std::clamp (0.6f * dev2 (2), -3.0f, 3.0f), wantHi = std::clamp (0.3f * dev2 (8), -2.0f, 2.0f);
         p.low = wantLo; p.mid = wantMid; p.high = wantHi;
         p.width = 100; p.ceiling = std::clamp (st.ceiling, -3.0f, 0.0f); p.drive = 0;
@@ -275,7 +275,7 @@ Out solve (const In& in)
         for (int pass = 0; pass < 2; ++pass)
         {
             const auto lo2 = analysis::octaveLtas (out, fs);
-            auto got = [&] (int a) { return 0.5f * ((lo2[(size_t) a] - lt[(size_t) a]) + (lo2[(size_t) a + 1] - lt[(size_t) a + 1])); };
+            auto got = [&] (int k) { return 0.5f * ((lo2[(size_t) k] - lt[(size_t) k]) + (lo2[(size_t) k + 1] - lt[(size_t) k + 1])); };
             p.low  = std::clamp (p.low  + wantLo  - got (0), -6.0f, 6.0f);
             p.mid  = std::clamp (p.mid  + wantMid - got (2), -6.0f, 6.0f);
             p.high = std::clamp (p.high + wantHi  - got (8), -6.0f, 6.0f);

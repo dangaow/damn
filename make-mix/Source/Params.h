@@ -5,7 +5,7 @@
 
 namespace mm
 {
-enum class PKind { Db, Hz, Amount, Percent };
+enum class PKind { Db, Hz, Amount, Percent, Choice };   // Choice：整数选项（效果模式），界面用下拉选单
 struct ParamDef { const char* id; const char* name; Role role; PKind kind; float min, max, def, skew; };
 
 // skew：JUCE NormalisableRange 的 centre（<= 0 表示线性）
@@ -33,11 +33,19 @@ inline constexpr ParamDef kParams[] = {
     { "m_width",    "總線 寬度",      Role::Bus,   PKind::Percent, 50, 150, 100, 0 },
     { "m_drive",    "總線 推子",      Role::Bus,   PKind::Db,     -12, 18, 0, 0 },
     { "m_ceiling",  "總線 天花板",    Role::Bus,   PKind::Db,      -3, 0, -1, 0 },
+    // 风格化效果（只能在末尾追加）：模式见 Fx.h 的 kFxNames，量 = 湿声比例
+    { "v_fx",       "人聲 效果",       Role::Vocal, PKind::Choice,   0, 10, 0, 0 },
+    { "v_fxAmt",    "人聲 效果量",     Role::Vocal, PKind::Amount,   0, 1, 1, 0 },
+    { "b_fx",       "伴奏 效果",       Role::Beat,  PKind::Choice,   0, 10, 0, 0 },
+    { "b_fxAmt",    "伴奏 效果量",     Role::Beat,  PKind::Amount,   0, 1, 1, 0 },
+    { "m_fx",       "總線 效果",       Role::Bus,   PKind::Choice,   0, 10, 0, 0 },
+    { "m_fxAmt",    "總線 效果量",     Role::Bus,   PKind::Amount,   0, 1, 1, 0 },
 };
 constexpr int kNumParams = (int) (sizeof (kParams) / sizeof (kParams[0]));
 
 enum PIdx { V_INPUT, V_HPF, V_MUD, V_PRES, V_AIR, V_COMP, V_DEESS, V_WARMTH, V_SMOOTH, V_LEVEL,
-            B_HPF, B_POCKET, B_UNMASK, B_GLUE, B_LEVEL, M_LOW, M_HIGH, M_MID, M_GLUE, M_LIFT, M_WIDTH, M_DRIVE, M_CEILING };
+            B_HPF, B_POCKET, B_UNMASK, B_GLUE, B_LEVEL, M_LOW, M_HIGH, M_MID, M_GLUE, M_LIFT, M_WIDTH, M_DRIVE, M_CEILING,
+            V_FX, V_FXAMT, B_FX, B_FXAMT, M_FX, M_FXAMT };
 
 inline int paramIndex (const std::string& id)
 {

@@ -7,6 +7,7 @@ VocalChain::P VocalChain::fromSet (const ParamSet& s)
 {
     P p; p.input = s[V_INPUT]; p.hpf = s[V_HPF]; p.mud = s[V_MUD]; p.pres = s[V_PRES]; p.air = s[V_AIR]; p.comp = s[V_COMP];
     p.deess = s[V_DEESS]; p.warmth = s[V_WARMTH]; p.smooth = s[V_SMOOTH]; p.level = s[V_LEVEL];
+    p.fx = (int) std::lround (s[V_FX]); p.fxAmt = s[V_FXAMT];
     return p;
 }
 
@@ -16,7 +17,8 @@ void VocalChain::prepare (double sampleRate, int maxBlock, int latency)
     os = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
     os->initProcessing ((size_t) maxBlock);
     osLat = (int) std::lround (os->getLatencyInSamples());
-    pad.prepare (latency - osLat);
+    fx.prepare (fs);
+    pad.prepare (latency - osLat - StyleFx::latency (fs));
     sat.prepare (fs * 2);
     deess.prepare ({ fs, (juce::uint32) maxBlock, 2 });
     key.prepare (fs);
@@ -33,7 +35,7 @@ void VocalChain::prepare (double sampleRate, int maxBlock, int latency)
 void VocalChain::reset()
 {
     for (auto* b : { &hpA, &hpB, &mud, &pres, &air }) b->reset();
-    comp.grDb = 0; lev.grDb = 0; levMs = 0; deess.reset(); harshBp.reset(); harshBell.reset(); envHarsh = envFull = 0; harshCut = 0; harshCount = 0; sat.prepare (fs * 2); if (os) os->reset(); pad.reset(); key.reset();
+    comp.grDb = 0; lev.grDb = 0; levMs = 0; deess.reset(); harshBp.reset(); harshBell.reset(); envHarsh = envFull = 0; harshCut = 0; harshCount = 0; sat.prepare (fs * 2); if (os) os->reset(); pad.reset(); key.reset(); fx.reset();
     grComp = grDeess = 0;
 }
 
@@ -61,6 +63,7 @@ void VocalChain::setParams (const P& np, StyleId sid, double tempo)
     sat.set (1 + 7 * p.warmth, 0.08f * p.warmth, std::min (1.0f, 2.2f * p.warmth));
     inGain.setTargetValue (dbToGain (p.input));
     outGain.setTargetValue (dbToGain (p.level + makeupDb));
+    fx.set (p.fx, p.fxAmt);
 }
 
 void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink) noexcept
@@ -109,11 +112,13 @@ void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink
         }
         os->processSamplesDown (block);
     }
-    // 3) 电平 → key → 补齐固定延迟
+    // 3) 风格化效果 → 电平 → key → 补齐固定延迟
     for (int i = 0; i < n; ++i)
     {
         const float g = outGain.getNextValue();
-        float l = c0[i] * g, r = nCh > 1 ? c1[i] * g : 0.0f;
+        float l = c0[i], r = nCh > 1 ? c1[i] : c0[i];
+        fx.process (l, r);
+        l *= g; r = nCh > 1 ? r * g : 0.0f;
         key.push (nCh > 1 ? 0.5f * (l + r) : l);
         if (sink != nullptr && (pos + i + 1) % hop == 0) { key.take (keyDb); sink->publish ((pos + i) / hop, keyDb); }
         pad.frame (l, r);
@@ -126,13 +131,14 @@ void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink
 BeatChain::P BeatChain::fromSet (const ParamSet& s)
 {
     P p; p.hpf = s[B_HPF]; p.pocket = s[B_POCKET]; p.unmask = s[B_UNMASK]; p.glue = s[B_GLUE]; p.level = s[B_LEVEL];
+    p.fx = (int) std::lround (s[B_FX]); p.fxAmt = s[B_FXAMT];
     return p;
 }
 
 void BeatChain::prepare (double sampleRate, int, int latency)
 {
     fs = sampleRate; hop = keyHop (fs); L = latency;
-    pad.prepare (L); meter.prepare (fs);
+    fx.prepare (fs); pad.prepare (L - StyleFx::latency (fs)); meter.prepare (fs);   // 效果在延迟之前：内容对齐不变
     beatRing.assign ((size_t) (L / hop + 8), {});
     for (int k = 0; k < kKeyBands; ++k) bell[k].set (vox::Svf::Bell, fs, kKeyHz[k], 1.3, 0);
     outGain.reset (fs, 0.03);
@@ -142,7 +148,7 @@ void BeatChain::prepare (double sampleRate, int, int latency)
 
 void BeatChain::reset()
 {
-    pad.reset(); meter.reset(); hpA.reset(); hpB.reset(); pocket.reset(); glue.grDb = 0;
+    pad.reset(); meter.reset(); hpA.reset(); hpB.reset(); pocket.reset(); glue.grDb = 0; fx.reset();
     for (auto& b : bell) b.reset();
     for (auto& r : beatRing) r.fill (-100);
     for (int k = 0; k < kKeyBands; ++k) { target[k] = cur[k] = cutDb[k] = 0; }
@@ -162,6 +168,7 @@ void BeatChain::setParams (const P& np, StyleId sid)
     glue.thresholdDb = -6 - 16 * p.glue; glue.ratio = p.glue < 0.01f ? 1.0f : 1.6f + 0.8f * p.glue; glue.kneeDb = 8; glue.makeupDb = 0;
     { const float over = -12.0f - glue.thresholdDb; glueMakeup = dbToGain (over > 0 ? 0.5f * over * (1.0f - 1.0f / glue.ratio) : 0.0f); }
     outGain.setTargetValue (dbToGain (p.level));
+    fx.set (p.fx, p.fxAmt);
 }
 
 // 进入新的一帧（延迟后的内容时间 h）：按人声 key 和伴奏自己在这段的能量算每段让位量
@@ -196,6 +203,7 @@ void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool pla
         // 未延迟的输入：量伴奏自己每段的能量（比要用它的时候早 L 个样本，肯定来得及）
         meter.push (0.5f * (l + r));
         if ((q + 1) % hop == 0) { float db[kKeyBands]; meter.take (db); auto& slot = beatRing[(size_t) (((q / hop) % R + R) % R)]; for (int k = 0; k < kKeyBands; ++k) slot[(size_t) k] = db[k]; }
+        fx.process (l, r);
         pad.frame (l, r);
         const int64_t d = q - L;
         if (d % hop == 0 || lastHop == INT64_MIN) { const int64_t h = (int64_t) std::floor ((double) d / hop); if (h != lastHop) { lastHop = h; startHop (h, playing, src); } }
@@ -220,6 +228,7 @@ void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool pla
 BusChain::P BusChain::fromSet (const ParamSet& s)
 {
     P p; p.low = s[M_LOW]; p.high = s[M_HIGH]; p.mid = s[M_MID]; p.glue = s[M_GLUE]; p.lift = s[M_LIFT]; p.width = s[M_WIDTH]; p.drive = s[M_DRIVE]; p.ceiling = s[M_CEILING];
+    p.fx = (int) std::lround (s[M_FX]); p.fxAmt = s[M_FXAMT];
     return p;
 }
 
@@ -230,7 +239,7 @@ void BusChain::prepare (double sampleRate, int maxBlock, int latency)
     os = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
     os->initProcessing ((size_t) maxBlock);
     osLat = (int) std::lround (os->getLatencyInSamples());
-    lim.prepare (fs, la); pad.prepare (latency - lim.latency() - osLat); kw.prepare (fs);
+    lim.prepare (fs, la); fx.prepare (fs); pad.prepare (latency - lim.latency() - osLat - StyleFx::latency (fs)); kw.prepare (fs);
     const juce::dsp::ProcessSpec spec { fs, (juce::uint32) maxBlock, 2 };
     x1.prepare (spec); x1.setCutoffFrequency (120.0f); x2.prepare (spec); x2.setCutoffFrequency (6000.0f);
     lowComp.prepare (fs, 30.0f, 120.0f); tape.prepare (fs * 2);
@@ -245,7 +254,7 @@ void BusChain::prepare (double sampleRate, int maxBlock, int latency)
 void BusChain::reset()
 {
     low.reset(); high.reset(); body.reset(); scHp.reset(); glue.grDb = 0; lim.reset(); pad.reset(); kw.reset(); x1.reset(); x2.reset();
-    lowComp.grDb = 0; airShelf.reset(); tape.prepare (fs * 2); if (os) os->reset();
+    lowComp.grDb = 0; airShelf.reset(); tape.prepare (fs * 2); if (os) os->reset(); fx.reset();
     envHi = envMid = 1e-9f; airDb = 0; dcX = dcY = 0; airCount = 0;
     loudState = 1e-10f; grGlue = grLimit = 0; loudShort = -100;
 }
@@ -267,6 +276,7 @@ void BusChain::setParams (const P& np, StyleId sid)
     tape.set (1.0f + 3.5f * L, 0.05f * L, std::min (1.0f, 0.85f * L));
     lim.ceiling = dbToGain (p.ceiling - 0.05f);
     drive.setTargetValue (dbToGain (p.drive)); width.setTargetValue (p.width * 0.01f);
+    fx.set (p.fx, p.fxAmt);
 }
 
 void BusChain::process (float* const* ch, int nCh, int n) noexcept
@@ -325,6 +335,7 @@ void BusChain::process (float* const* ch, int nCh, int n) noexcept
         float l = c0[i], r = nCh > 1 ? c1[i] : c0[i];
         const float m = 0.5f * (l + r), s = 0.5f * (l - r) * width.getNextValue();
         l = m + s; r = m - s;
+        fx.process (l, r);                              // 风格化效果在限幅之前：天花板照样守住
         const float dr = drive.getNextValue(); l *= dr; r *= dr;
         if (clipDb > 0.01f)                              // 软削波：峰值先被圆掉一点，限幅器少干活、更响更结实
             for (float* x : { &l, &r })
