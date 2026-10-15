@@ -46,7 +46,9 @@ public:
     // —— 音频线程 ——
     void setRole (int slot, Role) noexcept;
     void publishKey (int slot, int64_t hop, const float* db) noexcept;
-    bool readVocalKey (int64_t hop, bool exact, float* db) noexcept;      // 所有在线人声的功率和
+    bool readVocalKey (int64_t hop, bool exact, float* db) noexcept { return readKey (Role::Vocal, hop, exact, db); }   // 所有在线人声的功率和
+    bool readBeatKey (int64_t hop, bool exact, float* db) noexcept { return readKey (Role::Beat, hop, exact, db); }     // 所有在线伴奏的功率和
+    bool readKey (Role, int64_t hop, bool exact, float* db) noexcept;
     // 录音：学习期间把这一块输入追加进去（内容时间不连续就从头录）
     void capture (int slot, const float* l, const float* r, int n, int64_t pos, bool playing) noexcept;
 
@@ -55,7 +57,7 @@ private:
     struct Slot
     {
         std::atomic<bool> live { false }; std::atomic<int> role { 0 };
-        std::array<std::atomic<int64_t>, kKeyRing> stamp; std::array<std::array<std::atomic<float>, kKeyBands>, kKeyRing> db;
+        std::array<std::atomic<int64_t>, kKeyRing> stamp; std::array<std::array<std::atomic<float>, kKeyVals>, kKeyRing> db;
         std::atomic<int64_t> latest { -1 };
         std::atomic<CaptureBuf*> cap { nullptr };
         HubClient* client = nullptr;                          // 只在消息线程用

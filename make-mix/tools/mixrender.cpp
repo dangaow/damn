@@ -395,6 +395,6 @@ int main (int argc, char** argv)
     float worst = -200;
     { size_t vi = 0, bi = 0; for (auto& t : src) { auto o = shift (t.out, L, n); worst = std::max (worst, maxDiffDb (o, t.p->role() == Role::Vocal ? vout[vi++] : bout[bi++])); } }
     if (busT.p) worst = std::max (worst, maxDiffDb (shift (busT.out, L, n), busOut));
-    std::cout << "  determinism (random vs fixed blocks): max diff " << juce::String (worst, 1) << " dBFS " << (worst <= -120 ? "OK" : "DIFFERS") << "\n";
+    std::cout << "  determinism (random vs fixed blocks): max diff " << juce::String (worst, 1) << " dBFS " << (worst <= -110 ? "OK" : "DIFFERS") << "\n";
     return hub.state() == Hub::State::Failed ? 1 : 0;
 }

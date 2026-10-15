@@ -72,6 +72,7 @@ public:
 private:
     void publish (int64_t hop, const float* db) noexcept override { hubRef->publishKey (slot, hop, db); }
     bool read (int64_t hop, bool exact, float* db) noexcept override { return hubRef->readVocalKey (hop, exact, db); }
+    struct BeatKey : mm::KeySource { MakeMixProcessor* p = nullptr; bool read (int64_t h, bool e, float* db) noexcept override { return p->hubRef->readBeatKey (h, e, db); } } beatKey;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void applyParams (const mm::ParamSet&, mm::StyleId, double bpm);
 

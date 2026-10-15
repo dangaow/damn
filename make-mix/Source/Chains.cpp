@@ -7,13 +7,14 @@ VocalChain::P VocalChain::fromSet (const ParamSet& s)
 {
     P p; p.input = s[V_INPUT]; p.hpf = s[V_HPF]; p.mud = s[V_MUD]; p.pres = s[V_PRES]; p.air = s[V_AIR]; p.comp = s[V_COMP];
     p.deess = s[V_DEESS]; p.warmth = s[V_WARMTH]; p.smooth = s[V_SMOOTH]; p.level = s[V_LEVEL];
-    p.fx = (int) std::lround (s[V_FX]); p.fxAmt = s[V_FXAMT];
+    p.fx = (int) std::lround (s[V_FX]); p.fxAmt = s[V_FXAMT]; p.ride = s[V_RIDE]; p.rideRef = s[V_RIDEREF]; p.rideV = s[V_RIDEV];
     return p;
 }
 
 void VocalChain::prepare (double sampleRate, int maxBlock, int latency)
 {
-    fs = sampleRate; hop = keyHop (fs);
+    fs = sampleRate; hop = keyHop (fs); L = latency;
+    rideCoef = std::exp (-(double) hop / (fs * 3.0)); rideGainCoef = std::exp (-1.0 / (fs * 0.05)); rideRelax = std::exp (-(double) hop / (fs * 2.0));
     os = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
     os->initProcessing ((size_t) maxBlock);
     osLat = (int) std::lround (os->getLatencyInSamples());
@@ -36,6 +37,7 @@ void VocalChain::reset()
 {
     for (auto* b : { &hpA, &hpB, &mud, &pres, &air }) b->reset();
     comp.grDb = 0; lev.grDb = 0; levMs = 0; deess.reset(); harshBp.reset(); harshBell.reset(); envHarsh = envFull = 0; harshCut = 0; harshCount = 0; sat.prepare (fs * 2); if (os) os->reset(); pad.reset(); key.reset(); fx.reset();
+    rideEv = rideEb = 0; rideTarget = 0; rideGain = 1; rideDb = 0; vLevel = -100;
     grComp = grDeess = 0;
 }
 
@@ -66,7 +68,7 @@ void VocalChain::setParams (const P& np, StyleId sid, double tempo)
     fx.set (p.fx, p.fxAmt);
 }
 
-void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink) noexcept
+void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink, KeySource* beatKey, bool playing) noexcept
 {
     float* c0 = ch[0]; float* c1 = nCh > 1 ? ch[1] : ch[0];
     float grC = 0, grD = 0;
@@ -120,11 +122,41 @@ void VocalChain::process (float* const* ch, int nCh, int n, int64_t pos, KeySink
         fx.process (l, r);
         l *= g; r = nCh > 1 ? r * g : 0.0f;
         key.push (nCh > 1 ? 0.5f * (l + r) : l);
-        if (sink != nullptr && (pos + i + 1) % hop == 0) { key.take (keyDb); sink->publish ((pos + i) / hop, keyDb); }
+        if ((pos + i + 1) % hop == 0) { key.take (keyDb); vLevel = keyDb[kKeyLoud]; if (sink != nullptr) sink->publish ((pos + i) / hop, keyDb); }
         pad.frame (l, r);
+        // 跟随伴奏（在延迟之后读伴奏：内容时间 q - L 那一帧伴奏早就发布了，处理顺序怎样都一样；人声自己的电平是刚量的，差 L 个样本对 2.5 秒的平滑无所谓）
+        const int64_t d = pos + i - L;
+        if (d >= 0 && d % hop == 0)
+        {
+            float bdb[kKeyVals];
+            // 伴奏发布的是它的输出（内容时间 = 输出位置 - L）：往回留 L/hop + 1 帧（约 30 ms），伴奏这一周期还没处理也肯定已经有了；对 3 秒的平滑没有影响
+            const int64_t bh = d / hop - (L / hop + 1);
+            if (p.ride > 0.01f && p.rideRef > -90 && p.rideV > -90 && beatKey != nullptr && bh >= 0 && beatKey->read (bh, playing, bdb))
+            {
+                double w = 0; const double ratio = rideRatio (rideEv, rideEb, vLevel, bdb[kKeyLoud], rideCoef, p.rideV, w);
+                // 主唱段（权重 1）：推到让人声比伴奏回到基准；ad-lib / 稀疏段 / 停了（权重 0）：慢慢回到 0（2 秒）。
+                // 权重是连续的：卡在边上的帧不会因为浮点误差一次算、一次不算（导出 = 实时）
+                const double want = std::clamp ((double) p.ride * ((double) p.rideRef - ratio), -3.0, 6.0);
+                rideTarget = w * want + (1 - w) * rideRelax * rideTarget;
+            }
+            else if (p.ride <= 0.01f || p.rideRef <= -90 || p.rideV <= -90) rideTarget = 0;
+        }
+        rideGain = rideGainCoef * rideGain + (1 - rideGainCoef) * std::pow (10.0, rideTarget / 20.0);
+        l = (float) (l * rideGain); r = (float) (r * rideGain);
         c0[i] = l; if (nCh > 1) c1[i] = r;
     }
-    grComp = -grC; grDeess = -grD;
+    grComp = -grC; grDeess = -grD; rideDb = gainToDb ((float) rideGain);
+}
+
+// 3 秒的人声比伴奏（人声频段响度，句子之间的空隙也算进去，和耳朵听到的整体大小一致）。weight：人声和伴奏都在响的程度 0..1
+// vRef：主唱段的人声响度；weight = 人声是不是在主唱段（比 vRef 低 8 dB 以内）× 伴奏在不在响，0..1
+double VocalChain::rideRatio (double& ev, double& eb, double vDb, double bDb, double coef, double vRef, double& weight) noexcept
+{
+    ev = coef * ev + (1 - coef) * std::pow (10.0, vDb * 0.1);
+    eb = coef * eb + (1 - coef) * std::pow (10.0, bDb * 0.1);
+    const double v = 10 * std::log10 (ev + 1e-30), b = 10 * std::log10 (eb + 1e-30);
+    weight = std::clamp ((v - (vRef - 8)) / 4, 0.0, 1.0) * std::clamp ((b + 75) / 6, 0.0, 1.0);
+    return v - b;
 }
 
 // ====================================================================== BEAT
@@ -138,7 +170,7 @@ BeatChain::P BeatChain::fromSet (const ParamSet& s)
 void BeatChain::prepare (double sampleRate, int, int latency)
 {
     fs = sampleRate; hop = keyHop (fs); L = latency;
-    fx.prepare (fs); pad.prepare (L - StyleFx::latency (fs)); meter.prepare (fs);   // 效果在延迟之前：内容对齐不变
+    fx.prepare (fs); pad.prepare (L - StyleFx::latency (fs)); meter.prepare (fs); outMeter.prepare (fs);   // 效果在延迟之前：内容对齐不变
     beatRing.assign ((size_t) (L / hop + 8), {});
     for (int k = 0; k < kKeyBands; ++k) bell[k].set (vox::Svf::Bell, fs, kKeyHz[k], 1.3, 0);
     outGain.reset (fs, 0.03);
@@ -148,7 +180,7 @@ void BeatChain::prepare (double sampleRate, int, int latency)
 
 void BeatChain::reset()
 {
-    pad.reset(); meter.reset(); hpA.reset(); hpB.reset(); pocket.reset(); glue.grDb = 0; fx.reset();
+    pad.reset(); meter.reset(); outMeter.reset(); hpA.reset(); hpB.reset(); pocket.reset(); glue.grDb = 0; fx.reset();
     for (auto& b : bell) b.reset();
     for (auto& r : beatRing) r.fill (-100);
     for (int k = 0; k < kKeyBands; ++k) { target[k] = cur[k] = cutDb[k] = 0; }
@@ -174,7 +206,7 @@ void BeatChain::setParams (const P& np, StyleId sid)
 // 进入新的一帧（延迟后的内容时间 h）：按人声 key 和伴奏自己在这段的能量算每段让位量
 void BeatChain::startHop (int64_t h, bool playing, KeySource* src) noexcept
 {
-    float v[kKeyBands];
+    float v[kKeyVals];
     const auto& st = mm::style (style);
     const bool have = src != nullptr && p.unmask > 0.01f && src->read (h, playing, v);
     const auto& b = beatRing[(size_t) (((h % (int64_t) beatRing.size()) + (int64_t) beatRing.size()) % (int64_t) beatRing.size())];
@@ -192,7 +224,7 @@ void BeatChain::startHop (int64_t h, bool playing, KeySource* src) noexcept
     if (! have && playing && src != nullptr && p.unmask > 0.01f) ++lateHops;
 }
 
-void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool playing, KeySource* src) noexcept
+void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool playing, KeySource* src, KeySink* sink) noexcept
 {
     float* c0 = ch[0]; float* c1 = nCh > 1 ? ch[1] : ch[0];
     const int64_t R = (int64_t) beatRing.size();
@@ -202,7 +234,7 @@ void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool pla
         float l = c0[i], r = nCh > 1 ? c1[i] : c0[i];
         // 未延迟的输入：量伴奏自己每段的能量（比要用它的时候早 L 个样本，肯定来得及）
         meter.push (0.5f * (l + r));
-        if ((q + 1) % hop == 0) { float db[kKeyBands]; meter.take (db); auto& slot = beatRing[(size_t) (((q / hop) % R + R) % R)]; for (int k = 0; k < kKeyBands; ++k) slot[(size_t) k] = db[k]; }
+        if ((q + 1) % hop == 0) { float db[kKeyVals]; meter.take (db); auto& slot = beatRing[(size_t) (((q / hop) % R + R) % R)]; for (int k = 0; k < kKeyBands; ++k) slot[(size_t) k] = db[k]; }
         fx.process (l, r);
         pad.frame (l, r);
         const int64_t d = q - L;
@@ -220,6 +252,9 @@ void BeatChain::process (float* const* ch, int nCh, int n, int64_t pos, bool pla
         }
         const float gg = glue.gainFor (pk) * glueMakeup;
         for (int c = 0; c < nCh; ++c) (c ? c1 : c0)[i] = y[c] * gg * g;
+        // 处理后的伴奏（真正听到的，含让位、粘合、电平）：按它的内容时间 d 发布，人声跟随用
+        outMeter.push (nCh > 1 ? 0.5f * (c0[i] + c1[i]) : c0[i]);
+        if (sink != nullptr && (d + 1) % hop == 0) { float db[kKeyVals]; outMeter.take (db); if (d >= 0) sink->publish (d / hop, db); }
     }
     for (int k = 0; k < kKeyBands; ++k) cutDb[k] = -cur[k];
 }

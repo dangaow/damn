@@ -5,7 +5,7 @@
 
 namespace mm
 {
-enum class PKind { Db, Hz, Amount, Percent, Choice };   // Choice：整数选项（效果模式），界面用下拉选单
+enum class PKind { Db, Hz, Amount, Percent, Choice, Hidden };   // Choice：整数选项（效果模式），界面用下拉选单；Hidden：一键混音学出来的内部值，不显示旋钮
 struct ParamDef { const char* id; const char* name; Role role; PKind kind; float min, max, def, skew; };
 
 // skew：JUCE NormalisableRange 的 centre（<= 0 表示线性）
@@ -40,12 +40,16 @@ inline constexpr ParamDef kParams[] = {
     { "b_fxAmt",    "伴奏 效果量",     Role::Beat,  PKind::Amount,   0, 1, 1, 0 },
     { "m_fx",       "總線 效果",       Role::Bus,   PKind::Choice,   0, 10, 0, 0 },
     { "m_fxAmt",    "總線 效果量",     Role::Bus,   PKind::Amount,   0, 1, 1, 0 },
+    // 人声跟随伴奏：人声比伴奏（同一组人声频段量）偏离一键混音时学到的值，人声就慢慢推上 / 收回（像混音师按段落推人声）
+    { "v_ride",     "人聲 跟隨伴奏",   Role::Vocal, PKind::Amount,   0, 1, 0.6f, 0 },
+    { "v_rideRef",  "人聲 跟隨基準",   Role::Vocal, PKind::Hidden, -100, 40, -100, 0 },  // 一键混音时主唱段的人声比伴奏（dB）；-100 = 还没学，不跟随
+    { "v_rideV",    "人聲 主唱響度",   Role::Vocal, PKind::Hidden, -100, 0, -100, 0 },   // 一键混音时主唱段的人声响度（3 秒，dB）：比它低 8 dB 以上（ad-lib、稀疏段）就不跟随
 };
 constexpr int kNumParams = (int) (sizeof (kParams) / sizeof (kParams[0]));
 
 enum PIdx { V_INPUT, V_HPF, V_MUD, V_PRES, V_AIR, V_COMP, V_DEESS, V_WARMTH, V_SMOOTH, V_LEVEL,
             B_HPF, B_POCKET, B_UNMASK, B_GLUE, B_LEVEL, M_LOW, M_HIGH, M_MID, M_GLUE, M_LIFT, M_WIDTH, M_DRIVE, M_CEILING,
-            V_FX, V_FXAMT, B_FX, B_FXAMT, M_FX, M_FXAMT };
+            V_FX, V_FXAMT, B_FX, B_FXAMT, M_FX, M_FXAMT, V_RIDE, V_RIDEREF, V_RIDEV };
 
 inline int paramIndex (const std::string& id)
 {

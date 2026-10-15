@@ -9,9 +9,9 @@ const juce::Colour bg (0xff0a0b10), panel (0xff12141b), line (0xff23262f), red (
 const char* kShort[kNumParams] = { "輸入", "低切", "去渾濁", "存在感", "空氣感", "壓縮", "去齒音", "溫暖", "圓潤", "電平",
                                    "低切", "人聲口袋", "讓位", "粘合", "電平",
                                    "低頻", "高頻", "中低頻", "粘合", "提升", "寬度", "推子", "天花板",
-                                   "效果", "效果量", "效果", "效果量", "效果", "效果量" };
+                                   "效果", "效果量", "效果", "效果量", "效果", "效果量", "跟隨伴奏", "", "" };
 constexpr int kFxParam[3] = { V_FX, B_FX, M_FX };
-bool isKnob (int i) { return kParams[i].kind != PKind::Choice; }
+bool isKnob (int i) { return kParams[i].kind != PKind::Choice && kParams[i].kind != PKind::Hidden; }
 const char* kRoleName[3] = { "人聲", "伴奏", "總線" };
 const char* kRoleHint[3] = { "插在人聲軌（最後一格）", "插在伴奏軌（最後一格）", "插在 Master（最後一格）" };
 juce::String T (const char* s) { return juce::String::fromUTF8 (s); }

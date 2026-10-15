@@ -30,16 +30,16 @@ template <typename F> Stereo runChain (const Stereo& in, double fs, F&& proc)
 }
 struct KeyStore : KeySink, KeySource           // 模拟时的人声 key：按 hop 存，读的时候把各路人声的功率加起来
 {
-    std::map<int64_t, std::array<float, kKeyBands>> pw;
+    std::map<int64_t, std::array<float, kKeyVals>> pw;
     void publish (int64_t hop, const float* db) noexcept override
     {
         auto& a = pw[hop];
-        for (int k = 0; k < kKeyBands; ++k) a[(size_t) k] += std::pow (10.0f, db[k] * 0.1f);
+        for (int k = 0; k < kKeyVals; ++k) a[(size_t) k] += std::pow (10.0f, db[k] * 0.1f);
     }
     bool read (int64_t hop, bool, float* db) noexcept override
     {
         auto it = pw.find (hop); if (it == pw.end()) return false;
-        for (int k = 0; k < kKeyBands; ++k) db[k] = powToDb (it->second[(size_t) k]);
+        for (int k = 0; k < kKeyVals; ++k) db[k] = powToDb (it->second[(size_t) k]);
         return true;
     }
 };
@@ -58,6 +58,40 @@ Stereo runVocal (const Stereo& in, const VocalChain::P& p, StyleId st, double fs
 {
     VocalChain c; c.setParams (p, st, bpm); c.prepare (fs, kSimBlock, latencyFor (fs, kSimBlock));
     return runChain (in, fs, [&] (float** ch, int n, int64_t s) { c.process (ch, 2, n, start + s, sink); });
+}
+// 「跟随伴奏」的基准：处理后的人声 / 伴奏的 3 秒人声频段响度（和插件里完全同一个计算，多路伴奏按功率相加）。
+// 先找主唱段的人声响度（3 秒响度的 75 % 分位），再只在主唱段（权重同插件）平均人声比伴奏 → {比值基准, 主唱响度}
+std::pair<float, float> rideReference (const Stereo& vocal, const std::vector<Stereo>& beats, double fs)
+{
+    if (beats.empty()) return { -100.0f, -100.0f };
+    const int hop = keyHop (fs); const size_t n = std::min (vocal.size(), beats[0].size());
+    const double coef = std::exp (-(double) hop / (fs * 3.0));
+    std::vector<std::pair<float, float>> fr;                        // 每帧 (人声电平, 伴奏电平)
+    {
+        BandMeter vm; vm.prepare (fs);
+        std::vector<BandMeter> ms (beats.size()); for (auto& m : ms) m.prepare (fs);
+        for (size_t i = 0; i < n; ++i)
+        {
+            vm.push (0.5f * (vocal.l[i] + vocal.r[i]));
+            for (size_t b = 0; b < beats.size(); ++b) ms[b].push (0.5f * (beats[b].l[i] + beats[b].r[i]));
+            if ((i + 1) % (size_t) hop != 0) continue;
+            float pw = 0, db[kKeyVals];
+            for (auto& m : ms) { m.take (db); pw += std::pow (10.0f, db[kKeyLoud] * 0.1f); }
+            vm.take (db); fr.push_back ({ db[kKeyLoud], powToDb (pw) });
+        }
+    }
+    const size_t skip = (size_t) (3 * fs / hop);                     // 前 3 秒平滑还没稳
+    std::vector<float> vl; double ev = 0, eb = 0, w = 0;
+    for (size_t k = 0; k < fr.size(); ++k) { VocalChain::rideRatio (ev, eb, fr[k].first, fr[k].second, coef, 0, w); if (k >= skip) vl.push_back ((float) (10 * std::log10 (ev + 1e-30))); }
+    if (vl.empty()) return { -100.0f, -100.0f };
+    const float vRef = analysis::percentile (vl, 0.75f);
+    double acc = 0, wsum = 0; ev = eb = 0;
+    for (size_t k = 0; k < fr.size(); ++k)
+    {
+        const double r = VocalChain::rideRatio (ev, eb, fr[k].first, fr[k].second, coef, vRef, w);
+        if (k >= skip) { acc += w * r; wsum += w; }
+    }
+    return wsum > 1 ? std::pair<float, float> { (float) (acc / wsum), vRef } : std::pair<float, float> { -100.0f, -100.0f };
 }
 Stereo runBeat (const Stereo& in, const BeatChain::P& p, StyleId st, double fs, int64_t start, KeySource* src)
 {
@@ -235,8 +269,12 @@ Out solve (const In& in)
         auto& s = o.clients[i].set; const auto& p = vp[i];
         s[V_INPUT] = p.input; s[V_HPF] = p.hpf; s[V_MUD] = p.mud; s[V_PRES] = p.pres; s[V_AIR] = p.air; s[V_COMP] = p.comp; s[V_DEESS] = p.deess;
         s[V_WARMTH] = p.warmth; s[V_SMOOTH] = p.smooth; s[V_LEVEL] = p.level;
+        // 跟随伴奏：记住这段伴奏的电平，之后伴奏比它响 / 轻，人声就慢慢跟着推上 / 收回
+        { const auto rr = bout.empty() || vout.size() <= i ? std::pair<float, float> { -100.0f, -100.0f } : rideReference (vout[i], bout, fs);   // 和插件一样：比处理后的伴奏
+          s[V_RIDEREF] = clampParam (V_RIDEREF, rr.first); s[V_RIDEV] = clampParam (V_RIDEV, rr.second); } s[V_RIDE] = kStyleRide[std::clamp (in.style, 0, kNumStyles - 1)];
         o.clients[i].note += bin.empty() ? fmt ("電平 %+.1f dB（沒連上伴奏，保持原響度）\n", p.level)
-                                         : fmt ("電平 %+.1f dB  人聲比伴奏 %+.1f dB（風格 %+.1f）\n", p.level, o.m.vbrAfter, st.vbr);
+                                         : fmt ("電平 %+.1f dB  人聲比伴奏 %+.1f dB（風格 %+.1f）\n", p.level, o.m.vbrAfter, st.vbr)
+                                           + fmt ("跟隨伴奏 %.0f%%：副歌伴奏變響時人聲跟著推上去\n", s[V_RIDE] * 100);
     }
     for (size_t j = 0; j < bin.size(); ++j)
     {

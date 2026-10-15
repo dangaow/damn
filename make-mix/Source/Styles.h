@@ -145,6 +145,8 @@ inline constexpr std::array<float, 3> kStyleCurveIqr[kNumStyles] = {
     { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f },
     { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f }, { 2.5f, 2.5f, 2.5f },
     { 6.3f, 1.0f, 3.1f }, { 4.5f, 2.1f, 4.9f }, { 7.2f, 3.7f, 4.2f } };
+// 人声跟随伴奏的量（伴奏每响 1 dB，人声推多少 dB）。发行版里副歌人声比主歌：MAKE STUDIO -0.2、GEEBAR +1.8 dB
+inline constexpr float kStyleRide[kNumStyles] = { 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.8f, 0.7f };
 inline constexpr float kStyleWidth[kNumStyles] = { 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 110, 95 };
 // 训练过的风格的伴奏谱形（一键分析猜风格用；没训练的风格用总线曲线近似）。全 0 = 没有
 inline constexpr std::array<float, kOctBands> kStyleBeatCurve[kNumStyles] = {

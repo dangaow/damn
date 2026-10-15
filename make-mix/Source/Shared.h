@@ -18,6 +18,8 @@ constexpr float kOctCentresHz[kOctBands] = { 31.5f, 63, 125, 250, 500, 1000, 200
 
 // 人声 key 的 6 个频段（伴奏在这些频段给人声让位）和每段的重要度
 constexpr int kKeyBands = 6;
+// key 每帧除了 6 个频段，还带一个「人声频段响度」（150 Hz 高通 + K 计权的均方，dB）：跟随伴奏用，和 BS.1770 人声频段响度同一把尺
+constexpr int kKeyLoud = kKeyBands, kKeyVals = kKeyBands + 1;
 constexpr float kKeyHz[kKeyBands]  = { 280, 560, 1100, 2200, 3600, 6000 };
 constexpr float kKeyImp[kKeyBands] = { 0.45f, 0.7f, 0.9f, 1.0f, 1.0f, 0.7f };
 constexpr int kKeyRing = 1024;                         // 每个人声槽保留的 key 帧数

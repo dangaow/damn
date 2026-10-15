@@ -74,29 +74,29 @@ void Hub::publishKey (int slot, int64_t hop, const float* db) noexcept
     auto& s = slots[(size_t) slot]; const size_t i = (size_t) (hop % kKeyRing);
     s.stamp[i].store (-1, std::memory_order_relaxed);                // 写之前先把戳记作废（单写者的 seqlock）
     std::atomic_thread_fence (std::memory_order_release);
-    for (int k = 0; k < kKeyBands; ++k) s.db[i][(size_t) k].store (db[k], std::memory_order_relaxed);
+    for (int k = 0; k < kKeyVals; ++k) s.db[i][(size_t) k].store (db[k], std::memory_order_relaxed);
     s.stamp[i].store (hop, std::memory_order_release);
     s.latest.store (hop, std::memory_order_release);
 }
 
-bool Hub::readVocalKey (int64_t hop, bool exact, float* db) noexcept
+bool Hub::readKey (Role role, int64_t hop, bool exact, float* db) noexcept
 {
-    float pw[kKeyBands] {}; bool any = false;
+    float pw[kKeyVals] {}; bool any = false;
     for (auto& s : slots)
     {
-        if (! s.live.load (std::memory_order_acquire) || s.role.load (std::memory_order_relaxed) != (int) Role::Vocal) continue;
+        if (! s.live.load (std::memory_order_acquire) || s.role.load (std::memory_order_relaxed) != (int) role) continue;
         const int64_t h = exact ? hop : s.latest.load (std::memory_order_acquire);
         if (h < 0) continue;
         const size_t i = (size_t) (h % kKeyRing);
-        float v[kKeyBands];
+        float v[kKeyVals];
         if (s.stamp[i].load (std::memory_order_acquire) != h) continue;
-        for (int k = 0; k < kKeyBands; ++k) v[k] = s.db[i][(size_t) k].load (std::memory_order_relaxed);
+        for (int k = 0; k < kKeyVals; ++k) v[k] = s.db[i][(size_t) k].load (std::memory_order_relaxed);
         std::atomic_thread_fence (std::memory_order_acquire);
         if (s.stamp[i].load (std::memory_order_relaxed) != h) continue;    // 读的时候被改写了：这一路这帧不算
-        for (int k = 0; k < kKeyBands; ++k) pw[k] += std::pow (10.0f, v[k] * 0.1f);
+        for (int k = 0; k < kKeyVals; ++k) pw[k] += std::pow (10.0f, v[k] * 0.1f);
         any = true;
     }
-    if (any) for (int k = 0; k < kKeyBands; ++k) db[k] = powToDb (pw[k]);
+    if (any) for (int k = 0; k < kKeyVals; ++k) db[k] = powToDb (pw[k]);
     return any;
 }
 

@@ -26,6 +26,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MakeMixProcessor::createLayo
             case PKind::Percent: attr = attr.withLabel ("%").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + "%"; }); break;
             case PKind::Amount: attr = attr.withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 100)) + "%"; }); break;
             case PKind::Choice: break;
+            case PKind::Hidden: attr = attr.withLabel ("dB").withAutomatable (false); break;
         }
         layout.add (std::make_unique<juce::AudioParameterFloat> (id, juce::String::fromUTF8 (d.name), r, d.def, attr));
     }
@@ -38,6 +39,7 @@ MakeMixProcessor::MakeMixProcessor()
       apvts (*this, nullptr, "MAKEMIX", createLayout())
 {
     for (int i = 0; i < kNumParams; ++i) raw[(size_t) i] = apvts.getRawParameterValue (kParams[i].id);
+    beatKey.p = this;
     // FL 的「桥接」模式把插件放进单独的 ilbridge 进程，那样就看不到别的实例
     bridged = juce::File::getSpecialLocation (juce::File::hostApplicationPath).getFileName().containsIgnoreCase ("ilbridge");
     slot = hubRef->attach (this);
@@ -110,8 +112,8 @@ void MakeMixProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             const int len = aLen.load (std::memory_order_relaxed), k = std::min (m, (int) aL.size() - len);
             if (k > 0) { std::copy (ch[0], ch[0] + k, aL.begin() + len); std::copy (ch[1], ch[1] + k, aR.begin() + len); aLen.store (len + k, std::memory_order_release); }
         }
-        if (r == (int) Role::Vocal)     vocal.process (ch, nCh, m, pos + start, this);
-        else if (r == (int) Role::Beat) beat.process (ch, nCh, m, pos + start, playing, this);
+        if (r == (int) Role::Vocal)     vocal.process (ch, nCh, m, pos + start, this, &beatKey, playing);
+        else if (r == (int) Role::Beat) beat.process (ch, nCh, m, pos + start, playing, this, this);
         else                            bus.process (ch, nCh, m);
     }
     freeCounter += n;

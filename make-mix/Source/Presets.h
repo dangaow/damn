@@ -80,7 +80,7 @@ inline constexpr Preset kPresets[] = {
 constexpr int kNumPresets = (int) (sizeof (kPresets) / sizeof (kPresets[0]));
 
 // 预设不改的参数：增益结构由一键混音按歌决定
-constexpr bool presetKeeps (int i) noexcept { return i == V_INPUT || i == V_LEVEL || i == B_LEVEL || i == M_DRIVE || i == M_CEILING; }
+constexpr bool presetKeeps (int i) noexcept { return i == V_INPUT || i == V_LEVEL || i == B_LEVEL || i == M_DRIVE || i == M_CEILING || i == V_RIDEREF || i == V_RIDEV; }
 
 // 在 current 上套用预设：这个角色的参数（除了增益结构）回到默认值，再写预设里的值
 inline ParamSet applyPreset (const Preset& pr, ParamSet current)

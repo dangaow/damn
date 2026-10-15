@@ -28,13 +28,22 @@ struct Pad
 // 一组带通 + 包络：每 hop 输出 6 个频段的平均能量（dB）
 struct BandMeter
 {
-    vox::Svf bp[kKeyBands]; double acc[kKeyBands] {}; int count = 0;
-    void prepare (double fs) { for (int k = 0; k < kKeyBands; ++k) { bp[k].set (vox::Svf::BandPass, fs, kKeyHz[k], 1.2); bp[k].reset(); } reset(); }
-    void reset() { for (auto& a : acc) a = 0; count = 0; for (auto& b : bp) b.reset(); }
-    void push (float x) noexcept { for (int k = 0; k < kKeyBands; ++k) { const float y = bp[k].process (x, 0); acc[k] += (double) y * y; } ++count; }
-    void take (float* db) noexcept
+    vox::Svf bp[kKeyBands], hp150; vox::KWeight kw; double acc[kKeyBands] {}, accL = 0; int count = 0;
+    void prepare (double fs)
+    {
+        for (int k = 0; k < kKeyBands; ++k) bp[k].set (vox::Svf::BandPass, fs, kKeyHz[k], 1.2);
+        hp150.set (vox::Svf::HighPass, fs, 150, 0.7071); kw.prepare (fs); reset();
+    }
+    void reset() { for (auto& a : acc) a = 0; accL = 0; count = 0; for (auto& b : bp) b.reset(); hp150.reset(); kw.reset(); }
+    void push (float x) noexcept
+    {
+        for (int k = 0; k < kKeyBands; ++k) { const float y = bp[k].process (x, 0); acc[k] += (double) y * y; }
+        const float z = kw.process (hp150.process (x, 0), 0); accL += (double) z * z; ++count;
+    }
+    void take (float* db) noexcept                      // db：kKeyVals 个
     {
         for (int k = 0; k < kKeyBands; ++k) { db[k] = powToDb ((float) (acc[k] / std::max (1, count)) * 2.0f); acc[k] = 0; }
+        db[kKeyLoud] = powToDb ((float) (accL / std::max (1, count))); accL = 0;
         count = 0;
     }
 };
@@ -42,23 +51,27 @@ struct BandMeter
 class VocalChain
 {
 public:
-    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, smooth = 0.3f, level = 0; int fx = FxOff; float fxAmt = 1; };
+    struct P { float input = 0, hpf = 90, mud = -2, pres = 2, air = 3, comp = 0.4f, deess = 0.4f, warmth = 0.2f, smooth = 0.3f, level = 0; int fx = FxOff; float fxAmt = 1;
+               float ride = 0.6f, rideRef = -100, rideV = -100; };
     static P fromSet (const ParamSet&);
     void prepare (double fs, int maxBlock, int latency);
     void reset();
     void setParams (const P&, StyleId, double bpm);
-    // ch：nCh（1 或 2）个声道，就地处理 n 个样本；pos：这一块第一个样本的内容位置
-    void process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink) noexcept;
-    float grComp = 0, grDeess = 0;
+    // ch：nCh（1 或 2）个声道，就地处理 n 个样本；pos：这一块第一个样本的内容位置；beatKey：伴奏的 key（跟随伴奏用，可以为空）
+    void process (float* const* ch, int nCh, int n, int64_t pos, KeySink* sink, KeySource* beatKey = nullptr, bool playing = true) noexcept;
+    float grComp = 0, grDeess = 0, rideDb = 0;
 
 private:
-    double fs = 44100, bpm = 120; int hop = 256, osLat = 0;
+    double fs = 44100, bpm = 120; int hop = 256, osLat = 0, L = 1024;
+    double rideEv = 0, rideEb = 0, rideCoef = 0.99, rideTarget = 0, rideGain = 1, rideGainCoef = 0.999; float vLevel = -100;   // 3 秒的人声 / 伴奏能量（线性）；双精度：增益是乘上去的，误差别放大
+    double rideRelax = 0.999;
+    public: static double rideRatio (double& ev, double& eb, double vDb, double bDb, double coef, double vRef, double& weight) noexcept; private:
     P p; StyleId style = 0;
     vox::Biquad hpA, hpB, mud, pres, air; vox::Compressor lev, comp; vox::DeEsser deess; vox::Saturator sat;
     float levMs = 0, levCoef = 0.999f;                  // 电平器（慢、RMS）+ 峰值压缩（快）：录音室常见的两级串联
     vox::Svf harshBp, harshBell; float envHarsh = 0, envFull = 0, envCoef = 0.999f, harshCut = 0, harshAtk = 0, harshRel = 0; int harshCount = 0;
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
-    Pad pad; BandMeter key; float keyDb[kKeyBands] {}; StyleFx fx;
+    Pad pad; BandMeter key; float keyDb[kKeyVals] {}; StyleFx fx;
     juce::SmoothedValue<float> inGain, outGain;
     float makeupDb = 0;
 };
@@ -72,14 +85,14 @@ public:
     void reset();
     void setParams (const P&, StyleId);
     // playing = false 时宿主时间不可靠：读最新的人声 key（近似）
-    void process (float* const* ch, int nCh, int n, int64_t pos, bool playing, KeySource* src) noexcept;
+    void process (float* const* ch, int nCh, int n, int64_t pos, bool playing, KeySource* src, KeySink* sink = nullptr) noexcept;   // sink：发布伴奏自己的 key（人声跟随用）
     float cutDb[kKeyBands] {};                         // 当前每段让位量（界面显示）
     int lateHops = 0;                                   // 读 key 时那一帧还没写好的次数（诊断）
 
 private:
     double fs = 44100; int hop = 256, L = 1024;
     P p; StyleId style = 0;
-    Pad pad; vox::Biquad hpA, hpB; vox::Svf pocket, bell[kKeyBands]; BandMeter meter; StyleFx fx;
+    Pad pad; vox::Biquad hpA, hpB; vox::Svf pocket, bell[kKeyBands]; BandMeter meter, outMeter; StyleFx fx;   // outMeter：处理后的伴奏（发给人声跟随）
     vox::Compressor glue; float glueMakeup = 1;          // 伴奏自己的轻粘合：鼓和 808、旋律更像一体
     std::vector<std::array<float, kKeyBands>> beatRing; int64_t lastHop = INT64_MIN;
     float target[kKeyBands] {}, cur[kKeyBands] {}, atk = 0, rel = 0; int coefCount = 0;
