@@ -97,6 +97,84 @@ float maxDiffDb (const Stereo& a, const Stereo& b)
     float m = 0; for (size_t i = 0; i < std::min (a.size(), b.size()); ++i) m = std::max ({ m, std::abs (a.l[i] - b.l[i]), std::abs (a.r[i] - b.r[i]) });
     return gainToDb (m);
 }
+
+// —— 整首歌量测（训练用）——————————————————————————————————————————————————
+Stereo slice (const Stereo& x, size_t a, size_t b)
+{
+    b = std::min (b, x.size()); a = std::min (a, b);
+    Stereo s; s.l.assign (x.l.begin() + (long) a, x.l.begin() + (long) b); s.r.assign (x.r.begin() + (long) a, x.r.begin() + (long) b);
+    return s;
+}
+std::string jarr (const std::array<float, kOctBands>& v)
+{
+    std::string t = "["; for (int k = 0; k < kOctBands; ++k) t += (k ? "," : "") + juce::String (v[(size_t) k], 2).toStdString(); return t + "]";
+}
+std::string jnum (double x) { return std::isfinite (x) ? juce::String (x, 4).toStdString() : "null"; }
+// 一段的全部指标（插件和解算器用的同一套算法）
+std::string metricsJson (const Stereo& v, const Stereo& b, const Stereo& m, double fs)
+{
+    const float vI = analysis::integrated (v, fs, true), bI = analysis::integrated (b, fs, true);
+    const bool hasV = vI > -55;
+    std::string j = "{";
+    j += "\"mix_lufs\":" + jnum (analysis::integrated (m, fs)) + ",\"mix_tp\":" + jnum (analysis::truePeakDb (m)) + ",\"mix_corr\":" + jnum (analysis::correlation (m));
+    j += ",\"mix_spread\":" + jnum (analysis::spread (m, fs)) + ",\"mix_ltas\":" + jarr (analysis::octaveLtas (m, fs));
+    j += ",\"beat_lufs\":" + jnum (analysis::integrated (b, fs)) + ",\"beat_low\":" + jnum (analysis::lowShare (b, fs)) + ",\"beat_corr\":" + jnum (analysis::correlation (b));
+    j += ",\"beat_spread\":" + jnum (analysis::spread (b, fs)) + ",\"beat_ltas\":" + jarr (analysis::octaveLtas (b, fs));
+    j += ",\"has_vocal\":" + std::string (hasV ? "true" : "false");
+    if (hasV)
+    {
+        j += ",\"vbr\":" + jnum (vI - bI) + ",\"vocal_lufs\":" + jnum (analysis::integrated (v, fs)) + ",\"vocal_spread\":" + jnum (analysis::spread (v, fs));
+        j += ",\"vocal_sib\":" + jnum (analysis::sibilance (v, fs)) + ",\"masked\":" + jnum (analysis::maskedFraction (v, b, fs)) + ",\"vocal_ltas\":" + jarr (analysis::octaveLtas (v, fs));
+    }
+    return j + "}";
+}
+// 分段：每秒一帧。人声在不在（人声频段瞬时响度 > 整首 -8 LU）+ 整体响度（4 秒平滑）。
+// 有人声且比有人声部分的中位数响 0.7 LU 以上 = 副歌，其余有人声 = 主歌；没人声：第一句之前 = 前奏，最后一句之后 = 尾奏，中间 = 间奏
+std::vector<std::tuple<int, int, std::string>> sections (const Stereo& v, const Stereo& m, double fs)
+{
+    const auto vm = analysis::momentary (v, fs, true), mm_ = analysis::momentary (m, fs);
+    const float vI = analysis::integrated (v, fs, true);
+    const int secs = (int) (m.size() / fs);
+    std::vector<int> act ((size_t) secs, 0); std::vector<float> loud ((size_t) secs, -100);
+    for (int s = 0; s < secs; ++s)
+    {
+        float vmax = -100, e = 0; int n = 0;
+        for (int k = s * 10; k < std::min ((int) vm.size(), s * 10 + 10); ++k) vmax = std::max (vmax, vm[(size_t) k]);
+        for (int k = s * 10; k < std::min ((int) mm_.size(), s * 10 + 10); ++k) { e += std::pow (10.0f, mm_[(size_t) k] / 10); ++n; }
+        act[(size_t) s] = vmax > vI - 8; loud[(size_t) s] = n ? 10 * std::log10 (std::max (e / (float) n, 1e-12f)) : -100;
+    }
+    std::vector<int> act2 = act;                                     // 人声：前后 2 秒内有就算有（句子之间的换气不切段）
+    for (int s = 0; s < secs; ++s) for (int d = -2; d <= 2; ++d) if (s + d >= 0 && s + d < secs && act[(size_t) (s + d)]) act2[(size_t) s] = 1;
+    std::vector<float> sm ((size_t) secs);
+    for (int s = 0; s < secs; ++s) { float e = 0; int n = 0; for (int d = -2; d <= 2; ++d) if (s + d >= 0 && s + d < secs) { e += std::pow (10.0f, loud[(size_t) (s + d)] / 10); ++n; } sm[(size_t) s] = 10 * std::log10 (std::max (e / (float) n, 1e-12f)); }
+    std::vector<float> vl; for (int s = 0; s < secs; ++s) if (act2[(size_t) s]) vl.push_back (sm[(size_t) s]);
+    const float med = vl.empty() ? 0 : analysis::percentile (vl, 0.5f);
+    int first = secs, last = -1; for (int s = 0; s < secs; ++s) if (act2[(size_t) s]) { first = std::min (first, s); last = s; }
+    std::vector<int> cls ((size_t) secs);                           // 0 前奏 1 主歌 2 副歌 3 间奏 4 尾奏
+    for (int s = 0; s < secs; ++s) cls[(size_t) s] = act2[(size_t) s] ? (sm[(size_t) s] > med + 0.7f ? 2 : 1) : (s < first ? 0 : s > last ? 4 : 3);
+    {                                                                // 前后 4 秒多数表决，去掉碎段
+        std::vector<int> c2 = cls;
+        for (int s = 0; s < secs; ++s)
+        {
+            int cnt[5] = {}; for (int d = -4; d <= 4; ++d) if (s + d >= 0 && s + d < secs) ++cnt[cls[(size_t) (s + d)]];
+            c2[(size_t) s] = (int) (std::max_element (cnt, cnt + 5) - cnt);
+        }
+        cls = c2;
+    }
+    std::vector<std::tuple<int, int, std::string>> out; const char* names[] = { "intro", "verse", "chorus", "break", "outro" };
+    std::vector<std::pair<int, int>> runs;                           // (开始秒, 类别)
+    for (int s = 0; s < secs; ++s) if (runs.empty() || cls[(size_t) s] != runs.back().second) runs.push_back ({ s, cls[(size_t) s] });
+    std::vector<std::pair<int, int>> merged;                         // 短于 6 秒的段并进前一段
+    for (size_t i = 0; i < runs.size(); ++i)
+    {
+        const int end = i + 1 < runs.size() ? runs[i + 1].first : secs;
+        if (! merged.empty() && end - runs[i].first < 6) continue;
+        if (! merged.empty() && merged.back().second == runs[i].second) continue;
+        merged.push_back (runs[i]);
+    }
+    for (size_t i = 0; i < merged.size(); ++i) out.push_back ({ merged[i].first, i + 1 < merged.size() ? merged[i + 1].first : secs, names[merged[i].second] });
+    return out;
+}
 } // namespace
 
 int main (int argc, char** argv)
@@ -131,6 +209,34 @@ int main (int argc, char** argv)
                       << "mix_tp " << analysis::truePeakDb (m) << "\n"
                       << "mix_corr " << analysis::correlation (m) << "\n"
                       << "beat_low " << analysis::lowShare (b, sr) << "\n";
+            return 0;
+        }
+        else if (a == "--measure-song")         // 训练：--measure-song vocal.wav inst.wav mix.wav → JSON（整首 + 分段 + 每 5 秒一个 20 秒窗）
+        {
+            double sr = 0; const Stereo v = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
+            const Stereo b = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
+            const Stereo m = readWav (juce::File::getCurrentWorkingDirectory().getChildFile (next()), sr);
+            const size_t n = std::min ({ v.size(), b.size(), m.size() });
+            const auto key = analysis::detectKey (b, sr);
+            std::cout << "{\"dur\":" << jnum ((double) n / sr) << ",\"key\":\"" << key.name() << "\",\"key_conf\":" << jnum (key.confidence)
+                      << ",\"whole\":" << metricsJson (v, b, m, sr) << ",\"sections\":[";
+            bool first = true;
+            for (auto& [a0, a1, kind] : sections (v, m, sr))
+            {
+                const size_t s0 = (size_t) (a0 * sr), s1 = (size_t) (a1 * sr);
+                std::cout << (first ? "" : ",") << "{\"t0\":" << a0 << ",\"t1\":" << a1 << ",\"kind\":\"" << kind << "\",\"m\":"
+                          << metricsJson (slice (v, s0, s1), slice (b, s0, s1), slice (m, s0, s1), sr) << "}";
+                first = false;
+            }
+            std::cout << "],\"windows\":[";
+            first = true;
+            for (size_t s0 = 0; s0 + (size_t) (20 * sr) <= n; s0 += (size_t) (5 * sr))
+            {
+                const size_t s1 = s0 + (size_t) (20 * sr);
+                std::cout << (first ? "" : ",") << "{\"t0\":" << jnum ((double) s0 / sr) << ",\"m\":" << metricsJson (slice (v, s0, s1), slice (b, s0, s1), slice (m, s0, s1), sr) << "}";
+                first = false;
+            }
+            std::cout << "]}\n";
             return 0;
         }
         else if (a == "--blocks") randomBlocks = next() == "random";
